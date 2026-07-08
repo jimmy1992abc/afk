@@ -48,12 +48,11 @@ export function makeCodexProvider() {
       return { ok: true };
     },
 
-    // Codex model is operator-config / account-default; only pinned if a role
-    // model env is set. Null is fine — we simply omit `-m`.
-    defaultModel(env) {
-      return (
-        String(env?.AGENT_RELAY_SCOPE_MODEL ?? env?.AGENT_RELAY_BRIEF_MODEL ?? '').trim() || null
-      );
+    // Codex uses its account/config default model. The caller already applies
+    // the current role's own model env, so a provider fallback must not
+    // cross-read another role's model — omit `-m` (null).
+    defaultModel() {
+      return null;
     },
 
     async complete({

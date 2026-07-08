@@ -123,6 +123,12 @@ test('openai provider requires an explicit model (no wrong-guess default)', () =
   assert.equal(p.defaultModel({ DEV_OPENAI_MODEL: 'gpt-x' }), 'gpt-x');
 });
 
+test('codex provider omits -m by default and ignores another role\'s model env', () => {
+  const p = resolveProvider(buildRegistry(), 'codex');
+  assert.equal(p.defaultModel({}), null);
+  assert.equal(p.defaultModel({ AGENT_RELAY_BRIEF_MODEL: 'deepseek-x' }), null);
+});
+
 test('deepseekUsage prefers cached_tokens, falls back to prompt_cache_hit_tokens', () => {
   assert.equal(deepseekUsage({ usage: { prompt_tokens_details: { cached_tokens: 3 } } }).cacheRead, 3);
   assert.equal(deepseekUsage({ usage: { prompt_cache_hit_tokens: 7 } }).cacheRead, 7);
