@@ -1,7 +1,7 @@
 # AFK Plugin — Design Spec
 
 - **Date:** 2026-07-08
-- **Status:** Approved (pending spec review)
+- **Status:** Implemented in PR #1
 - **Scope:** Package an autonomous-PR-pipeline skill set as a standalone,
   open-source, cross-agent plugin in a fresh repository.
 
