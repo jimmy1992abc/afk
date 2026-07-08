@@ -16,6 +16,7 @@
       "strict": false,
       "skills": [
         "./skills/afk",
+        "./skills/afk-agent-relay",
         "./skills/afk-codex-review",
         "./skills/afk-implementation-pilot",
         "./skills/afk-init",
