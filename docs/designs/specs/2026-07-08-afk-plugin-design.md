@@ -137,13 +137,14 @@ relative paths (`../afk-kimi-review/SKILL.md`), preserved by the shared
 
 ## The `.afk/` adapter (adaptation lives in the consuming project)
 
-The plugin ships generic. Each consuming repository supplies its specifics in a
-gitignored `.afk/` directory, so no project detail ever enters the plugin and
-the plugin stays independent of any project:
+The plugin ships generic. Everything a developer tunes for running afk against a
+project is *personal preference*, not shared project config, so all of it lives
+in a gitignored `.afk/` directory — nothing afk-specific is committed to the
+consuming repo, and no project detail ever enters the plugin:
 
 ```text
-<consuming-repo>/.afk/          # gitignored in the consuming repo
-  config.md                     # project adapter (see schema below)
+<consuming-repo>/.afk/          # entire directory gitignored (personal)
+  config.md                     # personal run preferences (see below)
   reports/                      # saved final reports (req 6, auto-merge)
   afk-ledger.md                 # AFK run ledger
 ```
@@ -188,11 +189,27 @@ Advanced fields default sensibly and stay out of the starter template: default
 branch (`origin/HEAD`), design-docs dir (`docs/designs/specs/`), reports dir
 (`.afk/reports/`), commit convention.
 
-The plugin ships `templates/afk-config.example.md` and a gitignore snippet. On
-first use, when `.afk/config.md` is absent, a skill offers to scaffold it from
-the template and append `.afk/` to the project's `.gitignore`. Fallback order
-for any datum: config value → auto-detect → skip with a logged reason
-(never a silent skip).
+On first run, a skill creates `.afk/` from `templates/afk-config.example.md` and
+adds `.afk/` to the project's `.gitignore` (both idempotent), announcing each.
+Markdown was chosen only for ease of hand-editing and the free-text `invariants`
+field; `config.md` holds nothing sensitive and is gitignored because it is
+personal, not because it is secret.
+
+A blank or absent `config.md` behaves identically to a file of all-defaults —
+never an error, never a block. Per-field fallback is config value →
+auto-detect → skip with a logged reason (never a silent skip):
+
+| knob | default when blank/absent |
+|------|---------------------------|
+| test / lint / build | auto-detect; none found → skip + log |
+| gate `priority` | `codex > kimi` (whichever is installed and eligible) |
+| `min-pass` | `1` (floored at 1 — a clean pass always needs ≥1 independent gate) |
+| `mode` | `waterfall` |
+| merge `policy` | `leave-open` — never auto-merges |
+| `invariants` | none → reviewer uses only the built-in generic checklist |
+| default branch | `origin/HEAD` |
+| design-docs dir | `docs/designs/specs/` |
+| reports dir | `.afk/reports/` |
 
 ---
 
