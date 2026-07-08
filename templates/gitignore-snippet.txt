@@ -1,0 +1,2 @@
+# afk — personal, per-developer run state (config, reports, ledger)
+.afk/

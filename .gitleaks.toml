@@ -1,0 +1,12 @@
+# The agent-relay redaction tests contain intentionally secret-shaped fixtures
+# so redaction can be proven; they are not real secrets.
+title = "afk gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Intentional secret-shaped fixtures in redaction tests"
+paths = [
+  '''skills/afk-agent-relay/tests/.*\.test\.mjs''',
+]

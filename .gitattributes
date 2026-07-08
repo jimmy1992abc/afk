@@ -1,0 +1,6 @@
+# Normalize all text to LF so bundled .mjs/.sh run identically on every OS.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.gif binary

@@ -1,0 +1,19 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# Node
+node_modules/
+
+# afk personal state, if afk is ever run against this repo
+.afk/
+
+# Scratch
+*.log
+tmp/
+temp/

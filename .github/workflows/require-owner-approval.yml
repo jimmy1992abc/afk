@@ -1,0 +1,49 @@
+name: require-owner-approval
+
+# Defense in depth beside the documented branch-protection ruleset: fail a PR
+# that lacks an approving review from a repository admin on the current head
+# commit, unless an admin authored it. Trust is permission-based (admin), not
+# the broad MEMBER association, and only approvals on the head commit count, so
+# new commits re-arm the gate.
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+  pull_request_review:
+    types: [submitted, dismissed]
+
+permissions:
+  pull-requests: read
+  contents: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require an admin approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -e
+          perm_of() { gh api "repos/$REPO/collaborators/$1/permission" --jq '.permission' 2>/dev/null || echo none; }
+          author=$(gh api "repos/$REPO/pulls/$PR" --jq '.user.login')
+          author_perm=$(perm_of "$author")
+          echo "PR author: $author ($author_perm)"
+          if [ "$author_perm" = "admin" ]; then
+            echo "Authored by an admin — inherently admin-reviewed."
+            exit 0
+          fi
+          head=$(gh api "repos/$REPO/pulls/$PR" --jq '.head.sha')
+          approvers=$(HEAD_SHA="$head" gh api "repos/$REPO/pulls/$PR/reviews" \
+            --jq '[.[] | select(.state=="APPROVED") | select(.commit_id==env.HEAD_SHA) | .user.login] | unique | .[]')
+          for u in $approvers; do
+            if [ "$(perm_of "$u")" = "admin" ]; then
+              echo "Approved on the current head commit by an admin ($u)."
+              exit 0
+            fi
+          done
+          echo "::error::This PR needs an approving review on the latest commit from a repository admin before it can merge."
+          exit 1
