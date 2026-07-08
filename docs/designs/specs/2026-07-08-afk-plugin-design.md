@@ -141,26 +141,52 @@ The plugin ships generic. Each consuming repository supplies its specifics in a
 gitignored `.afk/` directory, so no project detail ever enters the plugin and
 the plugin stays independent of any project:
 
-```
+```text
 <consuming-repo>/.afk/          # gitignored in the consuming repo
   config.md                     # project adapter (see schema below)
   reports/                      # saved final reports (req 6, auto-merge)
   afk-ledger.md                 # AFK run ledger
 ```
 
-`config.md` schema (markdown headings, read as guidance — lenient, not strict
-parse):
+`config.md` is deliberately minimal: every field is optional and defaults to
+auto-detect, so a project sets only what it overrides. Starter template:
 
-- **Default branch** — else auto-detect via `origin/HEAD`.
-- **Commands** — targeted test, full test, lint, typecheck, build, syntax
-  checks. Any omitted command is auto-detected or skipped with a logged reason.
-- **Design docs** — directory and whether a design doc is required.
-- **Merge policy** — `leave-open` (default) / `merge-to-unblock` /
-  `merge-when-green`.
-- **External gate** — preferred gate (`codex` / `kimi`).
-- **Project invariants** — free-text must-check rules a reviewer applies.
-- **Commit convention** — the project's commit-subject style.
-- **Reports** — directory (default `.afk/reports/`).
+```markdown
+# afk config — all optional; omit a line to auto-detect.
+
+## commands
+test:  <cmd>
+lint:  <cmd>
+build: <cmd>
+
+## external gate
+priority: codex > kimi   # preferred order
+min-pass: 1              # independent gates that must pass clean
+mode:     waterfall      # waterfall: try in order, stop at min-pass · parallel: run at once
+
+## merge
+policy: leave-open       # leave-open · merge-to-unblock · merge-when-green
+
+## invariants            # must-check rules a reviewer applies — one per line
+```
+
+External-gate policy is the primary tunable:
+
+- **priority** — order the gates are tried/preferred in.
+- **min-pass** — how many *independent* gates must return clean for a round to
+  pass (default 1). Each counted gate is a distinct model and none may equal the
+  implementer's model — enforced by the skill, not the config.
+- **mode** — `waterfall` runs gates in priority order and stops once `min-pass`
+  is met (cheapest); `parallel` launches `min-pass` gates at once (faster, more
+  metered cost). When `min-pass` cannot be met (too few eligible gates), the
+  round is not a clean pass — fail-closed, do not mark ready.
+
+Defaults (`codex > kimi`, `1`, `waterfall`) reproduce a single sequential gate,
+so the current flow needs no configuration.
+
+Advanced fields default sensibly and stay out of the starter template: default
+branch (`origin/HEAD`), design-docs dir (`docs/designs/specs/`), reports dir
+(`.afk/reports/`), commit convention.
 
 The plugin ships `templates/afk-config.example.md` and a gitignore snippet. On
 first use, when `.afk/config.md` is absent, a skill offers to scaffold it from
@@ -275,7 +301,7 @@ above (provenance-scan, secret-scan).
 
 ## Repository layout
 
-```
+```text
 afk/
   skills/
     afk/SKILL.md
