@@ -16,7 +16,7 @@ gitignored `.afk/` directory.
 | Skill | Purpose |
 |-------|---------|
 | `afk` | Runs the full autonomous waterfall for an operator-provided scope. |
-| `afk-init` | Bootstraps `.afk/config.md` for a consuming repository. |
+| `afk-init` | Bootstraps `.afk/` for a repository — auto-run when it is missing; detects commands and records the plugin root. |
 | `afk-spec-planner` | Turns an issue into a reviewable implementation plan. |
 | `afk-implementation-pilot` | Implements an approved plan and self-reviews it. |
 | `afk-internal-review` | Performs the internal production-readiness review. |
@@ -45,7 +45,8 @@ tracker and choose work by itself.
 
 ## Installation
 
-Install this repository through the host agent's plugin flow.
+Install this repository through the host agent's plugin flow — it works with
+Claude Code, Codex, Copilot, and other agents that read a `skills/` directory.
 
 The repository ships manifests for the supported host layouts:
 
@@ -55,14 +56,23 @@ The repository ships manifests for the supported host layouts:
 - `.github/plugin/marketplace.json`
 - `plugin.json`
 
-After installing the plugin in a target repository, run:
+No manual setup step is required: the first time an afk skill runs in a
+repository it bootstraps `.afk/` automatically — creating the config, adding the
+`.gitignore` entry, detecting commands, and recording the plugin root. To set it
+up explicitly or re-detect commands, run:
 
 ```text
 /afk-init
 ```
 
-`afk-init` creates or fills local `.afk/` configuration without overwriting
-developer-authored values.
+It never overwrites developer-authored values.
+
+## Staying Up To Date
+
+The install cache is keyed by the plugin version, so an outdated install
+silently keeps old skills. On each `afk` run the driver checks whether a newer
+version is published and prints a one-line notice when you are behind. The check
+is read-only, bounded, degrades silently offline, and never blocks.
 
 ## Project Configuration
 
