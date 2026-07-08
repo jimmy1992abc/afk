@@ -227,9 +227,12 @@ not a long human report.
   gate both come back clean** (no unresolved findings). It summarizes the whole
   review round for a human.
 - **Auto-merge modes** (`merge-when-green`, `merge-to-unblock`): the final
-  report is written to `.afk/reports/<timestamp>-pr-<n>.md` for later audit.
-  **Interactive mode:** shown in-session, and also saved when the config opts
-  in.
+  report is written to `.afk/reports/PR#<n>-<title>.md` for later audit. The
+  filename always leads with `PR#<n>-<title>`; the title is sanitized for the
+  filesystem (illegal characters and whitespace collapsed to `-`, case
+  preserved, length-capped) and a numeric suffix is appended only to avoid
+  clobbering an existing file. **Interactive mode:** shown in-session, and also
+  saved when the config opts in.
 
 Touched skills:
 
