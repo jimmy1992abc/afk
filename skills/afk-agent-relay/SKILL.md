@@ -32,8 +32,9 @@ simple tasks get shorter briefs). It distils; it does not just truncate.
 ## How to run it
 
 Resolve the helper via the plugin root — `${CLAUDE_PLUGIN_ROOT}` if set, else
-the `pluginRoot` recorded in `.afk/config.md`. Always pass `--manual` (bypasses
-the default-off `AGENT_RELAY_ENABLED` master switch). Run in the background
+the `pluginRoot` in `.afk/config.md`, else this skill's own directory (its
+sibling). Always pass `--manual` (bypasses the default-off `AGENT_RELAY_ENABLED`
+master switch). Run in the background
 with a generous timeout and capture stdout to a file (the codex-backed scope
 can be slow); then read the marker block.
 

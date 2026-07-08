@@ -54,6 +54,14 @@ A consuming project's per-developer preferences live in a **gitignored** `.afk/`
 run ledger. Everything is optional; a blank or absent `config.md` resolves to
 safe defaults. Skills never write project specifics back into this plugin.
 
+When a skill finds `.afk/` absent it runs the `afk-init` bootstrap automatically
+(create `.afk/`, add the gitignore entry, detect commands, record `pluginRoot`)
+and continues — no manual step. Bundled helpers resolve via
+`${CLAUDE_PLUGIN_ROOT}` → the recorded `pluginRoot` → the skill's own directory,
+so a gate never hard-fails before the bootstrap runs. The `afk` driver also
+checks at kickoff whether the installed plugin is behind the canonical repo's
+latest version and surfaces a one-line update notice (never blocking).
+
 ## Local checks (mirror CI)
 
 ```bash

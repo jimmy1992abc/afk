@@ -25,7 +25,9 @@ final pass.
 ## Run it
 
 Resolve the helper via the plugin root — `${CLAUDE_PLUGIN_ROOT}` if set, else the
-`pluginRoot` recorded in `.afk/config.md`:
+`pluginRoot` in `.afk/config.md`, else this skill's own directory (its sibling).
+If `.afk/` is absent, the `afk-init` bootstrap runs automatically first (it
+records `pluginRoot`):
 
 ```text
 node "<pluginRoot>/skills/afk-kimi-review/kimi-gate.mjs"

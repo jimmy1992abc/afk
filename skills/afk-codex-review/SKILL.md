@@ -24,7 +24,9 @@ to a single final pass. Never spend a round-trip on a small or doc-only edit.
 ## Run it
 
 Resolve the helper via the plugin root — `${CLAUDE_PLUGIN_ROOT}` if set, else the
-`pluginRoot` recorded in `.afk/config.md`:
+`pluginRoot` in `.afk/config.md`, else this skill's own directory (its sibling).
+If `.afk/` is absent, the `afk-init` bootstrap runs automatically first (it
+records `pluginRoot`):
 
 ```text
 node "<pluginRoot>/skills/afk-codex-review/codex-gate.mjs"
