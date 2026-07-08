@@ -55,14 +55,20 @@ export function resolveRepo(repoRoot, env = {}) {
   return repoFromHomepage(manifest.homepage ?? manifest.metadata?.homepage);
 }
 
-export async function latestVersion(repo, fetchImpl = fetch) {
+export async function latestVersion(repo, fetchImpl = fetch, timeoutMs = 4000) {
   const url = `https://raw.githubusercontent.com/${repo}/main/.claude-plugin/marketplace.json`;
-  const res = await fetchImpl(url);
-  if (!res.ok) {
-    throw new Error(`update-check: fetch failed with status ${res.status}`);
+  // Bound the fetch: a stalled (not failed) network must never block kickoff;
+  // an abort surfaces as a rejection that the caller treats as a silent skip.
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetchImpl(url, { signal: ctrl.signal });
+    if (!res.ok) throw new Error(`update-check: fetch failed with status ${res.status}`);
+    const manifest = JSON.parse(await res.text());
+    return manifest.plugins?.[0]?.version ?? null;
+  } finally {
+    clearTimeout(timer);
   }
-  const manifest = JSON.parse(await res.text());
-  return manifest.plugins?.[0]?.version ?? null;
 }
 
 // Runs the checks and prints a notice if warranted; never throws.

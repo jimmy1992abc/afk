@@ -24,13 +24,14 @@ final pass.
 
 ## Run it
 
-Resolve the helper via the plugin root — `${CLAUDE_PLUGIN_ROOT}` if set, else the
-`pluginRoot` in `.afk/config.md`, else this skill's own directory (its sibling).
-If `.afk/` is absent, the `afk-init` bootstrap runs automatically first (it
-records `pluginRoot`):
+The bundled helper `kimi-gate.mjs` sits beside this SKILL.md. Locate its
+directory as `${CLAUDE_PLUGIN_ROOT}/skills/afk-kimi-review` if the env var is set,
+else `<pluginRoot>/skills/afk-kimi-review` from `.afk/config.md`, else this
+skill's own directory (the helper is its sibling). If `.afk/` is absent, the
+`afk-init` bootstrap runs automatically first:
 
 ```text
-node "<pluginRoot>/skills/afk-kimi-review/kimi-gate.mjs"
+node "<helper-dir>/kimi-gate.mjs"
 ```
 
 Run it in the **background** with a generous timeout; redirect stdout to a file

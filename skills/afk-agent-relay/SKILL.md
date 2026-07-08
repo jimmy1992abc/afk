@@ -31,21 +31,22 @@ simple tasks get shorter briefs). It distils; it does not just truncate.
 
 ## How to run it
 
-Resolve the helper via the plugin root — `${CLAUDE_PLUGIN_ROOT}` if set, else
-the `pluginRoot` in `.afk/config.md`, else this skill's own directory (its
-sibling). Always pass `--manual` (bypasses the default-off `AGENT_RELAY_ENABLED`
-master switch). Run in the background
-with a generous timeout and capture stdout to a file (the codex-backed scope
-can be slow); then read the marker block.
+The bundled scripts (`brief.mjs`, `scope.mjs`, `hooks/`) sit beside this
+SKILL.md. Locate their directory as `${CLAUDE_PLUGIN_ROOT}/skills/afk-agent-relay`
+if the env var is set, else `<pluginRoot>/skills/afk-agent-relay` from
+`.afk/config.md`, else this skill's own directory. Always pass `--manual`
+(bypasses the default-off `AGENT_RELAY_ENABLED` master switch). Run in the
+background with a generous timeout and capture stdout to a file (the codex-backed
+scope can be slow); then read the marker block.
 
 ```text
-node "<pluginRoot>/skills/afk-agent-relay/brief.mjs" --manual --task "<one line>" --diff main --files a.py b.py
+node "<relay-dir>/brief.mjs" --manual --task "<one line>" --diff main --files a.py b.py
 ```
 
 Scope gate:
 
 ```text
-node "<pluginRoot>/skills/afk-agent-relay/scope.mjs" --manual --task "<raw request>"
+node "<relay-dir>/scope.mjs" --manual --task "<raw request>"
 ```
 
 ### Flags
@@ -105,7 +106,7 @@ settings (e.g. Claude Code's gitignored `.claude/settings.local.json`):
 
 ```json
 { "hooks": { "UserPromptSubmit": [ { "hooks": [
-  { "type": "command", "command": "node \"<pluginRoot>/skills/afk-agent-relay/hooks/precompress-hook.mjs\"" }
+  { "type": "command", "command": "node \"<relay-dir>/hooks/precompress-hook.mjs\"" }
 ] } ] } }
 ```
 

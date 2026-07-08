@@ -171,4 +171,11 @@ describe('latestVersion', () => {
     const stubFetch = async () => ({ ok: false, status: 404 });
     await assert.rejects(() => latestVersion(PLACEHOLDER_REPO, stubFetch));
   });
+
+  test('aborts on timeout so a stalled fetch never hangs', async () => {
+    const hangingFetch = (_url, opts) => new Promise((_, reject) => {
+      opts.signal.addEventListener('abort', () => reject(new Error('aborted')));
+    });
+    await assert.rejects(() => latestVersion(PLACEHOLDER_REPO, hangingFetch, 10));
+  });
 });
