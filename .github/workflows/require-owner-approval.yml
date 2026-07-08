@@ -1,8 +1,9 @@
 name: require-owner-approval
 
 # Defense in depth beside the documented branch-protection ruleset: fail a PR
-# that lacks an owner/maintainer approval, unless it was authored by one. Turns
-# green once an owner/maintainer approves.
+# that lacks an owner/maintainer approval, unless it was authored by one. Only
+# approvals on the current head commit count, so pushing new commits after an
+# approval re-arms the gate (a stale approval never passes unreviewed code).
 
 on:
   pull_request:
@@ -32,11 +33,12 @@ jobs:
             echo "Authored by an owner/maintainer — inherently owner-reviewed."
             exit 0
           fi
-          approvals=$(gh api "repos/$REPO/pulls/$PR/reviews" \
-            --jq '[.[] | select(.state=="APPROVED") | select(.author_association=="OWNER" or .author_association=="MEMBER")] | length')
+          head=$(gh api "repos/$REPO/pulls/$PR" --jq '.head.sha')
+          approvals=$(HEAD_SHA="$head" gh api "repos/$REPO/pulls/$PR/reviews" \
+            --jq '[.[] | select(.state=="APPROVED") | select(.commit_id==env.HEAD_SHA) | select(.author_association=="OWNER" or .author_association=="MEMBER")] | length')
           if [ "${approvals:-0}" -ge 1 ]; then
-            echo "Owner/maintainer approval present."
+            echo "Owner/maintainer approval present on the current head commit."
             exit 0
           fi
-          echo "::error::This PR needs an approving review from an owner or maintainer before it can merge."
+          echo "::error::This PR needs an owner/maintainer approval on the latest commit before it can merge."
           exit 1
