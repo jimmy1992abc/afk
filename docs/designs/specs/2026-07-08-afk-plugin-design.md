@@ -37,6 +37,8 @@ Ship a standalone plugin that:
 - No runtime coupling to any application; these are development-time skills.
 - No attempt to auto-migrate an existing project's conventions; adaptation is
   explicit via config.
+- No fleet-scale scheduling, cost governance, or media generation — this is a
+  focused, portable pipeline, not an autonomous multi-agent fleet.
 
 ---
 
@@ -91,7 +93,7 @@ skills into one namespace (where `codex-review` from two sources would clash)
 and so bare-trigger auto-selection is unambiguous:
 
 - Flagship: `afk`.
-- Satellites carry the plugin prefix: `afk-spec-planner`,
+- Satellites carry the plugin prefix: `afk-init`, `afk-spec-planner`,
   `afk-implementation-pilot`, `afk-internal-review`, `afk-codex-review`,
   `afk-kimi-review`, `afk-agent-relay`.
 
@@ -101,17 +103,38 @@ user's same-named personal skill overrides a plugin skill — documented in
 `AGENTS.md` and `CONTRIBUTING.md` with the qualified-invocation and rename
 workarounds.
 
+### Distribution & install
+
+- **Install modes.** Primary: install as a plugin via the marketplace. Alternate
+  (drop-in): copy `skills/` and `scripts/` into a project's `.claude/` or
+  `.agents/`. Both are supported; `afk-init` records which is in effect.
+- **Bundled-script paths.** A skill addresses its bundled `.mjs` as
+  `${CLAUDE_PLUGIN_ROOT}/skills/<name>/<helper>.mjs`, never a bare relative path:
+  an installed plugin lives in a version-keyed cache where relative paths break,
+  and non-Claude hosts may not set `${CLAUDE_PLUGIN_ROOT}` at all. Resolution
+  order — `${CLAUDE_PLUGIN_ROOT}` → the `pluginRoot` recorded in `.afk/config.md`
+  (written by `afk-init`) → a documented fallback — is what lets the bundled
+  gates run under every host agent.
+- **Version is the install cache key.** Hosts cache an installed plugin by its
+  manifest `version`; an install only picks up a changed skill when `version`
+  bumps. So any change under `skills/` or a bundled script must bump `version` in
+  the same PR — enforced by CI and stated in the contribution rules.
+- **Secrets stay in the environment.** API keys and tokens are read only from the
+  environment or a gitignored `.env`, never from `.afk/config.md` and never
+  committed.
+
 ---
 
 ## Skill inventory
 
-Seven skills, ported and fully genericized. Cross-references between skills use
-relative paths (`../afk-kimi-review/SKILL.md`), preserved by the shared
-`skills/` layout.
+Eight skills. Seven are ported from an existing set and genericized; `afk-init`
+is newly authored. Cross-references between skills use relative paths
+(`../afk-kimi-review/SKILL.md`), preserved by the shared `skills/` layout.
 
 | Skill | Role | Ships with |
 |-------|------|-----------|
 | `afk` | autonomous waterfall driver | — |
+| `afk-init` | one-time per-repo bootstrap: detect commands, write `.afk/config.md`, add the gitignore entry, record `pluginRoot` | — |
 | `afk-spec-planner` | read-only planning to a durable plan | — |
 | `afk-implementation-pilot` | implement + self-review loop | — |
 | `afk-internal-review` | final internal production-readiness review | — |
@@ -132,6 +155,9 @@ relative paths (`../afk-kimi-review/SKILL.md`), preserved by the shared
   frontmatter keeps at most a generic tier hint, never a vendor model id.
 - Design-doc paths default to `docs/designs/specs/` and are overridable via
   config.
+- Bundled `.mjs` helpers are invoked via the resolved plugin root
+  (`${CLAUDE_PLUGIN_ROOT}` → `pluginRoot` → fallback), never a bare relative
+  path.
 
 ---
 
@@ -187,13 +213,16 @@ so the current flow needs no configuration.
 
 Advanced fields default sensibly and stay out of the starter template: default
 branch (`origin/HEAD`), design-docs dir (`docs/designs/specs/`), reports dir
-(`.afk/reports/`), commit convention.
+(`.afk/reports/`), commit convention, and `pluginRoot` (auto-recorded by
+`afk-init` for bundled-script resolution). Secrets are never stored here — they
+live in the environment.
 
-On first run, a skill creates `.afk/` from `templates/afk-config.example.md` and
-adds `.afk/` to the project's `.gitignore` (both idempotent), announcing each.
-Markdown was chosen only for ease of hand-editing and the free-text `invariants`
-field; `config.md` holds nothing sensitive and is gitignored because it is
-personal, not because it is secret.
+`afk-init` scaffolds `.afk/` from `templates/afk-config.example.md`, adds `.afk/`
+to the project's `.gitignore`, and records `pluginRoot` (all idempotent),
+announcing each; the pipeline skills also self-scaffold on first run if `afk-init`
+was never run. Markdown was chosen only for ease of hand-editing and the
+free-text `invariants` field; `config.md` holds nothing sensitive and is
+gitignored because it is personal, not because it is secret.
 
 A blank or absent `config.md` behaves identically to a file of all-defaults —
 never an error, never a block. Per-field fallback is config value →
@@ -279,6 +308,7 @@ holds regardless of who opened the PR.
 | link-check | internal relative links in every `SKILL.md` resolve on disk |
 | provenance-scan | fail on private-project nouns (denylist), non-`example.com` emails, and RFC1918 IP literals |
 | secret-scan | gitleaks-style scan for credential-shaped strings |
+| version-bump | a PR touching `skills/` or a bundled script must bump the manifest `version` versus the base branch |
 
 `.github/workflows/sync-marketplace.yml` — on push to `main`, regenerate the
 five manifests and commit any drift back (`[skip ci]`).
@@ -313,6 +343,10 @@ does not itself embed sensitive context beyond the tokens it must block.
 - **English only** for all repository content.
 - **Owner reviews every PR** before merge; squash by default.
 - **Branch/PR discipline:** never commit to `main`; one topic per branch.
+- **Bump the plugin `version`** in any PR that changes `skills/` or a bundled
+  script — it is the install cache key.
+- **Secrets only in the environment** — never in `.afk/config.md` or any
+  committed file.
 
 These rules are enforced by review and, where mechanizable, by the CI jobs
 above (provenance-scan, secret-scan).
@@ -325,6 +359,7 @@ above (provenance-scan, secret-scan).
 afk/
   skills/
     afk/SKILL.md
+    afk-init/SKILL.md
     afk-spec-planner/SKILL.md
     afk-implementation-pilot/SKILL.md
     afk-internal-review/SKILL.md
@@ -407,9 +442,10 @@ No README (req 5).
 - **P1 — Scaffold:** manifests + sync script + CI + `CODEOWNERS` +
   instruction files + templates + `.gitignore`. Establishes the gates before
   content lands.
-- **P2 — Review pipeline:** port `afk`, `afk-spec-planner`,
-  `afk-implementation-pilot`, `afk-internal-review` (with the req-6 redesign),
-  `afk-codex-review`, `afk-kimi-review`; wire the `.afk/` convention.
+- **P2 — Review pipeline:** author `afk-init` (bootstrap); port `afk`,
+  `afk-spec-planner`, `afk-implementation-pilot`, `afk-internal-review` (with the
+  req-6 redesign), `afk-codex-review`, `afk-kimi-review`; wire the `.afk/`
+  convention and plugin-root resolution.
 - **P3 — Relay:** port `afk-agent-relay` with its `lib/`, `hooks/`, and tests.
 
 Each phase is a reviewable unit under the owner-only-review rule.
