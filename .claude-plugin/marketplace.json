@@ -1,0 +1,20 @@
+{
+  "name": "afk",
+  "owner": {
+    "name": "jimmy1992abc"
+  },
+  "metadata": {
+    "description": "Autonomous PR-pipeline skills for AI coding agents",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "afk-skills",
+      "description": "Autonomous PR pipeline: plan, implement, internal review, and independent external gates.",
+      "version": "0.1.0",
+      "source": "./",
+      "strict": false,
+      "skills": []
+    }
+  ]
+}

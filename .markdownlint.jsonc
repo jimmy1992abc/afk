@@ -1,0 +1,7 @@
+{
+  // Disable line-length and table-pipe-padding; too noisy for prose and tables.
+  "default": true,
+  "MD013": false,
+  "MD060": false,
+  "MD024": { "siblings_only": true }
+}
