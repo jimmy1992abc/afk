@@ -6,7 +6,9 @@ description: Part of the afk pipeline. One-time, idempotent bootstrap for a repo
 # afk-init
 
 Prepare a repository so the afk pipeline works in it. Idempotent: safe to re-run;
-it fills gaps and never overwrites a value a developer set by hand.
+it fills gaps and never overwrites a value a developer set by hand. The pipeline
+skills run this same bootstrap **automatically** when `.afk/` is absent, so it
+rarely needs invoking by hand — `/afk-init` is for an explicit re-detect.
 
 ## Steps
 

@@ -14,11 +14,20 @@ self-contained spec.
 1. **Require a scope.** The operator must name the explicit issues/PRs (and/or
    file areas) to touch. **No scope → stop and ask.** Never browse the tracker
    and pick work yourself; the scope fences everything you may touch.
-2. **Confirm the merge policy** (from `.afk/config.md`: `leave-open` default /
+2. **Auto-bootstrap first.** If `.afk/` is absent, run the `afk-init` bootstrap
+   automatically (create `.afk/` from the template, add the `.gitignore` entry,
+   detect commands, record `pluginRoot`) — idempotent — announce it, and
+   continue. This runs before any config-dependent step, so a first run reads a
+   populated config rather than only defaults. No manual step; `/afk-init` stays
+   available to re-run detection.
+3. **Update check.** Run the bundled update check; if the installed plugin is
+   behind the canonical repo's latest version, surface a one-line notice. Never
+   block on it (silent when offline).
+4. **Confirm the merge policy** (from `.afk/config.md`: `leave-open` default /
    `merge-to-unblock` / `merge-when-green`) and any constraints (branches not to
    touch, naming, safe-direction-only, deploy is the operator's job, summary
    language, explicit gate choice).
-3. **Restate the scope** in one line, then start.
+5. **Restate the scope** in one line, then start.
 
 ## Per issue — the full waterfall (one at a time)
 

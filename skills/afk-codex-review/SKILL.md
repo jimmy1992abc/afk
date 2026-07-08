@@ -23,11 +23,14 @@ to a single final pass. Never spend a round-trip on a small or doc-only edit.
 
 ## Run it
 
-Resolve the helper via the plugin root — `${CLAUDE_PLUGIN_ROOT}` if set, else the
-`pluginRoot` recorded in `.afk/config.md`:
+The bundled helper `codex-gate.mjs` sits beside this SKILL.md. Locate its
+directory as `${CLAUDE_PLUGIN_ROOT}/skills/afk-codex-review` if the env var is
+set, else `<pluginRoot>/skills/afk-codex-review` from `.afk/config.md`, else this
+skill's own directory (the helper is its sibling). If `.afk/` is absent, the
+`afk-init` bootstrap runs automatically first:
 
 ```text
-node "<pluginRoot>/skills/afk-codex-review/codex-gate.mjs"
+node "<helper-dir>/codex-gate.mjs"
 ```
 
 Run it in the **background** with a generous timeout (the review traces code

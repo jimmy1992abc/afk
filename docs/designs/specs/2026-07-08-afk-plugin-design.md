@@ -119,6 +119,11 @@ workarounds.
   manifest `version`; an install only picks up a changed skill when `version`
   bumps. So any change under `skills/` or a bundled script must bump `version` in
   the same PR — enforced by CI and stated in the contribution rules.
+- **Update check.** Because a stale cached install silently keeps old skills, the
+  `afk` driver runs `scripts/update-check.mjs` at kickoff: it compares the
+  installed `version` to the canonical repo's latest (resolved from the manifest
+  `homepage`) and surfaces a one-line notice when behind, degrading silently
+  offline. It never blocks.
 - **Secrets stay in the environment.** API keys and tokens are read only from the
   environment or a gitignored `.env`, never from `.afk/config.md` and never
   committed.
@@ -219,10 +224,14 @@ live in the environment.
 
 `afk-init` scaffolds `.afk/` from `templates/afk-config.example.md`, adds `.afk/`
 to the project's `.gitignore`, and records `pluginRoot` (all idempotent),
-announcing each; the pipeline skills also self-scaffold on first run if `afk-init`
-was never run. Markdown was chosen only for ease of hand-editing and the
-free-text `invariants` field; `config.md` holds nothing sensitive and is
-gitignored because it is personal, not because it is secret.
+announcing each. When any pipeline skill finds `.afk/` absent it runs this
+bootstrap automatically and continues, so setup is zero-touch; `/afk-init`
+remains available for an explicit re-detect. Bundled helpers resolve via
+`${CLAUDE_PLUGIN_ROOT}` → recorded `pluginRoot` → the skill's own directory, so a
+gate never hard-fails before the bootstrap runs. Markdown was chosen only for
+ease of hand-editing and the free-text `invariants` field; `config.md` holds
+nothing sensitive and is gitignored because it is personal, not because it is
+secret.
 
 A blank or absent `config.md` behaves identically to a file of all-defaults —
 never an error, never a block. Per-field fallback is config value →
