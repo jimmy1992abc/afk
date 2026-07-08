@@ -62,7 +62,8 @@ An external gate is **mandatory**: run the number set by `min-pass` in
 each gate's model is **not** the implementer's model, and is a
 current-generation mainstream frontier model.
 
-- **Selection** follows `.afk/config.md`: `priority` (default `codex > kimi`),
+- **Selection** follows `.afk/config.md`: `priority` (default
+  `codex > kimi > glm`),
   `min-pass` (default 1), and `mode` (`waterfall` = try in priority order,
   stopping once `min-pass` gates pass; `parallel` = run `min-pass` at once).
   Skip any gate that is the implementer's own model or cannot run (uninstalled,
@@ -74,8 +75,8 @@ current-generation mainstream frontier model.
   handing the gate to the operator is not a valid skip. When `min-pass` cannot be
   met, the round is not clean — do not mark ready.
 
-The gate skills (`afk-codex-review`, `afk-kimi-review`) carry the invocation,
-batching, and metering rules; they load when the gate runs.
+The gate skills (`afk-codex-review`, `afk-kimi-review`, `afk-glm-review`) carry
+the invocation, batching, and metering rules; they load when the gate runs.
 
 ## Autonomy
 

@@ -28,6 +28,7 @@ function findTextFiles(dir, out = []) {
       findTextFiles(full, out);
     } else if (entry.isFile()) {
       const ext = entry.name.slice(entry.name.lastIndexOf('.')).toLowerCase();
+      if (entry.name === '.git') continue;
       if (BINARY_EXT.has(ext)) continue;
       if (basename(entry.name).startsWith('scan-provenance')) continue;
       out.push(full);

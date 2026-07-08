@@ -1,18 +1,18 @@
 ---
 name: afk-kimi-review
-description: Part of the afk pipeline. Runs Kimi (Kimi CLI) as an independent, read-only external review gate on the current PR/branch, then triages and fixes the findings. Interchangeable with afk-codex-review — run exactly ONE external gate per round, whose model differs from the implementer's. Internal review first, external gate last. Triggers include "/afk-kimi-review", "run kimi review", "kimi gate".
+description: Part of the afk pipeline. Runs Kimi (Kimi CLI) as an independent, read-only external review gate on the current PR/branch, then triages and fixes the findings. Interchangeable with afk-codex-review and afk-glm-review, subject to .afk/config.md gate priority and min-pass. Internal review first, external gate last. Triggers include "/afk-kimi-review", "run kimi review", "kimi gate".
 ---
 
 # afk-kimi-review
 
 An independent second-opinion review by Kimi (a *different* model), used as the
 **last** check before a PR is handed back for approval. Interchangeable with
-`afk-codex-review`: run exactly **one** external gate per round, whose model
-(1) is not the model that implemented the change and (2) is a current-generation
-mainstream frontier model. Run `afk-internal-review` first and resolve it, then
-run this gate: internal review first, external gate last. Kimi reviews the diff
-read-only; you triage and fix. Same role and output contract as
-`afk-codex-review`; only the underlying model differs.
+`afk-codex-review` and `afk-glm-review`: run the configured external gate set
+from `.afk/config.md`, and never use a gate whose model matches the implementer's
+model. Run `afk-internal-review` first and resolve it, then run this gate:
+internal review first, external gate last. Kimi reviews the diff read-only; you
+triage and fix. Same role and output contract as the other gate skills; only the
+underlying model differs.
 
 The helper `kimi-gate.mjs` ships with this skill and travels with the plugin.
 
@@ -56,13 +56,12 @@ Stop when a round returns no new blocker findings, or findings narrow to your ow
 last fix, or it is a design-only doc. Report `CLEAN` or `OUTSTANDING`. A clean
 pass is not authority to merge.
 
-## Selection (with afk-codex-review)
+## Selection
 
-Same role, same contract. Run **one** external gate per round, not both — they
-are metered alternatives. The operator's explicit choice wins; otherwise the
-`afk` skill's selection rule applies (skip the implementer's own model). The
-round-1 gate is locked for later rounds of the same PR; a mid-loop switch resets
-the finding baseline and is recorded.
+Same role, same contract as the other external gate skills. The operator's
+explicit choice wins; otherwise the `afk` skill's selection rule applies (skip
+the implementer's own model). The round-1 gate choice is locked for later rounds
+of the same PR; a mid-loop switch resets the finding baseline and is recorded.
 
 ## Setup (per machine, once)
 

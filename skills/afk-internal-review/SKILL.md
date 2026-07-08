@@ -79,10 +79,9 @@ blocker is open.
 
 ### Final report — only when internal review AND the external gate are both clean
 
-Once this review has no open blockers **and** the external gate
-(`afk-codex-review` / `afk-kimi-review`) has returned clean, write the full
-human report: summary, decision and rationale, everything reviewed, residual
-risk, and the production-readiness checklist.
+Once this review has no open blockers **and** the configured external gate has
+returned clean, write the full human report: summary, decision and rationale,
+everything reviewed, residual risk, and the production-readiness checklist.
 
 - **Auto-merge policy** (`merge-when-green` / `merge-to-unblock` in
   `.afk/config.md`): write the final report to `.afk/reports/PR#<n>-<title>.md`.

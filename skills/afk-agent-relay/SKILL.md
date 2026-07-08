@@ -8,13 +8,13 @@ description: Part of the afk pipeline. Provider-pluggable dev-tooling that shell
 A small, provider-pluggable workflow that offloads two token-heavy jobs from
 the coding agent to cheaper/independent models: the external model reads the
 raw bytes; only a short delimited block re-enters the agent's context (same
-out-of-process pattern as `afk-codex-review` / `afk-kimi-review`).
+out-of-process pattern as the external review gate skills).
 
 ```text
 1. SCOPE GATE   (scope.mjs, default codex)     raw request  -> issue draft
 2. COMPRESSOR   (brief.mjs, default deepseek)  big context  -> 6-section brief
 3. AGENT                                        implements from the brief
-4. REVIEW GATE  (afk-codex-review / afk-kimi-review — NOT part of this skill)
+4. REVIEW GATE  (external review gate — NOT part of this skill)
 ```
 
 **Development-time tooling only.** It never runs against a production or
@@ -72,7 +72,7 @@ Output is one marker block: `===== AGENT BRIEF =====` … `===== END AGENT BRIEF
 
 The brief is a **hypothesis from a cheaper model**, not ground truth. Before
 acting, spot-check its file:line claims against the real files (exactly how you
-triage `afk-codex-review` / `afk-kimi-review` findings). If it cites a
+triage external-gate findings). If it cites a
 file/function that doesn't exist, discard that part. Never let an unverified
 brief drive a risky edit.
 

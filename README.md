@@ -22,6 +22,7 @@ gitignored `.afk/` directory.
 | `afk-internal-review` | Performs the internal production-readiness review. |
 | `afk-codex-review` | Runs Codex as an independent external review gate. |
 | `afk-kimi-review` | Runs Kimi as an independent external review gate. |
+| `afk-glm-review` | Runs GLM as an independent diff-scoped external review gate. |
 | `afk-agent-relay` | Offloads large reads or scoping work to an external model. |
 
 ## Pipeline
@@ -97,7 +98,7 @@ lint:  <cmd>
 build: <cmd>
 
 ## external gate
-priority: codex > kimi
+priority: codex > kimi > glm
 min-pass: 1
 mode:     waterfall
 
@@ -120,6 +121,7 @@ gitignored `.env`.
 /afk-internal-review PR 456
 /afk-codex-review
 /afk-kimi-review
+/afk-glm-review
 ```
 
 ## Merge Policies
