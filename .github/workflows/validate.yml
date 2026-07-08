@@ -65,4 +65,4 @@ jobs:
           curl -sSL -o /tmp/gitleaks.tgz \
             "https://github.com/gitleaks/gitleaks/releases/download/v${ver}/gitleaks_${ver}_linux_x64.tar.gz"
           tar -xzf /tmp/gitleaks.tgz -C /tmp gitleaks
-          /tmp/gitleaks detect --source . --no-banner --redact
+          /tmp/gitleaks detect --source . --config .gitleaks.toml --no-banner --redact
