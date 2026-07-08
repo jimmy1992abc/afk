@@ -1,0 +1,68 @@
+name: validate
+
+# Keeps the repo clean on every PR: structure, manifest sync, syntax, tests,
+# link integrity, provenance, secrets, and the version-bump rule.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0 # version-bump compares against the base branch
+
+      - name: Node version
+        run: node --version
+
+      - name: Skill lint
+        run: node scripts/lint-skills.mjs
+
+      - name: Marketplace sync check
+        run: node scripts/sync-marketplace.mjs --check
+
+      - name: Syntax (node / bash / json)
+        run: |
+          set -e
+          git ls-files '*.mjs' '*.js' | while IFS= read -r f; do node --check "$f"; done
+          git ls-files '*.sh' | while IFS= read -r f; do bash -n "$f"; done
+          git ls-files '*.json' | while IFS= read -r f; do \
+            node -e "JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'))" "$f" \
+            || { echo "invalid JSON: $f"; exit 1; }; done
+
+      - name: Unit tests
+        run: node --test
+
+      - name: Internal link check
+        run: node scripts/check-links.mjs
+
+      - name: Provenance scan
+        run: node scripts/scan-provenance.mjs
+
+      - name: Version bump
+        if: github.event_name == 'pull_request'
+        run: node scripts/check-version-bump.mjs --base "origin/${{ github.base_ref }}"
+
+      - name: Markdown lint
+        run: npx --yes markdownlint-cli2@0.23.0
+
+      - name: Secret scan (gitleaks)
+        run: |
+          set -e
+          ver=8.30.1
+          curl -sSL -o /tmp/gitleaks.tgz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${ver}/gitleaks_${ver}_linux_x64.tar.gz"
+          tar -xzf /tmp/gitleaks.tgz -C /tmp gitleaks
+          /tmp/gitleaks detect --source . --no-banner --redact

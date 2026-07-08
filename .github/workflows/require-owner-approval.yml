@@ -1,0 +1,42 @@
+name: require-owner-approval
+
+# Defense in depth beside the documented branch-protection ruleset: fail a PR
+# that lacks an owner/maintainer approval, unless it was authored by one. Turns
+# green once an owner/maintainer approves.
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+  pull_request_review:
+    types: [submitted, dismissed]
+
+permissions:
+  pull-requests: read
+  contents: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require an owner/maintainer approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -e
+          assoc=$(gh api "repos/$REPO/pulls/$PR" --jq '.author_association')
+          echo "PR author association: $assoc"
+          if [ "$assoc" = "OWNER" ] || [ "$assoc" = "MEMBER" ]; then
+            echo "Authored by an owner/maintainer — inherently owner-reviewed."
+            exit 0
+          fi
+          approvals=$(gh api "repos/$REPO/pulls/$PR/reviews" \
+            --jq '[.[] | select(.state=="APPROVED") | select(.author_association=="OWNER" or .author_association=="MEMBER")] | length')
+          if [ "${approvals:-0}" -ge 1 ]; then
+            echo "Owner/maintainer approval present."
+            exit 0
+          fi
+          echo "::error::This PR needs an approving review from an owner or maintainer before it can merge."
+          exit 1
