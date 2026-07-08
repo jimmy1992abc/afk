@@ -89,6 +89,12 @@ describe('scanProvenance', () => {
     assert.ok(!findings.some((f) => f.file.endsWith('scan-provenance-fixture.md')));
   });
 
+  test('skips a git worktree pointer file', () => {
+    writeFixture('.git', `gitdir: ${winPath}\\worktrees\\branch\n`);
+    const findings = scanProvenance(root);
+    assert.ok(!findings.some((f) => f.file.endsWith('.git')));
+  });
+
   test('skips known binary extensions', () => {
     writeFixture('image.png', `${fakeEmail}\n`);
     const findings = scanProvenance(root);

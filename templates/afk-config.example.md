@@ -6,7 +6,7 @@ lint:  <cmd>
 build: <cmd>
 
 ## external gate
-priority: codex > kimi   # preferred order
+priority: codex > kimi > glm # preferred order
 min-pass: 1              # independent gates that must pass clean
 mode:     waterfall      # waterfall: try in order, stop at min-pass · parallel: run at once
 

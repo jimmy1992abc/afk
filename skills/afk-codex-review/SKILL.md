@@ -1,16 +1,16 @@
 ---
 name: afk-codex-review
-description: Part of the afk pipeline. Runs Codex (OpenAI Codex CLI) as an independent, read-only external review gate on the current PR/branch, then triages and fixes the findings. Interchangeable with afk-kimi-review — run exactly ONE external gate per round, whose model differs from the implementer's. The last check before a PR is handed back: internal review first, external gate last. Triggers include "/afk-codex-review", "run codex review", "codex gate".
+description: Part of the afk pipeline. Runs Codex (OpenAI Codex CLI) as an independent, read-only external review gate on the current PR/branch, then triages and fixes the findings. Interchangeable with afk-kimi-review and afk-glm-review, subject to .afk/config.md gate priority and min-pass. The last check before a PR is handed back: internal review first, external gate last. Triggers include "/afk-codex-review", "run codex review", "codex gate".
 ---
 
 # afk-codex-review
 
 An independent second-opinion review by Codex (a *different* model), used as the
 **last** check before a PR is handed back for approval. It is interchangeable
-with `afk-kimi-review`: run exactly **one** external gate per round, whose model
-(1) is not the model that implemented the change and (2) is a current-generation
-mainstream frontier model. Run `afk-internal-review` first and resolve it, then
-run this gate: internal review first, external gate last. Codex reviews the diff
+with `afk-kimi-review` and `afk-glm-review`: run the configured external gate
+set from `.afk/config.md`, and never use a gate whose model matches the
+implementer's model. Run `afk-internal-review` first and resolve it, then run
+this gate: internal review first, external gate last. Codex reviews the diff
 read-only; you triage and fix.
 
 The helper `codex-gate.mjs` ships with this skill and travels with the plugin.
