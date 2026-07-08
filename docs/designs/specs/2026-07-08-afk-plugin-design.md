@@ -138,7 +138,7 @@ is newly authored. Cross-references between skills use relative paths
 | `afk-spec-planner` | read-only planning to a durable plan | — |
 | `afk-implementation-pilot` | implement + self-review loop | — |
 | `afk-internal-review` | final internal production-readiness review | — |
-| `afk-codex-review` | external gate (independent model) | `codex-gate.mjs`, `REVIEW_INVARIANTS.example.md` |
+| `afk-codex-review` | external gate (independent model) | `codex-gate.mjs` |
 | `afk-kimi-review` | external gate (independent model) | `kimi-gate.mjs` |
 | `afk-agent-relay` | offload token-heavy reads to a cheaper model | `brief.mjs`, `scope.mjs`, `lib/`, `hooks/`, `tests/` |
 
@@ -363,7 +363,7 @@ afk/
     afk-spec-planner/SKILL.md
     afk-implementation-pilot/SKILL.md
     afk-internal-review/SKILL.md
-    afk-codex-review/{SKILL.md, codex-gate.mjs, REVIEW_INVARIANTS.example.md}
+    afk-codex-review/{SKILL.md, codex-gate.mjs}
     afk-kimi-review/{SKILL.md, kimi-gate.mjs}
     afk-agent-relay/{SKILL.md, brief.mjs, scope.mjs, lib/, hooks/, tests/}
   templates/

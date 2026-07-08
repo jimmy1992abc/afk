@@ -14,7 +14,15 @@
       "version": "0.1.0",
       "source": "./",
       "strict": false,
-      "skills": []
+      "skills": [
+        "./skills/afk",
+        "./skills/afk-codex-review",
+        "./skills/afk-implementation-pilot",
+        "./skills/afk-init",
+        "./skills/afk-internal-review",
+        "./skills/afk-kimi-review",
+        "./skills/afk-spec-planner"
+      ]
     }
   ]
 }
