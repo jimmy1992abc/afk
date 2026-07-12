@@ -6,6 +6,7 @@ import {
   patchStatuslineSettings,
   restoreStatuslineSettings,
   uninstallSupervisor,
+  validateClaudeStatus,
 } from '../../scripts/supervisor/install.mjs';
 
 test('status-line patch is idempotent and preserves previous configuration', () => {
@@ -47,4 +48,11 @@ test('repeated setup and uninstall are idempotent through injected platform oper
   assert.equal(settings.statusLine.command, 'user-status');
   assert.ok(calls.includes('install-scheduler'));
   assert.ok(calls.includes('uninstall-scheduler'));
+});
+
+test('Claude preflight accepts authenticated status without retaining identity fields', () => {
+  assert.deepEqual(validateClaudeStatus('C:\\Tools\\claude.exe', JSON.stringify({ loggedIn: true, identity: 'private-value', subscriptionType: 'max' })), {
+    claudePath: 'C:\\Tools\\claude.exe', authenticated: true,
+  });
+  assert.throws(() => validateClaudeStatus('C:\\Tools\\claude.exe', JSON.stringify({ loggedIn: false })), /authentication missing/);
 });

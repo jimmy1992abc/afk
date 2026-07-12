@@ -1,7 +1,7 @@
 import { execFile as execFileCallback } from 'node:child_process';
 import { access, cp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, isAbsolute, join } from 'node:path';
 import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
 
@@ -9,6 +9,25 @@ import { platformAdapter } from './platform.mjs';
 
 const execFileAsync = promisify(execFileCallback);
 export const STATUSLINE_MARKER = '--afk-supervisor:1';
+
+export function validateClaudeStatus(claudePath, statusJson) {
+  if (!isAbsolute(claudePath) || !/^claude(?:\.exe)?$/i.test(basename(claudePath))) {
+    throw new Error('standalone Claude CLI path invalid');
+  }
+  let status;
+  try { status = JSON.parse(statusJson); } catch { throw new Error('Claude authentication status invalid'); }
+  if (status.loggedIn !== true) throw new Error('Claude authentication missing');
+  return { claudePath, authenticated: true };
+}
+
+export async function preflightClaude(platform = process.platform) {
+  const locator = platform === 'win32' ? ['where.exe', ['claude.exe']] : ['which', ['claude']];
+  const located = await execFileAsync(locator[0], locator[1], { windowsHide: true });
+  const claudePath = located.stdout.split(/\r?\n/).map((line) => line.trim()).find(Boolean);
+  if (!claudePath) throw new Error('standalone Claude CLI missing');
+  const status = await execFileAsync(claudePath, ['auth', 'status', '--json'], { windowsHide: true, maxBuffer: 1024 * 1024 });
+  return validateClaudeStatus(claudePath, status.stdout);
+}
 
 export function patchStatuslineSettings(settings, wrapperCommand) {
   const current = structuredClone(settings ?? {});
@@ -126,8 +145,8 @@ export function createInstallDeps(options) {
     ? {
       nodePath, workerPath,
       plistPath: join(homedir(), 'Library', 'LaunchAgents', 'com.afk.supervisor.plist'),
-      stdoutPath: join(dataRoot, 'logs', 'supervisor.out.log'),
-      stderrPath: join(dataRoot, 'logs', 'supervisor.error.log'),
+      stdoutPath: '/dev/null',
+      stderrPath: '/dev/null',
     }
     : { nodePath, workerPath, taskXmlPath: join(dataRoot, 'afk-supervisor-task.xml') };
   const wrapperCommand = `${quote(nodePath)} ${quote(join(stableRoot, 'statusline-wrapper.mjs'))} --root ${quote(dataRoot)}`;

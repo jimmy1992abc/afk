@@ -5,6 +5,7 @@ const RECOVERY_MODES = new Set(['auto', 'off']);
 export function defaultConfig() {
   return {
     enabled: true,
+    claudePath: null,
     thresholdPercentage: 90,
     thresholdJitterMinSeconds: 60,
     thresholdJitterMaxSeconds: 180,
@@ -38,6 +39,7 @@ function positiveInteger(value, key, { allowZero = false } = {}) {
 export function validateConfig(value) {
   const config = { ...defaultConfig(), ...value };
   if (typeof config.enabled !== 'boolean') throw new TypeError('enabled must be boolean');
+  if (config.claudePath !== null && typeof config.claudePath !== 'string') throw new TypeError('claudePath must be a string or null');
   if (!WINDOW_MODES.has(config.windowMode)) throw new TypeError('windowMode is invalid');
   if (!CATCH_UP_MODES.has(config.catchUpMode)) throw new TypeError('catchUpMode is invalid');
   if (!RECOVERY_MODES.has(config.activeRunRecovery)) throw new TypeError('activeRunRecovery is invalid');

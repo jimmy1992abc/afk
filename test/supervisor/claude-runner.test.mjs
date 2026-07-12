@@ -3,8 +3,10 @@ import test from 'node:test';
 
 import {
   buildResumeArgs,
+  buildActivationArgs,
   classifyStreamFrame,
   runClaude,
+  validateRecoveryRun,
 } from '../../scripts/supervisor/claude-runner.mjs';
 
 const run = { sessionId: '00000000-0000-4000-8000-000000000001' };
@@ -17,6 +19,18 @@ test('resume arguments use verbose stream-json without shell interpolation', () 
   assert.deepEqual(buildResumeArgs(run).slice(0, 6), [
     '--resume', run.sessionId, '--print', '--verbose', '--output-format', 'stream-json',
   ]);
+});
+
+test('activation is bounded and does not persist a session', () => {
+  const args = buildActivationArgs();
+  assert.deepEqual(args.slice(0, 7), ['--print', '--verbose', '--output-format', 'stream-json', '--no-session-persistence', '--max-turns', '1']);
+  assert.ok(args.includes('--tools'));
+});
+
+test('recovery run rejects a ledger outside its working directory', () => {
+  assert.throws(() => validateRecoveryRun({
+    sessionId: run.sessionId, cwd: 'C:\\repo', ledgerPath: 'C:\\other\\afk-ledger.md',
+  }), /ledger path/);
 });
 
 test('classifies only the wire-visible quota retry frame', () => {

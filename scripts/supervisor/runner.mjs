@@ -5,9 +5,12 @@ import { pathToFileURL } from 'node:url';
 
 import { ConfigStore } from './config.mjs';
 import { WINDOW_SECONDS } from './constants.mjs';
-import { runClaude as executeClaude } from './claude-runner.mjs';
+import { mkdir } from 'node:fs/promises';
+import { runActivation as executeActivation, runClaude as executeClaude, startActivationProcess, startClaudeProcess } from './claude-runner.mjs';
 import { StateStore } from './state-store.mjs';
 import { stableJitterSeconds } from './usage-provider.mjs';
+import { createNotifier } from './notifier.mjs';
+import { appendBoundedLog } from './logger.mjs';
 
 function clearLease() {
   return { attemptId: null, token: null, lastRenewedAt: null, expiresAt: null };
@@ -94,6 +97,30 @@ export function finalizeAttempt(state, runId, token, result, now, config) {
   return next;
 }
 
+export function finalizeActivation(state, token, result, now) {
+  if (!state.activation.inProgress || state.activation.token !== token) return state;
+  const next = structuredClone(state);
+  next.activation.inProgress = false;
+  next.activation.attemptId = null;
+  next.activation.token = null;
+  next.activation.lastRenewedAt = null;
+  next.activation.expiresAt = null;
+  next.activation.activationAttempts.push(now);
+  if (result.kind === 'success') {
+    next.activation.handledResetAt = next.activation.resetAt;
+    next.activation.lastResult = 'result:activation-success';
+    next.usage.windowAnchorAt = now;
+    next.usage.fiveHourResetAt = now + WINDOW_SECONDS;
+    next.usage.source = 'window-anchor';
+    next.usage.confidence = 'estimated';
+    next.usage.observedAt = now;
+  } else {
+    next.activation.lastResult = result.kind === 'quota'
+      ? 'result:activation-quota-rejected' : 'error:activation-failed';
+  }
+  return next;
+}
+
 async function renewLease(store, runId, token, now, config) {
   await store.update((state) => {
     const run = state.runs[runId];
@@ -108,6 +135,27 @@ async function renewLease(store, runId, token, now, config) {
 export async function runAttempt(attemptId, deps) {
   const state = await deps.store.read();
   const entry = Object.entries(state.runs).find(([, run]) => run.lease?.attemptId === attemptId);
+  if (!entry && state.activation.inProgress && state.activation.attemptId === attemptId) {
+    const interval = deps.setInterval(() => {
+      deps.store.update((current) => {
+        if (current.activation.token !== state.activation.token) return current;
+        const renewedAt = deps.now();
+        current.activation.lastRenewedAt = renewedAt;
+        current.activation.expiresAt = renewedAt + deps.config.leaseRenewalSeconds * deps.config.leaseMissedRenewals;
+        return current;
+      }).catch(() => {});
+    }, deps.config.leaseRenewalSeconds * 1000);
+    let result;
+    try { result = await deps.runActivation({ id: attemptId, timeoutSeconds: deps.config.recoveryAttemptTimeoutSeconds }); }
+    catch (error) { result = { kind: 'failure', reason: error?.code ?? 'runner-exception' }; }
+    finally { deps.clearInterval(interval); }
+    let finalized;
+    await deps.store.update((current) => {
+      finalized = finalizeActivation(current, state.activation.token, result, deps.now());
+      return finalized;
+    });
+    return { code: finalized.activation.lastResult };
+  }
   if (!entry) return { code: 'skip:attempt-not-found' };
   const [runId, run] = entry;
   const interval = deps.setInterval(() => {
@@ -148,10 +196,23 @@ async function main() {
     process.exitCode = 2;
     return;
   }
+  const root = dataRoot();
+  const activationCwd = join(root, 'activation-work');
+  await mkdir(activationCwd, { recursive: true });
+  const config = await new ConfigStore(root).read();
   const result = await runAttempt(attemptId, {
-    store: new StateStore(dataRoot()), config: await new ConfigStore(dataRoot()).read(),
-    now: () => Math.floor(Date.now() / 1000), runClaude: executeClaude,
-    setInterval, clearInterval, notify: async () => {},
+    store: new StateStore(root), config,
+    now: () => Math.floor(Date.now() / 1000),
+    runClaude: (attempt) => executeClaude(attempt, {
+      startClaude: (value) => startClaudeProcess(value, { executable: config.claudePath }),
+    }),
+    runActivation: (attempt) => executeActivation(attempt, {
+      startActivation: (value) => startActivationProcess(value, { executable: config.claudePath, cwd: activationCwd }),
+    }),
+    setInterval, clearInterval, notify: createNotifier({ root }),
+  });
+  await appendBoundedLog(join(root, 'logs', 'runner.log'), {
+    at: new Date().toISOString(), code: result.code, attemptId,
   });
   process.stdout.write(`${result.code}\n`);
 }

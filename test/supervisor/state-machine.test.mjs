@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { defaultConfig } from '../../scripts/supervisor/config.mjs';
 import { defaultState } from '../../scripts/supervisor/state-store.mjs';
-import { selectCandidate, transitionRun } from '../../scripts/supervisor/state-machine.mjs';
+import { pruneState, selectCandidate, transitionRun } from '../../scripts/supervisor/state-machine.mjs';
 
 const config = defaultConfig();
 const now = 20_000;
@@ -76,4 +76,29 @@ test('quota backoff and estimate-not-due have distinct skips', () => {
 test('exhausted ordinary recovery attempts are not selected again', () => {
   const exhausted = stateWith(run({ state: 'FAILED', retry: { attempts: config.maxRecoveryAttempts, nextAttemptAt: null } }));
   assert.equal(selectCandidate(exhausted, {}, config, now).code, 'skip:recovery-attempts-exhausted');
+});
+
+test('retention prunes old terminal runs, sessions, and activation attempts', () => {
+  const state = stateWith(run({ state: 'COMPLETED', updatedAt: now - config.terminalRunRetentionSeconds - 1 }));
+  state.sessions.old = { observedAt: now - config.registrationRecoveryMaxAgeSeconds - 1 };
+  state.activation.activationAttempts = [now - 86_401, now - 1];
+  const next = pruneState(state, config, now);
+  assert.deepEqual(next.runs, {});
+  assert.deepEqual(next.sessions, {});
+  assert.deepEqual(next.activation.activationAttempts, [now - 1]);
+});
+
+test('empty exact reset selects configured notification or activation', () => {
+  const state = defaultState();
+  state.usage = { ...state.usage, confidence: 'exact', fiveHourResetAt: now - config.graceSeconds };
+  assert.equal(selectCandidate(state, {}, config, now).code, 'action:notify-window-reset');
+  assert.equal(selectCandidate(state, {}, { ...config, windowMode: 'auto' }, now).code, 'action:activate-window');
+});
+
+test('expired activation lease is cleared for retry', () => {
+  const state = defaultState();
+  state.activation = { ...state.activation, inProgress: true, attemptId: 'old', token: 'token', expiresAt: now - 1 };
+  pruneState(state, config, now);
+  assert.equal(state.activation.inProgress, false);
+  assert.equal(state.activation.lastResult, 'error:activation-lease-expired');
 });

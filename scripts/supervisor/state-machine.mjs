@@ -46,7 +46,25 @@ export function selectCandidate(state, inputs, config, now) {
     return { kind: 'skip', code: 'skip:concurrency-exhausted' };
   }
   const recoverable = orderedRuns(state).filter((run) => !TERMINAL.has(run.state));
-  if (recoverable.length === 0) return { kind: 'skip', code: 'skip:no-active-run' };
+  if (recoverable.length === 0) {
+    const resetAt = state.usage.confidence === 'exact' ? state.usage.fiveHourResetAt : null;
+    if (!Number.isFinite(resetAt) || now < resetAt + config.graceSeconds
+        || state.activation.handledResetAt === resetAt) return { kind: 'skip', code: 'skip:no-active-run' };
+    if (config.windowMode === 'off') return { kind: 'skip', code: 'skip:window-mode-off' };
+    if (config.windowMode === 'notify') return { kind: 'notify', code: 'action:notify-window-reset', resetAt };
+    if (state.activation.inProgress && state.activation.expiresAt > now) {
+      return { kind: 'skip', code: 'skip:activation-in-progress' };
+    }
+    if (state.activation.activationAttempts.length >= config.maxWindowActivationsPer24Hours) {
+      return { kind: 'skip', code: 'skip:rolling-activation-cap' };
+    }
+    if (now - resetAt > config.overdueAutoActivationSeconds && config.catchUpMode !== 'activate') {
+      return config.catchUpMode === 'notify'
+        ? { kind: 'notify', code: 'action:notify-window-reset', resetAt }
+        : { kind: 'skip', code: 'skip:overdue-window' };
+    }
+    return { kind: 'activate', code: 'action:activate-window', resetAt };
+  }
   if (Number.isFinite(state.usage.sevenDaySuppressedUntil) && state.usage.sevenDaySuppressedUntil > now) {
     return { kind: 'skip', code: 'skip:seven-day-limit' };
   }
@@ -104,4 +122,25 @@ export function selectCandidate(state, inputs, config, now) {
 
 export function isTerminalState(state) {
   return TERMINAL.has(state);
+}
+
+export function pruneState(state, config, now) {
+  for (const [runId, run] of Object.entries(state.runs)) {
+    if (TERMINAL.has(run.state) && Number.isFinite(run.updatedAt)
+        && now - run.updatedAt > config.terminalRunRetentionSeconds) delete state.runs[runId];
+  }
+  for (const [cwd, session] of Object.entries(state.sessions)) {
+    if (!Number.isFinite(session.observedAt)
+        || now - session.observedAt > config.registrationRecoveryMaxAgeSeconds) delete state.sessions[cwd];
+  }
+  state.activation.activationAttempts = state.activation.activationAttempts
+    .filter((attemptAt) => Number.isFinite(attemptAt) && now - attemptAt <= 86_400);
+  if (state.activation.inProgress && (!Number.isFinite(state.activation.expiresAt) || state.activation.expiresAt <= now)) {
+    state.activation.inProgress = false;
+    state.activation.attemptId = null;
+    state.activation.token = null;
+    state.activation.expiresAt = null;
+    state.activation.lastResult = 'error:activation-lease-expired';
+  }
+  return state;
 }

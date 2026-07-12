@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { parseSupervisorLedger, renderSupervisorLedgerBlock } from '../../scripts/supervisor/ledger.mjs';
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { parseSupervisorLedger, readLedgerHeartbeatFile, renderSupervisorLedgerBlock } from '../../scripts/supervisor/ledger.mjs';
 
 const metadata = {
   schemaVersion: 1,
@@ -29,4 +32,12 @@ test('rejects terminal, finished, malformed, and duplicate blocks', () => {
 test('rejects invalid session and run identifiers', () => {
   assert.equal(parseSupervisorLedger(renderSupervisorLedgerBlock({ ...metadata, sessionId: 'bad' })), null);
   assert.equal(parseSupervisorLedger(renderSupervisorLedgerBlock({ ...metadata, runId: '../bad' })), null);
+});
+
+test('reads heartbeat only when file metadata matches the registered run', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'afk-ledger-heartbeat-'));
+  const path = join(root, 'ledger.md');
+  await writeFile(path, renderSupervisorLedgerBlock(metadata), 'utf8');
+  assert.equal(await readLedgerHeartbeatFile(path, metadata.runId, metadata.sessionId), metadata.heartbeatAt);
+  assert.equal(await readLedgerHeartbeatFile(path, 'other', metadata.sessionId), null);
 });

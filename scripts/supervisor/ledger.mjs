@@ -29,3 +29,10 @@ export function parseSupervisorLedger(text) {
   try { metadata = JSON.parse(text.slice(start, end).trim()); } catch { return null; }
   return validMetadata(metadata) ? metadata : null;
 }
+
+export async function readLedgerHeartbeatFile(path, runId, sessionId) {
+  let metadata;
+  try { metadata = parseSupervisorLedger(await readFile(path, 'utf8')); } catch { return null; }
+  return metadata?.runId === runId && metadata?.sessionId === sessionId ? metadata.heartbeatAt : null;
+}
+import { readFile } from 'node:fs/promises';

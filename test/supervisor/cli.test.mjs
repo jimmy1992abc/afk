@@ -13,6 +13,7 @@ function harness() {
     configStore: { read: async () => config, write: async (next) => { config = next; return next; } },
     stateStore: { read: async () => structuredClone(state), update: async (fn) => { state = await fn(structuredClone(state)); state.revision += 1; return state; } },
     install: async () => { calls.push('install'); return { code: 'action:supervisor-installed' }; },
+    preflight: async () => ({ claudePath: 'C:\\Tools\\claude.exe', authenticated: true }),
     uninstall: async () => { calls.push('uninstall'); return { code: 'action:supervisor-uninstalled' }; },
     repair: async () => { calls.push('repair'); return { code: 'action:supervisor-repaired' }; },
     installStatus: async () => ({ installed: true, scheduler: { intervalSeconds: 60 } }),
@@ -33,6 +34,13 @@ test('configure validates values and status reports effective interval', async (
   const value = JSON.parse(h.deps.output.at(-1));
   assert.equal(value.scheduler.intervalSeconds, 60);
   assert.equal(value.config.windowMode, 'auto');
+});
+
+test('setup persists the verified standalone Claude path', async () => {
+  const h = harness();
+  await runCli(['setup'], h.deps);
+  assert.equal(h.config.claudePath, 'C:\\Tools\\claude.exe');
+  assert.ok(h.calls.includes('install'));
 });
 
 test('enable and disable persist config and trigger-now clears quota backoff', async () => {

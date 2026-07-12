@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 import { defaultConfig } from '../../scripts/supervisor/config.mjs';
-import { finalizeAttempt, runAttempt } from '../../scripts/supervisor/runner.mjs';
+import { finalizeActivation, finalizeAttempt, runAttempt } from '../../scripts/supervisor/runner.mjs';
 import { StateStore } from '../../scripts/supervisor/state-store.mjs';
 
 const now = 20_000;
@@ -86,4 +86,28 @@ test('runAttempt renews then finalizes the matching lease', async () => {
   });
   assert.equal(result.code, 'result:success');
   assert.equal((await store.read()).runs['run-1'].lease.attemptId, null);
+});
+
+test('runAttempt notifies when consecutive quota rejection escalates', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'afk-supervisor-runner-'));
+  const store = new StateStore(root);
+  await store.update(() => state(run({ quotaRejections: { consecutive: 2, backoffLevel: 0, nextProbeAt: null, lastNotifiedAt: null } })));
+  const notified = [];
+  const result = await runAttempt('attempt-1', {
+    store, config: defaultConfig(), now: () => now,
+    runClaude: async () => ({ kind: 'quota' }),
+    setInterval: (fn) => ({ fn }), clearInterval: () => {}, notify: async (value) => notified.push(value),
+  });
+  assert.equal(result.code, 'result:quota-backoff-escalated');
+  assert.equal(notified.length, 1);
+  assert.equal(notified[0].runId, 'run-1');
+});
+
+test('successful activation records one attempt and a new estimated anchor', () => {
+  const current = state();
+  current.activation = { ...current.activation, inProgress: true, attemptId: 'activation-1', token: 'activation-token', resetAt: now - 90 };
+  const next = finalizeActivation(current, 'activation-token', { kind: 'success' }, now);
+  assert.equal(next.activation.handledResetAt, now - 90);
+  assert.deepEqual(next.activation.activationAttempts, [now]);
+  assert.equal(next.usage.windowAnchorAt, now);
 });

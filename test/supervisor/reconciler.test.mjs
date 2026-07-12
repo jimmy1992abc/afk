@@ -23,6 +23,7 @@ async function harness(run, overrides = {}) {
       readObservationBatch: async () => [], commitObservationBatch: async () => {},
       readHeartbeats: async () => ({}), readLedgerHeartbeat: async () => null,
       spawnRunner: (attempt) => { spawnCalls.push(attempt); return { unref() {} }; },
+      notifyWindow: async () => {},
       randomUUID: () => 'attempt-1',
       ...overrides,
     },
@@ -47,6 +48,33 @@ test('reconciler leases and detached-spawns one stale run', async () => {
   assert.equal(result.code, 'action:runner-started');
   assert.equal(h.spawnCalls.length, 1);
   assert.equal((await h.store.read()).runs['run-1'].state, 'RECOVERING');
+});
+
+test('empty reset notification is finalized once', async () => {
+  const h = await harness(run({ state: 'COMPLETED', updatedAt: now }));
+  await h.store.update((state) => {
+    state.usage.confidence = 'exact';
+    state.usage.fiveHourResetAt = now - defaultConfig().graceSeconds;
+    return state;
+  });
+  let notifications = 0;
+  h.deps.notifyWindow = async () => { notifications += 1; };
+  const result = await reconcileOnce(h.deps);
+  assert.equal(result.code, 'action:notify-window-reset');
+  assert.equal(notifications, 1);
+  assert.equal((await h.store.read()).activation.handledResetAt, now - defaultConfig().graceSeconds);
+});
+
+test('empty reset auto mode detached-spawns activation runner', async () => {
+  const h = await harness(run({ state: 'COMPLETED', updatedAt: now }), { config: { ...defaultConfig(), windowMode: 'auto' } });
+  await h.store.update((state) => {
+    state.usage.confidence = 'exact';
+    state.usage.fiveHourResetAt = now - defaultConfig().graceSeconds;
+    return state;
+  });
+  const result = await reconcileOnce(h.deps);
+  assert.equal(result.code, 'action:activation-runner-started');
+  assert.equal(h.spawnCalls[0].kind, 'activation');
 });
 
 test('fresh heartbeat after provisional selection prevents spawn', async () => {

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { applyUsageObservation } from './usage-provider.mjs';
-import { selectCandidate, transitionRun } from './state-machine.mjs';
+import { pruneState, selectCandidate, transitionRun } from './state-machine.mjs';
 
 function applyBatch(state, batch, config) {
   return batch.reduce((current, item) => applyUsageObservation(current, item.observation, config), state);
@@ -21,12 +21,46 @@ export async function reconcileOnce(deps) {
   const now = deps.now();
   const batch = await deps.readObservationBatch();
   const heartbeats = await deps.readHeartbeats();
-  let state = await deps.store.read();
+  let state = await deps.store.update((current) => {
+    pruneState(current, deps.config, now);
+    return batch.length > 0 ? applyBatch(current, batch, deps.config) : current;
+  });
   if (batch.length > 0) {
-    state = await deps.store.update((current) => applyBatch(current, batch, deps.config));
     await deps.commitObservationBatch(batch);
   }
   const decision = selectCandidate(state, { heartbeats }, deps.config, now);
+  if (decision.kind === 'notify') {
+    if (deps.dryRun) return { code: 'action:would-notify-window' };
+    await deps.notifyWindow(decision);
+    await deps.store.update((current) => {
+      current.activation.handledResetAt = decision.resetAt;
+      current.activation.lastResult = decision.code;
+      return current;
+    });
+    return { code: decision.code };
+  }
+  if (decision.kind === 'activate') {
+    if (deps.dryRun) return { code: 'action:would-activate-window' };
+    const attemptId = deps.randomUUID?.() ?? randomUUID();
+    let attempt = null;
+    await deps.store.update((current) => {
+      const currentDecision = selectCandidate(current, { heartbeats }, deps.config, now);
+      if (currentDecision.kind !== 'activate' || currentDecision.resetAt !== decision.resetAt) return current;
+      const token = deps.randomUUID?.() ?? randomUUID();
+      current.activation = {
+        ...current.activation, inProgress: true, attemptId, token,
+        resetAt: decision.resetAt, lastAttemptAt: now,
+        lastRenewedAt: now,
+        expiresAt: now + deps.config.leaseRenewalSeconds * deps.config.leaseMissedRenewals,
+        lastResult: 'action:activation-leased',
+      };
+      attempt = { id: attemptId, token, kind: 'activation', resetAt: decision.resetAt };
+      return current;
+    });
+    if (!attempt) return { code: 'skip:state-changed' };
+    deps.spawnRunner(attempt).unref();
+    return { code: 'action:activation-runner-started', attemptId };
+  }
   if (decision.kind === 'handle') {
     await deps.store.update((current) => {
       const run = current.runs[decision.runId];

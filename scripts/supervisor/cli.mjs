@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { ConfigStore, validateConfig } from './config.mjs';
-import { createInstallDeps, installSupervisor, repairSupervisor, statusSupervisor, uninstallSupervisor } from './install.mjs';
+import { createInstallDeps, installSupervisor, preflightClaude, repairSupervisor, statusSupervisor, uninstallSupervisor } from './install.mjs';
 import { main as reconcileMain } from './supervisor.mjs';
 import { transitionRun } from './state-machine.mjs';
 import { StateStore } from './state-store.mjs';
@@ -154,7 +154,11 @@ export async function runCli(argv, deps) {
   const args = parseArgs(rest);
   deps.currentConfig = await deps.configStore.read();
   try {
-    if (command === 'setup') return emit(deps, (await deps.install()).code);
+    if (command === 'setup') {
+      const verified = await deps.preflight();
+      deps.currentConfig = await deps.configStore.write({ ...deps.currentConfig, claudePath: verified.claudePath });
+      return emit(deps, (await deps.install()).code);
+    }
     if (command === 'repair') return emit(deps, (await deps.repair()).code);
     if (command === 'uninstall') return emit(deps, (await deps.uninstall()).code);
     if (command === 'status') {
@@ -182,6 +186,7 @@ export function productionDeps() {
   const installDeps = createInstallDeps({ dataRoot: root, sourceRoot });
   return {
     configStore: new ConfigStore(root), stateStore: new StateStore(root), now: () => Math.floor(Date.now() / 1000),
+    preflight: () => preflightClaude(),
     install: () => installSupervisor(installDeps), repair: () => repairSupervisor(installDeps),
     uninstall: () => uninstallSupervisor(installDeps), installStatus: () => statusSupervisor(installDeps),
     reconcile: () => reconcileMain(['--once']), writeOutput: (text) => process.stdout.write(text),
