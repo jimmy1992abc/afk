@@ -801,7 +801,12 @@ skip:reset-not-due
 skip:estimate-not-due
 skip:quota-backoff
 skip:reset-already-handled
-skip:recovery-lease-held
+skip:tick-guard-held
+skip:tick-owns-run
+skip:runner-active
+skip:recovery-disabled
+skip:run-state-unknown
+skip:state-lock-held
 skip:concurrency-exhausted
 skip:runner-alive
 skip:state-changed
@@ -945,10 +950,74 @@ or host process exits and cannot perform login/reboot catch-up. It remains the
 first-line in-session mechanism, while the supervisor handles lost process
 lifecycle.
 
-## Status: BLOCKED — the lease is overloaded and the feature does not work
+## The two claims on a run
 
-Five adversarial review rounds. The fifth found that **the supervisor's core
-function does not work at all, and every log line says it does.**
+A run can be driven by two different things, and they are **not** the same claim:
+
+- **`recoveryLease`** — a supervisor runner is driving this run. Written by the
+  reconciler, renewed by the runner for the life of its Claude child, and carrying
+  the runner's `{pid, startedAt}` so its liveness can be *verified*.
+- **`tickGuard`** — an in-session AFK tick is driving this run. Taken by
+  `afk-supervisor lease` at each resumable step, and released by expiry.
+
+Collapsing them into one field is what stopped the supervisor from working at all.
+The reconciler leased the run, resumed it, and the session it started asked for the
+lease, found the supervisor's own claim, was told another lifecycle layer owned
+recovery, and exited having done nothing — for ever, while every log line said
+`result:success`. **A session the supervisor resumed must be able to take its own
+guard.** Only *another session* may block it.
+
+### One question, one answer
+
+`runnability(run, state, config, now, inputs)` is the single answer to *"may this
+run be driven right now, and by whom?"*. The selector, the pruner and status all
+ask it. Nine uncoordinated predicates across three files used to answer parts of
+it, and four review rounds each tightened one and silently changed the meaning of
+two others.
+
+It returns a `notBefore`: the earliest moment the run could become runnable.
+**Pruning may never delete a run with a future `notBefore`** — a run parked on a
+seven-day quota probe is waiting, not abandoned. Retention must exceed the longest
+legitimate hold, and `validateConfig` now makes any other configuration impossible.
+
+### Liveness is verified, not assumed
+
+A pid is not an identity: the operating system reuses it, aggressively on Windows.
+The runner records the process start time beside it, and only a pid whose process
+is *the one we started* counts as alive. That is what allows a live runner to be
+trusted with **no time bound** — which suspend requires, because suspend stops the
+very timers any time bound would rely on.
+
+A claim whose liveness cannot be determined holds its own run — we never
+double-drive it — but it does **not** consume the global invocation slot. A
+recycled pid must be able to wedge one run, never the whole supervisor. The
+operator is notified, and `trigger-now` releases it.
+
+## Notes on what only a real machine could find
+
+Two defects survived five adversarial review rounds and three hundred unit tests,
+because neither is visible from inside the process. Both were found by running the
+thing.
+
+- **A detached child on Windows loses its stdout.** The runner spawned Claude with
+  `detached: true`; on Windows that gives the child its own console and its output
+  never reaches our pipe. The runner read **zero frames** from
+  `--output-format stream-json`: it could not see a success, could not see a quota
+  rejection, and recorded **every recovery as a failure** while Claude was doing
+  the work. `detached` exists only so POSIX can signal a process group; Windows
+  kills by pid and never needed it.
+- **npm installs Claude on Windows as `claude.cmd`.** There is no `claude.exe`.
+  Preflight asked `where.exe` for `claude.exe` and reported the CLI as missing when
+  it was on PATH — and Node refuses to spawn a `.cmd` without a shell. Every npm
+  user was locked out.
+
+A shim is now run through `cmd.exe` with its arguments still an **array**: a shell
+string would put a prompt and a path in a shell's hands.
+
+## History: the lease overload
+
+The fifth adversarial round found that **the supervisor's core function did not
+work at all, and every log line said it did.**
 
 `run.lease` serves two different concepts with different owners and lifetimes:
 the supervisor's *"I am driving this run"* claim, and the in-session tick's
@@ -973,14 +1042,13 @@ The same overload also lets a per-run pid consume the *global* invocation slot �
 one stale pid stops the supervisor from invoking anything, on any repository,
 permanently — and lets `cli lease` wipe a live runner's pid.
 
-**Do not patch further before restructuring.** Four consecutive rounds each
-introduced about five new defects; round 4's nine individually-correct fixes
-composed into a new CRITICAL. There is no single place that answers *"may this
-run be driven right now, and by whom?"* — nine uncoordinated predicates across
-three files each answer part of it, over a shared mutable blob whose invariants
-live only in prose.
+Four consecutive rounds each introduced about five new defects; round 4's nine
+individually-correct fixes composed into a new CRITICAL. The root cause was that no
+single place answered *"may this run be driven right now, and by whom?"* — nine
+uncoordinated predicates across three files each answered part of it, over a shared
+mutable blob whose invariants lived only in prose.
 
-The smallest restructuring that ends this:
+The restructuring that ended it (all four done):
 
 1. **Split the lease.** `run.recoveryLease` (supervisor) and `run.tickGuard`
    (in-session). Different concepts, different lifetimes, different owners. This
