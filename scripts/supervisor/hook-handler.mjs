@@ -5,10 +5,9 @@ import { isAbsolute, join, relative } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { ConfigStore } from './config.mjs';
-import { WINDOW_SECONDS } from './constants.mjs';
 import { parseSupervisorLedger } from './ledger.mjs';
 import { StateStore } from './state-store.mjs';
-import { stableJitterSeconds } from './usage-provider.mjs';
+import { currentRateLimitStart, estimateReset, stableJitterSeconds } from './usage-provider.mjs';
 
 function dataRoot() {
   if (process.env.AFK_SUPERVISOR_DATA_DIR) return process.env.AFK_SUPERVISOR_DATA_DIR;
@@ -78,18 +77,6 @@ async function sessionStart(event, deps) {
   return { code: reconstructed ? 'action:run-reconstructed' : 'action:run-reconciled' };
 }
 
-function resetForRateLimit(state, run, now, config) {
-  if (state.usage.confidence === 'exact' && state.usage.fiveHourResetAt > now) {
-    return { resetAt: state.usage.fiveHourResetAt, confidence: 'exact' };
-  }
-  const anchorReset = Number.isFinite(state.usage.windowAnchorAt)
-    ? state.usage.windowAnchorAt + WINDOW_SECONDS : null;
-  if (anchorReset && now <= anchorReset + config.graceSeconds) {
-    return { resetAt: anchorReset, confidence: 'estimated' };
-  }
-  return { resetAt: (run.firstRateLimitedAt ?? now) + WINDOW_SECONDS, confidence: 'estimated' };
-}
-
 async function stopFailure(event, deps) {
   let found = false;
   await deps.store.update((state) => {
@@ -97,8 +84,9 @@ async function stopFailure(event, deps) {
     if (!entry) return state;
     found = true;
     const [id, run] = entry;
-    const firstRateLimitedAt = run.firstRateLimitedAt ?? deps.now();
-    const reset = resetForRateLimit(state, { ...run, firstRateLimitedAt }, deps.now(), deps.config);
+    const now = deps.now();
+    const firstRateLimitedAt = currentRateLimitStart(run, now);
+    const reset = estimateReset(state.usage, { firstRateLimitedAt }, now, deps.config);
     const scheduledResumeAt = reset.resetAt + stableJitterSeconds({ ...run, runId: id }, reset.resetAt, deps.config);
     state.runs[id] = {
       ...run,
@@ -110,11 +98,11 @@ async function stopFailure(event, deps) {
       scheduledResumeAt,
       scheduleConfidence: reset.confidence,
       scheduleState: 'pending',
-      updatedAt: deps.now(),
-      quotaRejections: {
-        ...(run.quotaRejections ?? {}),
-        consecutive: (run.quotaRejections?.consecutive ?? 0) + 1,
-      },
+      updatedAt: now,
+      // The runner owns the probe-rejection counter. The supervisor's own
+      // --resume runs with hooks enabled, so a single quota rejection reaches
+      // both this hook and the runner's stream classifier; counting it here too
+      // would escalate to a 24-hour backoff after two rejections, not three.
     };
     return state;
   });

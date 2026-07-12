@@ -8,7 +8,7 @@ import { WINDOW_SECONDS } from './constants.mjs';
 import { mkdir } from 'node:fs/promises';
 import { runActivation as executeActivation, runClaude as executeClaude, startActivationProcess, startClaudeProcess } from './claude-runner.mjs';
 import { StateStore } from './state-store.mjs';
-import { stableJitterSeconds } from './usage-provider.mjs';
+import { currentRateLimitStart, estimateReset, stableJitterSeconds } from './usage-provider.mjs';
 import { createNotifier } from './notifier.mjs';
 import { appendBoundedLog } from './logger.mjs';
 
@@ -27,25 +27,6 @@ function allowedAnchor(usage, now) {
   return usage.windowAnchorAt;
 }
 
-function quotaReset(state, run, now, config) {
-  if (state.usage.confidence === 'exact' && state.usage.fiveHourResetAt > now) {
-    return { resetAt: state.usage.fiveHourResetAt, confidence: 'exact' };
-  }
-  const anchorReset = Number.isFinite(state.usage.windowAnchorAt)
-    ? state.usage.windowAnchorAt + WINDOW_SECONDS : null;
-  if (anchorReset && now <= anchorReset + config.graceSeconds) {
-    return { resetAt: anchorReset, confidence: 'estimated' };
-  }
-  return { resetAt: (run.firstRateLimitedAt ?? now) + WINDOW_SECONDS, confidence: 'estimated' };
-}
-
-// A timestamp from an earlier limit episode would place the upper bound in the
-// past and make the run immediately re-probable, so only a same-window value is
-// carried forward.
-function currentRateLimitStart(run, now) {
-  const previous = run.firstRateLimitedAt;
-  return Number.isFinite(previous) && now - previous < WINDOW_SECONDS ? previous : now;
-}
 
 export function finalizeAttempt(state, runId, token, result, now, config) {
   const run = state.runs[runId];
@@ -75,7 +56,7 @@ export function finalizeAttempt(state, runId, token, result, now, config) {
   }
   if (result.kind === 'quota') {
     const firstRateLimitedAt = currentRateLimitStart(current, now);
-    const reset = quotaReset(next, { ...current, firstRateLimitedAt }, now, config);
+    const reset = estimateReset(next.usage, { firstRateLimitedAt }, now, config);
     const consecutive = (current.quotaRejections?.consecutive ?? 0) + 1;
     let backoffLevel = current.quotaRejections?.backoffLevel ?? 0;
     let nextProbeAt = null;

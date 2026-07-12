@@ -1,6 +1,32 @@
 import { createHash } from 'node:crypto';
 
+import { WINDOW_SECONDS } from './constants.mjs';
+
 const RECOVERABLE = new Set(['RUNNING', 'RATE_LIMITED', 'RECOVERY_DUE', 'FAILED']);
+
+// A timestamp from an earlier limit episode would place the upper bound in the
+// past and make the run immediately re-probable, so only a same-window value is
+// carried forward.
+export function currentRateLimitStart(run, now) {
+  const previous = run?.firstRateLimitedAt;
+  return Number.isFinite(previous) && now - previous < WINDOW_SECONDS ? previous : now;
+}
+
+// The single place that decides when a rate-limited run may next be tried. The
+// runner classifies a quota frame and the StopFailure hook sees the same
+// rejection, so both must reach the same answer — a second copy of this rule is
+// how one of them silently drifts.
+export function estimateReset(usage, run, now, config) {
+  if (usage.confidence === 'exact' && usage.fiveHourResetAt > now) {
+    return { resetAt: usage.fiveHourResetAt, confidence: 'exact' };
+  }
+  const anchorReset = Number.isFinite(usage.windowAnchorAt)
+    ? usage.windowAnchorAt + WINDOW_SECONDS : null;
+  if (anchorReset && now <= anchorReset + config.graceSeconds) {
+    return { resetAt: anchorReset, confidence: 'estimated' };
+  }
+  return { resetAt: currentRateLimitStart(run, now) + WINDOW_SECONDS, confidence: 'estimated' };
+}
 
 function finiteInRange(value, min, max) {
   return Number.isFinite(value) && value >= min && value <= max ? value : null;

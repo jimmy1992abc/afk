@@ -78,6 +78,39 @@ test('rate-limit StopFailure records upper bound without spawning', async () => 
   assert.equal(active.spawnCalls.length, 0);
 });
 
+test('a StopFailure never schedules a resume in the past', async () => {
+  // The run carries a firstRateLimitedAt from an earlier limit episode that the
+  // supervisor never finalized — the in-session tick recovered it instead. The
+  // hook must not derive this window's reset from that stale timestamp.
+  const active = await harness();
+  await handleHook(sessionStart(active.cwd), active.deps);
+  await active.store.update((state) => {
+    state.runs['run-1'].firstRateLimitedAt = now - 6 * 3_600;
+    return state;
+  });
+  await handleHook({
+    hook_event_name: 'StopFailure', session_id: sessionId, cwd: active.cwd, error: 'rate_limit',
+  }, active.deps);
+  const run = (await active.store.read()).runs['run-1'];
+  assert.ok(run.rateLimitedUntil > now, `rateLimitedUntil ${run.rateLimitedUntil} must not be in the past`);
+  assert.ok(run.scheduledResumeAt > now, `scheduledResumeAt ${run.scheduledResumeAt} must not be in the past`);
+});
+
+test('one quota event is not counted twice toward escalation', async () => {
+  // The supervisor's own --resume runs with hooks enabled, so a single quota
+  // rejection reaches both the StopFailure hook and the runner's stream
+  // classifier. Counting it in both places escalates to a 24-hour backoff after
+  // two real rejections instead of three.
+  const active = await harness();
+  await handleHook(sessionStart(active.cwd), active.deps);
+  await handleHook({
+    hook_event_name: 'StopFailure', session_id: sessionId, cwd: active.cwd, error: 'rate_limit',
+  }, active.deps);
+  const run = (await active.store.read()).runs['run-1'];
+  assert.equal(run.quotaRejections.consecutive, 0,
+    'the runner owns the probe-rejection counter; the hook must not also increment it');
+});
+
 test('unrelated hook event and unregistered failure have distinct skips', async () => {
   const active = await harness();
   assert.equal((await handleHook({ hook_event_name: 'Stop' }, active.deps)).code, 'skip:hook-event-ignored');
