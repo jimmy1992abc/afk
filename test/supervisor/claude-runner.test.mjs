@@ -87,6 +87,32 @@ test('quota frame kills the child immediately and does not await retries', async
   assert.equal(killed, 1);
 });
 
+test('a kill that did not take hold is reported, not assumed', async () => {
+  // killTree only ASKS. POSIX sends SIGTERM, which a busy Claude need not honour at
+  // once, and taskkill can fail to spawn at all — killTree resolves silently either
+  // way. The two paths that kill (a quota rejection, an action timeout) returned
+  // immediately, so a child that survived went on writing to the session while the
+  // runner declared itself done and released the claim.
+  const stubborn = {
+    pid: 6666,
+    lines: lines([{ type: 'system', subtype: 'api_retry', error: 'rate_limit', error_status: 429, attempt: 1, max_retries: 10 }]),
+    completion: new Promise(() => {}),   // it never exits
+    kill: async () => {},
+  };
+  const survived = await runClaude({ run }, { startClaude: () => stubborn, killGrace: () => Promise.resolve() });
+  assert.equal(survived.kind, 'quota');
+  assert.equal(survived.childExited, false, 'a child still running must be reported as still running');
+
+  const obedient = {
+    pid: 6666,
+    lines: lines([{ type: 'system', subtype: 'api_retry', error: 'rate_limit', error_status: 429, attempt: 1, max_retries: 10 }]),
+    completion: Promise.resolve({ code: 0 }),
+    kill: async () => {},
+  };
+  const gone = await runClaude({ run }, { startClaude: () => obedient, killGrace: () => new Promise(() => {}) });
+  assert.equal(gone.childExited, true);
+});
+
 test('successful result is distinguished from malformed output and process failure', async () => {
   const success = await runClaude({ run }, {
     startClaude: () => ({ lines: lines(['bad', { type: 'result', subtype: 'success' }]), completion: Promise.resolve({ code: 0 }), kill: async () => {} }),

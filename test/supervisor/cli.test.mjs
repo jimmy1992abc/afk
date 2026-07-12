@@ -111,8 +111,10 @@ test('registration refuses the paths recovery would later refuse', async () => {
   }
 });
 
+// A real claim expires one TTL after its last renewal. An expiry further out than any
+// plausible lease is read as a stepped clock, not a lease, and does not own the run.
 const LIVE_LEASE = {
-  attemptId: 'attempt-7', token: 't', lastRenewedAt: 20_000, expiresAt: 20_600,
+  attemptId: 'attempt-7', token: 't', lastRenewedAt: 20_000, expiresAt: 20_180,
   pid: 4242, startedAt: 1_700_000_000_000, stuckNotifiedAt: null,
 };
 

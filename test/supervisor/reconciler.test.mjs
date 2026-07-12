@@ -92,6 +92,28 @@ test('the reconciler never downgrades the identity the runner verified', async (
   assert.equal(lease.startedAt, 1_700_000_000_000, 'a probe that could not ask must not erase what we know');
 });
 
+test('a claim stamped in the future is repaired on disk, so the bound is real', async () => {
+  // A clamp that lives only in the reader resets on every pass, and is therefore no
+  // bound at all — that is precisely how the first version of this bound came to hold
+  // a run for ever. The repair has to be WRITTEN DOWN.
+  const skew = now + 365 * 86_400;
+  const h = await harness(run({
+    state: 'RECOVERING',
+    recoveryLease: {
+      attemptId: 'a', token: 't', lastRenewedAt: skew, expiresAt: skew,
+      pid: 4242, startedAt: 1, childPid: null, childStartedAt: null, stuckNotifiedAt: null,
+    },
+    lastHeartbeatAt: now - 99_999, nextExpectedTickAt: null,
+  }));
+  h.deps.runnerLiveness = async () => 'unknown';
+
+  await reconcileOnce(h.deps);
+  const lease = (await h.store.read()).runs['run-1'].recoveryLease;
+  assert.equal(lease.lastRenewedAt, now, 'the claim is dated now, and the date is persisted');
+  assert.equal(lease.expiresAt, now, 'and dated EXPIRED, so liveness decides rather than a corrupt clock');
+  assert.equal(h.spawnCalls.length, 0, 'and it is held meanwhile: a live runner may be behind it');
+});
+
 test('an expired claim with no verifiable identity is occupied, not free', async () => {
   // An upgrade in the middle of a recovery leaves an old-shape lease with no pid at
   // all. It was skipped by the liveness pass entirely — so the live runner was
@@ -178,6 +200,35 @@ test('a forced run does not starve the repository behind it', async () => {
   h.deps.runnerLiveness = async () => 'alive';
   assert.equal((await reconcileOnce(h.deps)).code, 'action:runner-started');
   assert.equal(h.spawnCalls.at(-1).runId, 'z-genuine');
+});
+
+test('a new activation claim carries no trace of the last one', async () => {
+  // The run lease is built from a literal at claim time. The ACTIVATION claim was
+  // spread from the previous one, so it inherited the last activation's pid and
+  // child — and `fillIdentity`, which never overwrites, then made recording this
+  // attempt's real identity a permanent no-op. The liveness check would spend the
+  // rest of its life probing a process that was never part of this attempt, and a
+  // suspend past the lease TTL would start a second activation on top of a live one.
+  const h = await harness(run({ state: 'COMPLETED', updatedAt: now }), { config: { ...defaultConfig(), windowMode: 'auto' } });
+  await h.store.update((state) => {
+    state.usage.confidence = 'exact';
+    state.usage.fiveHourResetAt = now - defaultConfig().graceSeconds;
+    // ...left behind by an activation that has long since finished.
+    state.activation.pid = 1111;
+    state.activation.startedAt = 1;
+    state.activation.childPid = 2222;
+    state.activation.childStartedAt = 2;
+    return state;
+  });
+  h.deps.spawnRunner = (attempt) => { h.spawnCalls.push(attempt); return { pid: 5555, unref() {} }; };
+  h.deps.processStartedAt = async () => 1_700_000_009_000;
+
+  assert.equal((await reconcileOnce(h.deps)).code, 'action:activation-runner-started');
+  const activation = (await h.store.read()).activation;
+  assert.equal(activation.pid, 5555, 'the claim must identify THIS attempt, not the last');
+  assert.equal(activation.startedAt, 1_700_000_009_000);
+  assert.equal(activation.childPid, null, 'and this attempt has not started a child yet');
+  assert.equal(activation.childStartedAt, null);
 });
 
 test('an activation whose runner is still alive is never reclaimed', async () => {

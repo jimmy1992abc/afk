@@ -91,21 +91,48 @@ const held = (code, notBefore = null, extra = {}) => ({ runnable: false, code, n
 // last renewal, so an expiry stands in for a missing `lastRenewedAt` — an old-shape
 // lease from before an upgrade carries no such stamp. A forward clock step cannot
 // make the answer negative, and so cannot buy a claim an indefinite hold.
+// How long this claim has gone unrenewed. The bound has now been wrong in BOTH
+// directions — held for ever (a recycled pid wedged its run), then freed instantly
+// (a clock-stepped claim let a live runner be driven twice) — because each version
+// tried to answer the question from a stamp it could not trust.
+//
+// So it fails CLOSED: a stamp we cannot believe — in the future, or absent — reads
+// as "renewed just now", and the claim is held. On its own that holds for ever
+// again, which is why `repairClaim` writes the believable stamp back UNDER THE LOCK.
+// A clamp has to be persisted to be a bound; an un-persisted one resets on every
+// pass, and that is precisely how the first version came to hold for ever.
 export function unrenewedFor(claim, config, now) {
   const ttl = config.leaseRenewalSeconds * config.leaseMissedRenewals;
-  // Only a stamp at or before `now` is evidence that a runner was alive. Clamping a
-  // future stamp down to `now` instead — a forward clock step, or a corrupt file —
-  // made the claim look freshly renewed on every pass, for ever: the exact
-  // indefinite hold this bound exists to prevent. A claim with no usable stamp at
-  // all is not evidence of a runner either; it cannot be bounded, and holding it
-  // for ever is worse than releasing it.
-  // `lastRenewedAt` is the real evidence; an expiry stands in for it only when it is
-  // missing, because an expiry is one TTL after the renewal that wrote it.
   const derived = Number.isFinite(claim?.expiresAt) ? claim.expiresAt - ttl : NaN;
-  for (const stamp of [claim?.lastRenewedAt, derived]) {
-    if (Number.isFinite(stamp) && stamp <= now) return now - stamp;
+  const stamp = Number.isFinite(claim?.lastRenewedAt) ? claim.lastRenewedAt : derived;
+  if (!Number.isFinite(stamp)) return 0;
+  return Math.max(0, now - stamp);
+}
+
+// A claim stamped in the future is corrupt: a clock that ran ahead and was corrected
+// back, a VM's drifted RTC, an NTP step after a suspend — and suspend is the very
+// scenario this supervisor exists for. Such a claim is neither trustworthy (it would
+// hold the run for ever) nor discardable (a live runner may be behind it, and
+// discarding it drives the session twice). It is REPAIRED: dated now, so that it is
+// held from here and expires on schedule. Returns true when it changed something.
+export function repairClaim(claim, config, now) {
+  if (!claim?.attemptId) return false;
+  const ttl = config.leaseRenewalSeconds * config.leaseMissedRenewals;
+  let repaired = false;
+  if (!Number.isFinite(claim.lastRenewedAt) || claim.lastRenewedAt > now) {
+    claim.lastRenewedAt = now;
+    repaired = true;
   }
-  return Infinity;
+  // An expiry beyond any plausible lease is a stepped clock, and it says nothing
+  // about how long this claim has really held the run. Dating it `now` does not
+  // grant it a fresh lease — it makes it expired, so that LIVENESS decides, which is
+  // the only evidence left worth having. Handing it a new TTL instead would let a
+  // corrupt clock buy a dead runner three more minutes of ownership.
+  if (Number.isFinite(claim.expiresAt) && claim.expiresAt > now + ttl + config.graceSeconds) {
+    claim.expiresAt = now;
+    repaired = true;
+  }
+  return repaired;
 }
 
 // May this claim be taken from its holder? Both the supervisor and the in-session
@@ -113,10 +140,28 @@ export function unrenewedFor(claim, config, now) {
 // pid, so the supervisor refused to touch a run that the tick then drove anyway.
 export function claimOccupied(claim, config, now, liveness) {
   if (!claim?.attemptId) return false;
-  if (Number.isFinite(claim.expiresAt) && claim.expiresAt > now) return true;
+  // The clamped expiry, not the raw one: a claim expiring in the year 2400 is a
+  // clock step, not a lease, and must not own the run for ever.
+  if (claimLive(claim, now, config, config.leaseRenewalSeconds * config.leaseMissedRenewals)) return true;
   if (liveness === 'alive') return true;
   if (liveness === 'dead') return false;
   return unrenewedFor(claim, config, now) <= config.recoveryAttemptTimeoutSeconds;
+}
+
+// The one answer to "how long may this claim hold the run before we stop believing
+// in it". `claimOccupied` above is the ONLY caller that matters, and every consumer
+// — the tick's `lease`, the reconciler, the pruner, activation — goes through it.
+export function claimNotBefore(config, now) {
+  return now + config.leaseRenewalSeconds;
+}
+
+// The liveness the reconciler resolved for this run, in the vocabulary claimOccupied
+// speaks. A run in neither set was either not probed (its claim is unexpired, so the
+// lease itself says it is occupied) or probed and found dead.
+function runLiveness(runId, inputs) {
+  if (inputs.aliveRuns?.has(runId)) return 'alive';
+  if (inputs.unknownRuns?.has(runId)) return 'unknown';
+  return 'dead';
 }
 
 // A pid we never recorded cannot be probed, and an unprobed claim is `unknown` —
@@ -132,22 +177,22 @@ export function runnability(run, state, config, now, inputs = {}) {
   if (!TRANSITIONS[run.state]) return held('skip:run-state-unknown');
 
   if (tickOwns(run, now, config)) return held('skip:tick-owns-run', run.tickGuard.expiresAt);
-  if (runnerOwns(run, now, config)) return held('skip:runner-active', run.recoveryLease.expiresAt);
-  // A lease that expired while the machine slept still has a live runner behind
-  // it. It will be re-evaluated next pass, so it is held, not abandoned.
-  if (inputs.aliveRuns?.has(run.runId)) return held('skip:runner-alive', now + config.leaseRenewalSeconds);
 
-  // A claim we could not verify holds its own run — we never double-drive it — but
-  // it may not hold it for ever. This branch re-armed its notBefore every pass, so
-  // a recycled pid wedged its run permanently: never recovered, never pruned, and
-  // burning an OS probe every pass until the end of time.
+  // ONE predicate answers "is a runner driving this run?", and every caller is forced
+  // through it — the tick's `lease`, this selector, the pruner, and activation. There
+  // used to be two: this function hand-rolled its own, and the two then disagreed on
+  // the same state, so the tick refused a run the supervisor went on to drive. That
+  // is the exact bug the single predicate was introduced to make impossible, still
+  // possible because this caller had not been routed through it.
   //
-  // A live runner renews, and a renewed claim is unexpired, so it never reaches
-  // here. A claim unrenewed for longer than a runner can even live — its own action
-  // timeout bounds that — has no runner behind it.
-  if (inputs.unknownRuns?.has(run.runId)
-      && unrenewedFor(run.recoveryLease, config, now) <= config.recoveryAttemptTimeoutSeconds) {
-    return held('skip:runner-alive', now + config.leaseRenewalSeconds);
+  // A lease that expired while the machine slept may still have a live runner behind
+  // it. It is re-evaluated next pass, so it is held, not abandoned.
+  const liveness = runLiveness(run.runId, inputs);
+  if (claimOccupied(run.recoveryLease, config, now, liveness)) {
+    const notBefore = runnerOwns(run, now, config)
+      ? run.recoveryLease.expiresAt
+      : claimNotBefore(config, now);
+    return held(liveness === 'dead' ? 'skip:runner-active' : 'skip:runner-alive', notBefore);
   }
 
   if (Number.isFinite(state.usage.sevenDaySuppressedUntil) && state.usage.sevenDaySuppressedUntil > now) {

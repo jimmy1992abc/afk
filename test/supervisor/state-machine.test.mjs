@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { defaultConfig } from '../../scripts/supervisor/config.mjs';
 import { defaultState } from '../../scripts/supervisor/state-store.mjs';
-import { pruneState, runnability, selectCandidate, transitionRun } from '../../scripts/supervisor/state-machine.mjs';
+import { pruneState, repairClaim, runnability, selectCandidate, transitionRun } from '../../scripts/supervisor/state-machine.mjs';
 
 const config = defaultConfig();
 const now = 20_000;
@@ -193,13 +193,19 @@ test('an unverifiable claim holds its run, but not for ever', () => {
     'past the longest a runner can live, an unrenewed claim is not a runner');
 });
 
-test('a claim stamped in the future cannot buy itself an endless hold', () => {
-  // The bound clamped a future `lastRenewedAt` down to `now`, which made the claim
-  // look freshly renewed on EVERY pass — the exact indefinite hold the bound was
-  // written to prevent. A forward clock step or a corrupt state file therefore
-  // wedged the run for ever: never recovered, never pruned, an OS probe burned every
-  // pass. Only a stamp at or before `now` is evidence a runner was alive.
-  const item = run({
+test('a claim stamped in the future is held, and the repair bounds the hold', () => {
+  // This bound has been wrong in BOTH directions. First it clamped a future stamp
+  // down to `now` on every read, so the claim looked freshly renewed for ever and a
+  // recycled pid wedged its run permanently. Then it discarded a future stamp as no
+  // evidence at all — and a clock corrected backwards (a VM's RTC, an NTP step after
+  // a suspend, which is the scenario this supervisor exists for) freed a claim whose
+  // runner was ALIVE, and the session was driven twice.
+  //
+  // It fails CLOSED: a stamp we cannot believe is read as "renewed just now", so the
+  // run is held. The bound comes from REPAIRING the claim — writing the believable
+  // stamp back — because a clamp that is not persisted resets on every pass and is
+  // therefore no bound at all.
+  const skewed = () => run({
     runId: 'skewed', state: 'RECOVERING',
     recoveryLease: {
       attemptId: 'a', token: 't', lastRenewedAt: EPOCH + 365 * 86_400,
@@ -208,8 +214,22 @@ test('a claim stamped in the future cannot buy itself an endless hold', () => {
     updatedAt: EPOCH - 99_999, lastHeartbeatAt: EPOCH - 99_999, nextExpectedTickAt: null,
   });
   const inputs = { unknownRuns: new Set(['skewed']) };
-  assert.equal(runnability(item, stateWith(item), config, EPOCH, inputs).runnable, true,
-    'a claim with no stamp we can believe is not a runner');
+
+  const item = skewed();
+  assert.equal(runnability(item, stateWith(item), config, EPOCH, inputs).runnable, false,
+    'a claim we cannot date may still have a live runner behind it');
+
+  // The repair dates it now — and dates it EXPIRED, so liveness decides rather than a
+  // corrupt clock buying a dead runner a fresh lease.
+  const repaired = skewed();
+  assert.equal(repairClaim(repaired.recoveryLease, config, EPOCH), true);
+  assert.equal(repaired.recoveryLease.lastRenewedAt, EPOCH);
+  assert.equal(repaired.recoveryLease.expiresAt, EPOCH);
+
+  // ...and now the hold is bounded: past the longest a runner can live, it is free.
+  const later = EPOCH + config.recoveryAttemptTimeoutSeconds + 1;
+  assert.equal(runnability(repaired, stateWith(repaired), config, later, inputs).runnable, true,
+    'the persisted repair is what makes the bound a bound');
 });
 
 test('a hold beyond the retention horizon does not shield a run from the reaper', () => {

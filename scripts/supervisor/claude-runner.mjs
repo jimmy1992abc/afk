@@ -127,6 +127,20 @@ export function startActivationProcess(attempt, options = {}) {
   return { lines, completion, pid: child.pid, kill: () => killTree(child) };
 }
 
+// killTree ASKS the child to stop; it does not prove that it did. POSIX sends
+// SIGTERM, which a busy Claude may not honour at once, and `taskkill` can fail to
+// spawn at all — killTree resolves silently either way. These are the two paths that
+// kill (a quota rejection, an action timeout) and they used to return without ever
+// waiting, so a child that survived the kill went on driving the session while the
+// runner declared itself finished and released the claim.
+async function stopChild(processHandle, deps) {
+  await processHandle.kill();
+  const grace = deps.killGrace
+    ? deps.killGrace()
+    : new Promise((resolve) => { setTimeout(resolve, 5_000).unref?.(); });
+  return Promise.race([processHandle.completion.then(() => true), grace.then(() => false)]);
+}
+
 export async function runClaude(attempt, deps = {}) {
   const now = deps.now ?? (() => Math.floor(Date.now() / 1000));
   const startedAt = now();
@@ -156,12 +170,10 @@ export async function runClaude(attempt, deps = {}) {
   const streamed = await Promise.race([consume(), timeout.then(() => ({ kind: 'timeout' }))]);
   if (timeoutId) clearTimeout(timeoutId);
   if (streamed.kind === 'quota') {
-    await processHandle.kill();
-    return { ...streamed, startedAt };
+    return { ...streamed, startedAt, childExited: await stopChild(processHandle, deps) };
   }
   if (streamed.kind === 'timeout') {
-    await processHandle.kill();
-    return { kind: 'failure', reason: 'action-timeout', startedAt };
+    return { kind: 'failure', reason: 'action-timeout', startedAt, childExited: await stopChild(processHandle, deps) };
   }
   const completed = await processHandle.completion;
   return streamed.sawSuccess && completed.code === 0

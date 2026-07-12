@@ -13,7 +13,15 @@ import { createNotifier } from './notifier.mjs';
 import { processStartedAt } from './platform.mjs';
 import { appendBoundedLog } from './logger.mjs';
 
-function clearLease() {
+// Releasing the claim says "nothing of ours is driving this run any more". That is
+// a lie when the Claude child outlived the kill: on a quota rejection and on an
+// action timeout the runner kills the child and stops waiting, and a kill that did
+// not take hold leaves a live Claude still writing to the session. Released, that
+// child becomes invisible — the empty claim is skipped by the liveness pass — and
+// the next supervisor pass starts a SECOND claude --resume on top of it. So the
+// claim is kept, carrying the child's identity, until the child is really gone.
+function releaseLease(current, result) {
+  if (result?.childExited === false) return current.recoveryLease;
   return emptyRecoveryLease();
 }
 
@@ -49,7 +57,7 @@ export function finalizeAttempt(state, runId, token, result, now, config) {
       ...current,
       state: 'RUNNING', lastHeartbeatAt: now, updatedAt: now,
       firstRateLimitedAt: null, rateLimitedUntil: null, resetConfidence: 'unknown',
-      recoveryLease: clearLease(), retry: { attempts: 0, nextAttemptAt: null },
+      recoveryLease: releaseLease(current, result), retry: { attempts: 0, nextAttemptAt: null },
       quotaRejections: resetQuota(), scheduleState: current.scheduleState === 'leased' ? 'handled' : current.scheduleState,
       lastResult: 'result:success',
     };
@@ -78,7 +86,7 @@ export function finalizeAttempt(state, runId, token, result, now, config) {
       // wrong in exactly the common case: an escalation records the *usage*
       // confidence, which is 'exact' whenever a status line is present.
       scheduleSource: nextProbeAt ? 'quota-backoff' : 'reset',
-      scheduleConfidence: reset.confidence, scheduleState: 'pending', recoveryLease: clearLease(),
+      scheduleConfidence: reset.confidence, scheduleState: 'pending', recoveryLease: releaseLease(current, result),
       quotaRejections: { consecutive, backoffLevel, nextProbeAt, lastNotifiedAt: lastResult.endsWith('escalated') ? now : current.quotaRejections?.lastNotifiedAt ?? null },
       lastResult, updatedAt: now,
     };
@@ -88,7 +96,7 @@ export function finalizeAttempt(state, runId, token, result, now, config) {
   const delays = [300, 1200, 3600];
   next.runs[runId] = {
     ...current,
-    state: 'FAILED', recoveryLease: clearLease(),
+    state: 'FAILED', recoveryLease: releaseLease(current, result),
     // `attempts` already counts this failure, so scheduling while `attempts <=
     // max` schedules one more invocation than the configured maximum: three
     // permitted failures produced a fourth `claude --resume`.
@@ -160,8 +168,12 @@ async function renewLease(store, runId, token, now, config, identity) {
     const renewedAt = now();
     run.recoveryLease.lastRenewedAt = renewedAt;
     run.recoveryLease.expiresAt = renewedAt + config.leaseRenewalSeconds * config.leaseMissedRenewals;
-    run.recoveryLease.pid = identity.pid;
-    run.recoveryLease.startedAt = identity.startedAt;
+    // Never write an identity we do not have. `startedAt` is `undefined` when the
+    // probe could not ask, JSON drops the key, and a live runner then reads
+    // `unknown` instead of `alive` — the reconciler was hardened against exactly
+    // this and the runner was left doing it.
+    if (Number.isInteger(identity.pid)) run.recoveryLease.pid = identity.pid;
+    if (Number.isFinite(identity.startedAt)) run.recoveryLease.startedAt = identity.startedAt;
     return state;
   });
 }

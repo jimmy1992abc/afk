@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import { processStartedAt } from './platform.mjs';
 import { applyUsageObservation } from './usage-provider.mjs';
-import { claimLiveness, claimOccupied, pruneState, runnerOwns, selectCandidate, transitionRun, usableHeartbeat } from './state-machine.mjs';
+import { claimLiveness, claimOccupied, pruneState, repairClaim, runnerOwns, selectCandidate, transitionRun, usableHeartbeat } from './state-machine.mjs';
 
 function applyBatch(state, batch, config) {
   return batch.reduce((current, item) => applyUsageObservation(current, item.observation, config), state);
@@ -122,6 +122,17 @@ async function recordActivationIdentity(deps, attempt, child) {
   });
 }
 
+// A claim stamped in the future is repaired before anything reads it, and the repair
+// is WRITTEN DOWN. A clamp that lives only in the reader resets on every pass, which
+// is how the bound on an unverifiable claim came to be no bound at all.
+async function repairClaims(deps, now) {
+  await deps.store.update((current) => {
+    for (const run of Object.values(current.runs)) repairClaim(run.recoveryLease, deps.config, now);
+    if (current.activation?.inProgress) repairClaim(current.activation, deps.config, now);
+    return current;
+  });
+}
+
 export async function reconcileOnce(deps) {
   const now = deps.now();
   const batch = await deps.readObservationBatch();
@@ -132,6 +143,10 @@ export async function reconcileOnce(deps) {
   if (batch.length > 0) {
     await deps.commitObservationBatch(batch);
   }
+  // Before anything reads a claim, and written down, so the bound on an
+  // unverifiable claim is a real bound and not one that resets every pass.
+  await repairClaims(deps, now);
+  state = await deps.store.read();
   const { aliveRuns, unknownRuns, activationOccupied } = await resolveLiveness(state, deps, now);
   const inputs = { heartbeats, aliveRuns, unknownRuns, activationOccupied };
   // Pruning asks the same runnability question the selector does, so it can only
@@ -162,6 +177,13 @@ export async function reconcileOnce(deps) {
         ...current.activation, inProgress: true, attemptId, token,
         resetAt: decision.resetAt, lastAttemptAt: now,
         lastRenewedAt: now,
+        // A NEW claim carries no identity: this attempt's runner has not started yet.
+        // Spread from the previous activation, the claim inherited the last runner's
+        // pid and child — and `fillIdentity`, which never overwrites, then made
+        // recording this attempt's real identity a permanent no-op. The liveness
+        // check would go on probing a process that was never part of this attempt.
+        // A run's lease is built from a literal for exactly this reason.
+        pid: null, startedAt: null, childPid: null, childStartedAt: null,
         expiresAt: now + deps.config.leaseRenewalSeconds * deps.config.leaseMissedRenewals,
         lastResult: 'action:activation-leased',
         // The attempt counts from the moment it is leased, not from the moment it

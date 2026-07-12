@@ -173,6 +173,55 @@ test('the claim records the Claude child, which outlives its runner', async () =
   assert.equal(seen.pid, 4242, 'and the runner is still recorded too');
 });
 
+test('a Claude that outlived the kill keeps its claim', () => {
+  // The two paths that KILL — a quota rejection and an action timeout — are the two
+  // that stop waiting for the child. killTree only ASKS: POSIX sends SIGTERM, and
+  // taskkill can fail to spawn at all. A child that survived went on writing to the
+  // session while the runner released the claim — and an empty claim is skipped by
+  // the liveness pass entirely, so the live Claude became invisible and the next
+  // pass started a second one on top of it.
+  const current = state();
+  current.runs['run-1'].recoveryLease.childPid = 6666;
+  current.runs['run-1'].recoveryLease.childStartedAt = 1_700_000_005_000;
+
+  const survived = finalizeAttempt(current, 'run-1', 'token-1', { kind: 'quota', childExited: false }, now, defaultConfig());
+  assert.equal(survived.runs['run-1'].recoveryLease.childPid, 6666, 'a live child must stay visible');
+  assert.equal(survived.runs['run-1'].recoveryLease.attemptId, 'attempt-1', 'and the claim must still hold the run');
+
+  const gone = finalizeAttempt(current, 'run-1', 'token-1', { kind: 'quota', childExited: true }, now, defaultConfig());
+  assert.equal(gone.runs['run-1'].recoveryLease.attemptId, null, 'a child that really exited releases the run');
+});
+
+test('the runner never writes an identity it does not have', async () => {
+  // `startedAt` is `undefined` when the probe could not ask. Written straight through,
+  // JSON drops the key, and a live runner then reads `unknown` instead of `alive` —
+  // downgrading the very claim the reconciler had already verified. The reconciler was
+  // hardened against exactly this, and the runner was left doing it.
+  const root = await mkdtemp(join(tmpdir(), 'afk-supervisor-runner-'));
+  const store = new StateStore(root);
+  await store.update(() => state());
+  await store.update((current) => {
+    const lease = current.runs['run-1'].recoveryLease;
+    lease.pid = 4242;
+    lease.startedAt = 1_700_000_000_000;   // the reconciler verified it
+    return current;
+  });
+
+  let seen = null;
+  await runAttempt('attempt-1', {
+    store, config: defaultConfig(), now: () => now,
+    identity: { pid: 4242, startedAt: undefined },   // ...and our own probe could not ask
+    runClaude: async () => {
+      seen = (await store.read()).runs['run-1'].recoveryLease;
+      return { kind: 'success', startedAt: now };
+    },
+    setInterval: () => ({}), clearInterval: () => {},
+    notify: async () => {},
+  });
+  assert.equal(seen.startedAt, 1_700_000_000_000, 'a probe that could not ask must not erase what we know');
+  assert.equal(seen.pid, 4242);
+});
+
 test('stale lease token cannot finalize a newer attempt', () => {
   const current = state();
   assert.equal(finalizeAttempt(current, 'run-1', 'old-token', { kind: 'success' }, now, defaultConfig()), current);
