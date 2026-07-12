@@ -100,6 +100,13 @@ test('newer exact snapshot replaces pending estimated schedules', () => {
   assert.equal(next.runs['1'].scheduleConfidence, 'exact');
 });
 
+test('exact snapshot clears escalated quota backoff', () => {
+  const state = withRuns(['1']);
+  state.runs['1'].quotaRejections = { consecutive: 3, backoffLevel: 1, nextProbeAt: 50_000, lastNotifiedAt: 10_000 };
+  const next = applyUsageObservation(state, exact(50, 3_000), config);
+  assert.deepEqual(next.runs['1'].quotaRejections, { consecutive: 0, backoffLevel: 0, nextProbeAt: null, lastNotifiedAt: null });
+});
+
 test('stable jitter is deterministic and inside the inclusive range', () => {
   const item = run('1');
   const first = stableJitterSeconds(item, 2_000, config);

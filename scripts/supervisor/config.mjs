@@ -60,3 +60,29 @@ export function validateConfig(value) {
   }
   return config;
 }
+
+export class ConfigStore {
+  constructor(root) {
+    this.root = root;
+    this.path = join(root, 'config.json');
+  }
+
+  async read() {
+    try { return validateConfig(JSON.parse(await readFile(this.path, 'utf8'))); } catch (error) {
+      if (error.code === 'ENOENT') return defaultConfig();
+      throw error;
+    }
+  }
+
+  async write(value) {
+    const config = validateConfig(value);
+    await mkdir(this.root, { recursive: true });
+    const temp = `${this.path}.tmp-${randomUUID()}`;
+    await writeFile(temp, `${JSON.stringify(config, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+    await rename(temp, this.path);
+    return config;
+  }
+}
+import { randomUUID } from 'node:crypto';
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';

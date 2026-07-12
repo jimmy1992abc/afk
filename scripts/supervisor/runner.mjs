@@ -3,7 +3,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { defaultConfig } from './config.mjs';
+import { ConfigStore } from './config.mjs';
 import { WINDOW_SECONDS } from './constants.mjs';
 import { runClaude as executeClaude } from './claude-runner.mjs';
 import { StateStore } from './state-store.mjs';
@@ -149,7 +149,7 @@ async function main() {
     return;
   }
   const result = await runAttempt(attemptId, {
-    store: new StateStore(dataRoot()), config: defaultConfig(),
+    store: new StateStore(dataRoot()), config: await new ConfigStore(dataRoot()).read(),
     now: () => Math.floor(Date.now() / 1000), runClaude: executeClaude,
     setInterval, clearInterval, notify: async () => {},
   });

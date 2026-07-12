@@ -81,6 +81,12 @@ export function applyUsageObservation(state, observation, config) {
       }
     }
   }
+  if (exact && Number.isFinite(resetAt)) {
+    for (const run of Object.values(next.runs)) {
+      if (!RECOVERABLE.has(run.state)) continue;
+      run.quotaRejections = { consecutive: 0, backoffLevel: 0, nextProbeAt: null, lastNotifiedAt: null };
+    }
+  }
   if (observation.sevenDayUsedPercentage === 100 && Number.isFinite(observation.sevenDayResetAt)) {
     next.usage.sevenDaySuppressedUntil = observation.sevenDayResetAt + config.graceSeconds;
   }

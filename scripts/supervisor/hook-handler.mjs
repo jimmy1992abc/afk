@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { isAbsolute, join, relative } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { defaultConfig } from './config.mjs';
+import { ConfigStore } from './config.mjs';
 import { WINDOW_SECONDS } from './constants.mjs';
 import { parseSupervisorLedger } from './ledger.mjs';
 import { StateStore } from './state-store.mjs';
@@ -136,7 +136,7 @@ async function main() {
     return;
   }
   const result = await handleHook(event, {
-    store: new StateStore(dataRoot()), config: defaultConfig(),
+    store: new StateStore(dataRoot()), config: await new ConfigStore(dataRoot()).read(),
     now: () => Math.floor(Date.now() / 1000), readFile: (path) => readFile(path, 'utf8'),
   });
   process.stderr.write(`${result.code}\n`);

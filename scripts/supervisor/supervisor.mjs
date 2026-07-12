@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { defaultConfig } from './config.mjs';
+import { ConfigStore } from './config.mjs';
 import { commitObservationBatch, readObservationBatch } from './observation-inbox.mjs';
 import { reconcileOnce } from './reconciler.mjs';
 import { StateStore } from './state-store.mjs';
@@ -18,9 +18,10 @@ function root() {
 
 export async function main(argv = process.argv.slice(2)) {
   const data = root();
+  const config = await new ConfigStore(data).read();
   const runner = new URL('./runner.mjs', import.meta.url);
   const result = await reconcileOnce({
-    store: new StateStore(data), config: defaultConfig(),
+    store: new StateStore(data), config,
     now: () => Math.floor(Date.now() / 1000),
     readObservationBatch: () => readObservationBatch(data), commitObservationBatch,
     readHeartbeats: async () => ({}), readLedgerHeartbeat: async () => null,
