@@ -30,7 +30,10 @@ export function defaultConfig() {
     leaseMissedRenewals: 3,
     maxConcurrentInvocations: 1,
     pollIntervalSeconds: 60,
-    terminalRunRetentionSeconds: 604800,
+    // Must exceed the longest legitimate hold. It used to equal
+    // quotaEscalationMaxSeconds, so a run parked on the maximum quota probe was
+    // deleted the moment that probe became due.
+    terminalRunRetentionSeconds: 1209600,
     registrationRecoveryMaxAgeSeconds: 86400,
   };
 }
@@ -65,6 +68,19 @@ export function validateConfig(value) {
   }
   if (config.quotaEscalationMaxSeconds < config.quotaEscalationBaseSeconds) {
     throw new TypeError('quota escalation range is invalid');
+  }
+  // Retention is "how long a dead run is kept". It was also being used, by
+  // accident, as "the longest a live run may legitimately wait" — and the two
+  // constants were equal, so a run parked on the maximum quota probe was deleted
+  // at the exact moment it became due. Make that arithmetically impossible.
+  const longestHold = Math.max(
+    config.quotaEscalationMaxSeconds,
+    config.recoveryAttemptTimeoutSeconds,
+    config.heartbeatStaleSeconds,
+    config.overdueAutoActivationSeconds,
+  );
+  if (config.terminalRunRetentionSeconds <= longestHold) {
+    throw new TypeError('terminalRunRetentionSeconds must exceed the longest hold a run can legitimately wait out');
   }
   return config;
 }

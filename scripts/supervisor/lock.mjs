@@ -74,9 +74,9 @@ export async function steal(dir, now, ttlMs) {
       } catch (error) {
         if (!CONTENDED.has(error.code) && error.code !== 'EEXIST') throw error;
         if (attempt >= 10) {
-          // A third party took the vacant path. The tombstone is ours alone now
-          // and is not a lock, so it must not be left behind: nothing sweeps it.
-          if (error.code === 'EEXIST') await discard(tombstone).catch(() => {});
+          // The path is taken, or persistently unmovable. Either way the tombstone
+          // is ours alone and is not a lock, so it must not be left behind.
+          await discard(tombstone).catch(() => {});
           break;
         }
         await new Promise((resolve) => setTimeout(resolve, 5 + attempt * 5));

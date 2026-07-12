@@ -4,6 +4,7 @@ import test from 'node:test';
 import { platformAdapter } from '../../scripts/supervisor/platform.mjs';
 import { renderLaunchAgent } from '../../scripts/supervisor/platform-macos.mjs';
 import { createWindowsAdapter, renderWindowsTask } from '../../scripts/supervisor/platform-windows.mjs';
+import { runnerLiveness } from '../../scripts/supervisor/platform.mjs';
 
 test('LaunchAgent runs at load and every 60 seconds with escaped paths', () => {
   const plist = renderLaunchAgent({ nodePath: '/Library/Node & Tools/node', workerPath: '/User Data/supervisor.mjs', stdoutPath: '/Logs/out.log', stderrPath: '/Logs/error.log' });
@@ -86,4 +87,24 @@ test('platformAdapter rejects unsupported systems', () => {
   assert.equal(platformAdapter('darwin', {}).name, 'macos');
   assert.equal(platformAdapter('win32', {}).name, 'windows');
   assert.throws(() => platformAdapter('linux', {}), /unsupported platform/);
+});
+
+test('a recycled pid is not our runner', async () => {
+  // A pid is not an identity: the OS reuses it, aggressively on Windows. Only a
+  // process whose start time matches the one the runner recorded is that runner.
+  // That is what lets a live pid be trusted with no time bound at all — which
+  // suspend requires, because suspend stops the very timers a time bound needs.
+  const LSTART = 'Wed Nov 15 03:33:20 2023';
+  const started = Date.parse(LSTART);
+  const deps = { platform: 'darwin', execFile: async () => ({ stdout: LSTART }) };
+
+  assert.equal(await runnerLiveness({ pid: 4242, startedAt: started }, deps), 'alive');
+  assert.equal(await runnerLiveness({ pid: 4242, startedAt: started - 900_000 }, deps), 'dead',
+    'a process wearing a recycled number must never pass as our runner');
+  assert.equal(await runnerLiveness({ pid: 4242, startedAt: null }, deps), 'unknown',
+    'a claim with no recorded identity can never be verified, only distrusted');
+  assert.equal(await runnerLiveness({ pid: null }, deps), 'dead');
+
+  const gone = { platform: 'darwin', execFile: async () => { throw new Error('no such process'); } };
+  assert.equal(await runnerLiveness({ pid: 4242, startedAt: started }, gone), 'dead');
 });

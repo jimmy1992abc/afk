@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { defaultConfig } from '../../scripts/supervisor/config.mjs';
 import { defaultState } from '../../scripts/supervisor/state-store.mjs';
-import { pruneState, selectCandidate, transitionRun } from '../../scripts/supervisor/state-machine.mjs';
+import { pruneState, runnability, selectCandidate, transitionRun } from '../../scripts/supervisor/state-machine.mjs';
 
 const config = defaultConfig();
 const now = 20_000;
@@ -14,7 +14,8 @@ function run(overrides = {}) {
     state: 'RUNNING', lastHeartbeatAt: now - 2_000, nextExpectedTickAt: now - 500,
     firstRateLimitedAt: null, rateLimitedUntil: null, scheduledResumeAt: null,
     scheduledResetAt: null, scheduleState: null, scheduleConfidence: null,
-    lease: { attemptId: null, token: null, lastRenewedAt: null, expiresAt: null },
+    recoveryLease: { attemptId: null, token: null, lastRenewedAt: null, expiresAt: null, pid: null, startedAt: null },
+    tickGuard: null,
     retry: { attempts: 0, nextAttemptAt: null },
     quotaRejections: { consecutive: 0, backoffLevel: 0, nextProbeAt: null },
     ...overrides,
@@ -92,11 +93,11 @@ test('an in-session lease is honoured, not judged bogus by the supervisor ceilin
   // the tick is actively working on.
   const item = run({
     state: 'RUNNING', lastHeartbeatAt: now - config.heartbeatStaleSeconds - 1, nextExpectedTickAt: null,
-    lease: { attemptId: 'in-session-x', token: 't', expiresAt: now + config.heartbeatStaleSeconds, pid: null },
+    tickGuard: { sessionId: '00000000-0000-4000-8000-000000000001', expiresAt: now + config.heartbeatStaleSeconds },
   });
   const decision = selectCandidate(stateWith(item), {}, config, now);
   assert.notEqual(decision.kind, 'invoke');
-  assert.equal(decision.code, 'skip:runner-alive');
+  assert.equal(decision.code, 'skip:tick-owns-run');
 });
 
 test('a heartbeat from the future is a clock artefact, not progress', () => {
@@ -132,6 +133,77 @@ test('activeRunRecovery off actually stops recovering runs', () => {
     selectCandidate(stateWith(item), {}, { ...config, activeRunRecovery: 'off' }, now).code,
     'skip:recovery-disabled',
   );
+});
+
+const EPOCH = 1_800_000_000; // the prune fixtures need a clock the retention window fits behind
+
+test('pruning never deletes a run it is deliberately holding', () => {
+  // The retention window is "how long a dead run is kept". It was also being used,
+  // by accident, as "the longest a live run may wait" — and the two constants were
+  // equal, so a run parked on the maximum quota probe was deleted at the exact
+  // moment that probe became due: the mechanism meant to resume it destroyed it.
+  // Pruning now asks the same runnability question the selector does, and a hold
+  // with a future notBefore is waiting, not abandoned.
+  const stale = EPOCH - config.terminalRunRetentionSeconds - 1;
+  const parked = run({
+    runId: 'parked', state: 'RATE_LIMITED',
+    quotaRejections: { consecutive: 3, backoffLevel: 4, nextProbeAt: EPOCH + 500, lastNotifiedAt: null },
+    updatedAt: stale, lastHeartbeatAt: stale, nextExpectedTickAt: null,
+  });
+  const weekly = run({
+    runId: 'weekly', sessionId: '00000000-0000-4000-8000-000000000002', state: 'RATE_LIMITED',
+    updatedAt: stale, lastHeartbeatAt: stale, nextExpectedTickAt: null,
+  });
+  const state = stateWith(parked);
+  state.runs.weekly = weekly;
+  state.usage.sevenDaySuppressedUntil = EPOCH + 500;
+
+  pruneState(state, config, EPOCH, {});
+  assert.ok(state.runs.parked, 'a run waiting out its quota probe must survive');
+  assert.ok(state.runs.weekly, 'a run waiting out the weekly suppression must survive');
+
+  // ...and a run with no hold at all, idle that long, really is abandoned.
+  const dead = stateWith(run({ runId: 'gone', updatedAt: stale, lastHeartbeatAt: stale, nextExpectedTickAt: null }));
+  pruneState(dead, config, EPOCH, {});
+  assert.equal(dead.runs.gone, undefined, 'the prune must still actually prune');
+});
+
+test('pruning never deletes a run whose runner is still alive', () => {
+  const stale = EPOCH - config.terminalRunRetentionSeconds - 1;
+  const item = run({
+    runId: 'held', state: 'RECOVERING',
+    recoveryLease: { attemptId: 'a', token: 't', expiresAt: EPOCH - 1, pid: 4242, startedAt: 1 },
+    updatedAt: stale, lastHeartbeatAt: stale, nextExpectedTickAt: null,
+  });
+  const state = stateWith(item);
+  pruneState(state, config, EPOCH, { aliveRuns: new Set(['held']) });
+  assert.ok(state.runs.held);
+});
+
+test('a runner we cannot verify wedges its own run, never the whole supervisor', () => {
+  // The residual risk of trusting a pid is that the OS recycled it. An
+  // unverifiable claim must hold at most its own run: counting it against the
+  // global cap would let one stale pid stop the supervisor invoking anything, on
+  // any repository, for ever.
+  const opaque = run({
+    runId: 'a-opaque', state: 'RECOVERING',
+    recoveryLease: { attemptId: 'a', token: 't', expiresAt: now - 1, pid: 4242, startedAt: null },
+    lastHeartbeatAt: now - 99_999, nextExpectedTickAt: null,
+  });
+  const due = run({
+    runId: 'b-due', sessionId: '00000000-0000-4000-8000-000000000002', state: 'RATE_LIMITED',
+    rateLimitedUntil: now - 1_000, resetConfidence: 'exact',
+    lastHeartbeatAt: now - 99_999, nextExpectedTickAt: null,
+  });
+  const state = stateWith(opaque);
+  state.runs['b-due'] = due;
+  const inputs = { unknownRuns: new Set(['a-opaque']) };
+
+  const decision = selectCandidate(state, inputs, config, now);
+  assert.equal(decision.kind, 'invoke');
+  assert.equal(decision.runId, 'b-due', 'the other repository must keep working');
+  assert.equal(runnability(opaque, state, config, now, inputs).runnable, false,
+    'and the opaque run itself is still never double-driven');
 });
 
 test('a run that exhausted its retries is eventually pruned', () => {
@@ -180,7 +252,7 @@ test('fresh pre-reset heartbeat defers without discarding schedule', () => {
 });
 
 test('active lease capacity and seven-day suppression have distinct skips', () => {
-  const leased = stateWith(run({ lease: { attemptId: 'a', token: 't', expiresAt: now + 10 } }));
+  const leased = stateWith(run({ recoveryLease: { attemptId: 'a', token: 't', expiresAt: now + 10 } }));
   assert.equal(selectCandidate(leased, {}, config, now).code, 'skip:concurrency-exhausted');
   const weekly = stateWith(run());
   weekly.usage.sevenDaySuppressedUntil = now + 10;

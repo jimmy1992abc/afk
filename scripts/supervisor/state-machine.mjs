@@ -17,11 +17,36 @@ export function transitionRun(run, nextState, updatedAt = run.updatedAt) {
   return { ...run, state: nextState, updatedAt };
 }
 
+export function isTerminalState(state) {
+  return TERMINAL.has(state);
+}
+
 // A heartbeat ahead of local time is a clock artefact, not progress. Trusting it
 // would mark the run fresh for ever, so it would never be recovered, and it would
 // also count as post-reset progress and silently discard the run's schedule.
 export function usableHeartbeat(value, now, config) {
   return Number.isFinite(value) && value <= now + config.graceSeconds ? value : null;
+}
+
+// An expiry is written from the same clock as a heartbeat and gets the same
+// distrust: a forward clock step during a renewal would otherwise persist an
+// expiry years out and hold its claim for ever, with nothing to reap it.
+function claimLive(claim, now, config, longest) {
+  return Number.isFinite(claim?.expiresAt)
+    && claim.expiresAt > now
+    && claim.expiresAt <= now + longest + config.graceSeconds;
+}
+
+// Two different claims on a run, with two different owners and two different
+// lifetimes. Collapsing them into one field is what made the supervisor resume a
+// session that then saw the supervisor's own claim, concluded another layer owned
+// recovery, and exited without doing anything.
+export function tickOwns(run, now, config) {
+  return claimLive(run.tickGuard, now, config, config.heartbeatStaleSeconds);
+}
+
+export function runnerOwns(run, now, config) {
+  return claimLive(run.recoveryLease, now, config, config.leaseRenewalSeconds * config.leaseMissedRenewals);
 }
 
 function heartbeatFor(run, inputs, now, config) {
@@ -37,6 +62,104 @@ function dueForRateLimit(state, run, config, now) {
   return null;
 }
 
+function exhausted(run, config) {
+  return run.state === 'FAILED'
+    && (run.retry?.attempts ?? 0) >= config.maxRecoveryAttempts
+    && !Number.isFinite(run.retry?.nextAttemptAt);
+}
+
+const held = (code, notBefore = null, extra = {}) => ({ runnable: false, code, notBefore, ...extra });
+
+/**
+ * The single answer to "may this run be driven right now, and by whom?".
+ *
+ * Every consumer — selection, pruning, status — asks this one function. Nine
+ * uncoordinated predicates spread over three files used to answer parts of it,
+ * and every round of fixes tightened one and silently changed the meaning of two
+ * others.
+ *
+ * `notBefore` is the earliest moment this run could become runnable. A hold with
+ * a future `notBefore` is deliberate, and pruning must never delete such a run:
+ * a run parked on a seven-day quota probe is waiting, not abandoned.
+ *
+ * `inputs.aliveRuns` — runs whose recovery lease expired but whose runner the
+ * caller has *verified* is still alive. `inputs.unknownRuns` — the same, but
+ * liveness could not be determined. Both mean "do not touch this run"; only a
+ * verified one is a real Claude invocation that counts against the global cap.
+ */
+export function runnability(run, state, config, now, inputs = {}) {
+  if (TERMINAL.has(run.state)) return held('skip:run-terminal');
+  if (!TRANSITIONS[run.state]) return held('skip:run-state-unknown');
+
+  if (tickOwns(run, now, config)) return held('skip:tick-owns-run', run.tickGuard.expiresAt);
+  if (runnerOwns(run, now, config)) return held('skip:runner-active', run.recoveryLease.expiresAt);
+  // A lease that expired while the machine slept still has a live runner behind
+  // it. It will be re-evaluated next pass, so it is held, not abandoned.
+  if (inputs.aliveRuns?.has(run.runId) || inputs.unknownRuns?.has(run.runId)) {
+    return held('skip:runner-alive', now + config.leaseRenewalSeconds);
+  }
+
+  if (Number.isFinite(state.usage.sevenDaySuppressedUntil) && state.usage.sevenDaySuppressedUntil > now) {
+    return held('skip:seven-day-limit', state.usage.sevenDaySuppressedUntil);
+  }
+  if (config.activeRunRecovery === 'off') return held('skip:recovery-disabled');
+  if (exhausted(run, config)) return held('skip:recovery-attempts-exhausted');
+
+  if (Number.isFinite(run.quotaRejections?.nextProbeAt) && run.quotaRejections.nextProbeAt > now) {
+    return held('skip:quota-backoff', run.quotaRejections.nextProbeAt);
+  }
+  if (Number.isFinite(run.retry?.nextAttemptAt) && run.retry.nextAttemptAt > now) {
+    return held('skip:retry-backoff', run.retry.nextAttemptAt);
+  }
+
+  const heartbeat = heartbeatFor(run, inputs, now, config);
+  const fresh = Number.isFinite(heartbeat) && now - heartbeat < config.heartbeatStaleSeconds;
+  const freshUntil = Number.isFinite(heartbeat) ? heartbeat + config.heartbeatStaleSeconds : null;
+
+  if (run.scheduleState === 'pending' && Number.isFinite(run.scheduledResumeAt)) {
+    if (run.scheduledResumeAt > now) {
+      const code = run.scheduleConfidence === 'estimated' ? 'skip:estimate-not-due' : 'skip:reset-not-due';
+      return held(code, run.scheduledResumeAt);
+    }
+    // `heartbeat > null` is `heartbeat > 0` — always true — so the finite check is
+    // what stops any heartbeat at all from satisfying a schedule that has no reset.
+    if (Number.isFinite(run.scheduledResetAt) && Number.isFinite(heartbeat)
+        && heartbeat > run.scheduledResetAt) {
+      return held('skip:heartbeat-satisfied-reset', null, { handle: true });
+    }
+    if (fresh) return held('skip:heartbeat-fresh', freshUntil);
+    return { runnable: true, code: 'action:resume-afk', dueAt: run.scheduledResumeAt, notBefore: null };
+  }
+
+  if (run.state === 'RATE_LIMITED') {
+    const dueAt = dueForRateLimit(state, run, config, now);
+    if (!Number.isFinite(dueAt) || dueAt > now) {
+      const code = run.resetConfidence === 'exact' ? 'skip:reset-not-due' : 'skip:estimate-not-due';
+      return held(code, Number.isFinite(dueAt) ? dueAt : null);
+    }
+    return { runnable: true, code: 'action:resume-afk', dueAt, notBefore: null };
+  }
+
+  if (fresh) return held('skip:heartbeat-fresh', freshUntil);
+  if (Number.isFinite(run.nextExpectedTickAt) && now <= run.nextExpectedTickAt + config.graceSeconds) {
+    return held('skip:tick-grace', run.nextExpectedTickAt + config.graceSeconds);
+  }
+  return { runnable: true, code: 'action:resume-afk', dueAt: now, notBefore: null };
+}
+
+// Only a supervisor invocation consumes the global cap. The in-session tick's
+// guard is not one, and counting it would let a single interactively-running repo
+// disable recovery for every other repository.
+//
+// A runner whose liveness could not be *verified* does not consume it either: a
+// recycled pid must be able to wedge at most its own run, never the whole
+// supervisor.
+function invocations(state, config, now, inputs) {
+  return Object.values(state.runs)
+    .filter((run) => runnerOwns(run, now, config) || inputs.aliveRuns?.has(run.runId))
+    .length;
+}
+
 function orderedRuns(state) {
   return Object.values(state.runs).sort((a, b) => {
     const aDue = a.scheduledResumeAt ?? Number.MAX_SAFE_INTEGER;
@@ -45,165 +168,78 @@ function orderedRuns(state) {
   });
 }
 
+function emptyWindow(state, config, now) {
+  const resetAt = state.usage.confidence === 'exact' ? state.usage.fiveHourResetAt : null;
+  if (!Number.isFinite(resetAt) || now < resetAt + config.graceSeconds
+      || state.activation.handledResetAt === resetAt) return { kind: 'skip', code: 'skip:no-active-run' };
+  if (config.windowMode === 'off') return { kind: 'skip', code: 'skip:window-mode-off' };
+  if (config.windowMode === 'notify') return { kind: 'notify', code: 'action:notify-window-reset', resetAt };
+  if (state.activation.inProgress && state.activation.expiresAt > now) {
+    return { kind: 'skip', code: 'skip:activation-in-progress' };
+  }
+  if (state.activation.activationAttempts.length >= config.maxWindowActivationsPer24Hours) {
+    return { kind: 'skip', code: 'skip:rolling-activation-cap' };
+  }
+  if (now - resetAt > config.overdueAutoActivationSeconds && config.catchUpMode !== 'activate') {
+    return config.catchUpMode === 'notify'
+      ? { kind: 'notify', code: 'action:notify-window-reset', resetAt }
+      : { kind: 'skip', code: 'skip:overdue-window' };
+  }
+  return { kind: 'activate', code: 'action:activate-window', resetAt };
+}
+
 export function selectCandidate(state, inputs, config, now) {
   if (!config.enabled) return { kind: 'skip', code: 'skip:disabled' };
+
   // A known-exhausted weekly window suppresses recovery probes and empty-window
-  // activation alike; neither can succeed before the weekly reset.
+  // activation alike — neither can succeed before the weekly reset. This is a
+  // global gate: runnability also refuses each run individually, but with no runs
+  // at all the empty-window branch would otherwise never see it.
   if (Number.isFinite(state.usage.sevenDaySuppressedUntil) && state.usage.sevenDaySuppressedUntil > now) {
     return { kind: 'skip', code: 'skip:seven-day-limit' };
   }
-  // A lease expiry is written from the same clock as a heartbeat, so it needs the
-  // same distrust: a forward clock step during a renewal persists an expiry years
-  // out, and an unclamped lease would then occupy its slot for ever with nothing
-  // to reap it.
-  // The ceiling has to admit the longest lease anyone legitimately takes. The
-  // in-session tick's lease runs for heartbeatStaleSeconds, far longer than a
-  // supervisor lease, and treating it as bogus would leave the supervisor free to
-  // resume a run the tick is actively working on.
-  const longestLease = Math.max(
-    config.leaseRenewalSeconds * config.leaseMissedRenewals,
-    config.heartbeatStaleSeconds,
-  );
-  const ceiling = now + longestLease + config.graceSeconds;
-  const leaseLive = (run) => Number.isFinite(run.lease?.expiresAt)
-    && run.lease.expiresAt > now && run.lease.expiresAt <= ceiling;
 
-  // A run is occupied while its lease is live *or* while its runner is alive — a
-  // suspended machine expires the lease without killing anything. The caller
-  // resolves liveness, because this function may not touch processes.
-  const occupied = (run) => leaseLive(run) || Boolean(inputs.aliveRuns?.has(run.runId));
-
-  // ...but only a *supervisor* invocation counts against the invocation cap. The
-  // in-session AFK tick takes a lease on its own run too, and counting it would
-  // let one interactively-running repo disable recovery for every other repo.
-  const invocation = (run) => occupied(run) && !String(run.lease?.attemptId ?? '').startsWith('in-session-');
+  // An activation is a Claude invocation too, and its child lives as long as any
+  // recovery.
   const activationLive = state.activation.inProgress
     && Number.isFinite(state.activation.expiresAt) && state.activation.expiresAt > now ? 1 : 0;
-  const liveLeases = activationLive + Object.values(state.runs).filter(invocation).length;
-  if (liveLeases >= config.maxConcurrentInvocations) {
+  if (activationLive + invocations(state, config, now, inputs) >= config.maxConcurrentInvocations) {
     return { kind: 'skip', code: 'skip:concurrency-exhausted' };
   }
-  // A run whose state the code does not know cannot be reasoned about. Selecting
-  // it would reach transitionRun, which throws, and the exception escapes the
-  // store update and kills every reconcile pass from then on.
-  const recoverable = orderedRuns(state)
-    .filter((run) => !TERMINAL.has(run.state) && Boolean(TRANSITIONS[run.state]));
-  if (recoverable.length === 0) {
-    const resetAt = state.usage.confidence === 'exact' ? state.usage.fiveHourResetAt : null;
-    if (!Number.isFinite(resetAt) || now < resetAt + config.graceSeconds
-        || state.activation.handledResetAt === resetAt) return { kind: 'skip', code: 'skip:no-active-run' };
-    if (config.windowMode === 'off') return { kind: 'skip', code: 'skip:window-mode-off' };
-    if (config.windowMode === 'notify') return { kind: 'notify', code: 'action:notify-window-reset', resetAt };
-    if (state.activation.inProgress && state.activation.expiresAt > now) {
-      return { kind: 'skip', code: 'skip:activation-in-progress' };
-    }
-    if (state.activation.activationAttempts.length >= config.maxWindowActivationsPer24Hours) {
-      return { kind: 'skip', code: 'skip:rolling-activation-cap' };
-    }
-    if (now - resetAt > config.overdueAutoActivationSeconds && config.catchUpMode !== 'activate') {
-      return config.catchUpMode === 'notify'
-        ? { kind: 'notify', code: 'action:notify-window-reset', resetAt }
-        : { kind: 'skip', code: 'skip:overdue-window' };
-    }
-    return { kind: 'activate', code: 'action:activate-window', resetAt };
-  }
+
+  const drivable = orderedRuns(state).filter((run) => !TERMINAL.has(run.state) && TRANSITIONS[run.state]);
+  if (drivable.length === 0) return emptyWindow(state, config, now);
 
   let nearest = null;
   let handled = null;
-  for (const run of recoverable) {
-    // Already being worked on. This must skip the run, not end the pass: ending
-    // it lets one occupied run starve every other due run behind it.
-    if (occupied(run)) {
-      nearest ??= { kind: 'skip', code: 'skip:runner-alive', runId: run.runId };
+  for (const run of drivable) {
+    const verdict = runnability(run, state, config, now, inputs);
+    if (verdict.runnable) {
+      return { kind: 'invoke', code: verdict.code, runId: run.runId, dueAt: verdict.dueAt };
+    }
+    // Recording a satisfied reset is real work, but it must never end the pass: a
+    // genuinely due run behind this one would wait another 60 seconds for nothing.
+    if (verdict.handle) {
+      handled ??= { kind: 'handle', code: verdict.code, runId: run.runId };
       continue;
     }
-    if (config.activeRunRecovery === 'off') {
-      nearest ??= { kind: 'skip', code: 'skip:recovery-disabled' };
-      continue;
-    }
-    if (run.state === 'FAILED' && (run.retry?.attempts ?? 0) >= config.maxRecoveryAttempts
-        && !Number.isFinite(run.retry?.nextAttemptAt)) {
-      nearest ??= { kind: 'skip', code: 'skip:recovery-attempts-exhausted' };
-      continue;
-    }
-    if (Number.isFinite(run.quotaRejections?.nextProbeAt) && run.quotaRejections.nextProbeAt > now) {
-      nearest ??= { kind: 'skip', code: 'skip:quota-backoff', dueAt: run.quotaRejections.nextProbeAt };
-      continue;
-    }
-    if (Number.isFinite(run.retry?.nextAttemptAt) && run.retry.nextAttemptAt > now) {
-      nearest ??= { kind: 'skip', code: 'skip:retry-backoff', dueAt: run.retry.nextAttemptAt };
-      continue;
-    }
-    const heartbeat = heartbeatFor(run, inputs, now, config);
-    if (run.scheduleState === 'pending' && Number.isFinite(run.scheduledResumeAt)) {
-      if (run.scheduledResumeAt > now) {
-        nearest ??= { kind: 'skip', code: run.scheduleConfidence === 'estimated' ? 'skip:estimate-not-due' : 'skip:reset-not-due', dueAt: run.scheduledResumeAt };
-        continue;
-      }
-      // `heartbeat > null` is `heartbeat > 0`, i.e. always true, so without the
-      // finite check any heartbeat at all would satisfy a schedule that has no
-      // reset and silently discard the pending resume. The reconciler's copy of
-      // this rule guards it; this one did not.
-      if (Number.isFinite(run.scheduledResetAt) && Number.isFinite(heartbeat)
-          && heartbeat > run.scheduledResetAt) {
-        // Recording that the reset is satisfied is real work, but it must not end
-        // the pass: a genuinely due run behind this one waits another 60 seconds
-        // for nothing.
-        handled ??= { kind: 'handle', code: 'skip:heartbeat-satisfied-reset', runId: run.runId };
-        continue;
-      }
-      if (Number.isFinite(heartbeat) && now - heartbeat < config.heartbeatStaleSeconds) {
-        // This run is working; the others behind it in the ordering are not.
-        // Returning here would let one healthy run starve every other due run.
-        nearest ??= { kind: 'skip', code: 'skip:heartbeat-fresh', runId: run.runId };
-        continue;
-      }
-      return { kind: 'invoke', code: 'action:resume-afk', runId: run.runId, dueAt: run.scheduledResumeAt };
-    }
-    if (run.state === 'RATE_LIMITED') {
-      const dueAt = dueForRateLimit(state, run, config, now);
-      if (!Number.isFinite(dueAt) || dueAt > now) {
-        nearest ??= { kind: 'skip', code: run.resetConfidence === 'exact' ? 'skip:reset-not-due' : 'skip:estimate-not-due', dueAt };
-        continue;
-      }
-      return { kind: 'invoke', code: 'action:resume-afk', runId: run.runId, dueAt };
-    }
-    const heartbeatFresh = Number.isFinite(heartbeat) && now - heartbeat < config.heartbeatStaleSeconds;
-    if (heartbeatFresh) {
-      nearest ??= { kind: 'skip', code: 'skip:heartbeat-fresh' };
-      continue;
-    }
-    if (Number.isFinite(run.nextExpectedTickAt) && now <= run.nextExpectedTickAt + config.graceSeconds) {
-      nearest ??= { kind: 'skip', code: 'skip:tick-grace', dueAt: run.nextExpectedTickAt + config.graceSeconds };
-      continue;
-    }
-    return { kind: 'invoke', code: 'action:resume-afk', runId: run.runId, dueAt: now };
+    nearest ??= { kind: 'skip', code: verdict.code, runId: run.runId, dueAt: verdict.notBefore ?? undefined };
   }
-  // An invoke wins; a pending handle is real work and beats an idle skip.
+  // An invoke wins outright; a pending handle beats an idle skip.
   return handled ?? nearest ?? { kind: 'skip', code: 'skip:no-recovery-due' };
 }
 
-export function isTerminalState(state) {
-  return TERMINAL.has(state);
-}
-
-export function pruneState(state, config, now) {
+export function pruneState(state, config, now, inputs = {}) {
   for (const [runId, run] of Object.entries(state.runs)) {
-    // A run that exhausted its retries is skipped for ever but is not TERMINAL,
-    // so without this it survives every prune and grows the state without bound
-    // on any machine that never sees an exact reset.
-    const exhausted = run.state === 'FAILED'
-      && (run.retry?.attempts ?? 0) >= config.maxRecoveryAttempts
-      && !Number.isFinite(run.retry?.nextAttemptAt);
-    // A run nobody has touched for a whole retention period is abandoned,
-    // whatever its state says. Without this, a run that can never reach a
-    // terminal or exhausted state — because recovery is switched off, or because
-    // it is wedged mid-RECOVERING — survives every prune, and every pass then
-    // re-reads its ledger for ever.
-    const spent = TERMINAL.has(run.state) || exhausted;
+    // Deliberate holds are not abandonment. A run parked on a seven-day quota
+    // probe, or held while its runner is alive, is waiting — deleting it is how
+    // the mechanism meant to resume it destroyed it instead.
+    const verdict = runnability(run, state, config, now, inputs);
+    if (Number.isFinite(verdict.notBefore) && verdict.notBefore > now) continue;
+
+    const spent = TERMINAL.has(run.state) || exhausted(run, config);
     const idleSince = Math.max(run.updatedAt ?? 0, run.lastHeartbeatAt ?? 0);
-    const abandoned = Number.isFinite(idleSince) && idleSince > 0
-      && now - idleSince > config.terminalRunRetentionSeconds;
+    const abandoned = idleSince > 0 && now - idleSince > config.terminalRunRetentionSeconds;
     if ((spent || abandoned) && Number.isFinite(run.updatedAt)
         && now - run.updatedAt > config.terminalRunRetentionSeconds) delete state.runs[runId];
   }

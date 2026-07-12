@@ -15,7 +15,7 @@ function run(overrides = {}) {
     runId: 'run-1', sessionId: '00000000-0000-4000-8000-000000000001', state: 'RECOVERING',
     firstRateLimitedAt: null, rateLimitedUntil: null, resetConfidence: 'unknown',
     scheduledResumeAt: null, scheduledResetAt: null, scheduleState: 'leased', scheduleConfidence: null,
-    lease: { attemptId: 'attempt-1', token: 'token-1', lastRenewedAt: now - 60, expiresAt: now + 120 },
+    recoveryLease: { attemptId: 'attempt-1', token: 'token-1', lastRenewedAt: now - 60, expiresAt: now + 120, pid: null, startedAt: null, stuckNotifiedAt: null },
     retry: { attempts: 0, nextAttemptAt: null },
     quotaRejections: { consecutive: 0, backoffLevel: 0, nextProbeAt: null, lastNotifiedAt: null },
     ...overrides,
@@ -72,7 +72,7 @@ test('success never reschedules another run', () => {
   const current = state();
   current.runs['run-2'] = run({
     runId: 'run-2', sessionId: '00000000-0000-4000-8000-000000000002', state: 'RUNNING',
-    scheduleState: null, lease: { attemptId: null, token: null, lastRenewedAt: null, expiresAt: null },
+    scheduleState: null, recoveryLease: { attemptId: null, token: null, lastRenewedAt: null, expiresAt: null },
   });
   const untouched = structuredClone(current.runs['run-2']);
   const next = finalizeAttempt(current, 'run-1', 'token-1', { kind: 'success', startedAt: now }, now, defaultConfig());
@@ -120,7 +120,7 @@ test('maxRecoveryAttempts is a count of invocations, not of retries after them',
   let current = state();
   const seen = [];
   for (let i = 0; i < 5; i += 1) {
-    current.runs['run-1'].lease = { attemptId: 'a', token: 'token-1', expiresAt: now + 120 };
+    current.runs['run-1'].recoveryLease = { attemptId: 'a', token: 'token-1', expiresAt: now + 120 };
     current.runs['run-1'].state = 'RECOVERING';
     current = finalizeAttempt(current, 'run-1', 'token-1', { kind: 'failure' }, now, config);
     seen.push(current.runs['run-1'].retry.nextAttemptAt);
@@ -160,7 +160,7 @@ test('runAttempt renews then finalizes the matching lease', async () => {
     setInterval: (fn) => ({ fn }), clearInterval: () => {}, notify: async () => {},
   });
   assert.equal(result.code, 'result:success');
-  assert.equal((await store.read()).runs['run-1'].lease.attemptId, null);
+  assert.equal((await store.read()).runs['run-1'].recoveryLease.attemptId, null);
 });
 
 test('a superseded attempt reports itself stale and changes nothing', async () => {
@@ -175,7 +175,7 @@ test('a superseded attempt reports itself stale and changes nothing', async () =
     store, config: defaultConfig(), now: () => now,
     runClaude: async () => {
       await store.update((current) => {
-        current.runs['run-1'].lease = { attemptId: 'attempt-2', token: 'token-2', expiresAt: now + 180, pid: null };
+        current.runs['run-1'].recoveryLease = { attemptId: 'attempt-2', token: 'token-2', expiresAt: now + 180, pid: null, startedAt: null };
         return current;
       });
       return { kind: 'success', startedAt: now };
@@ -184,7 +184,7 @@ test('a superseded attempt reports itself stale and changes nothing', async () =
   });
   assert.equal(result.code, 'skip:stale-attempt');
   const saved = await store.read();
-  assert.equal(saved.runs['run-1'].lease.attemptId, 'attempt-2');
+  assert.equal(saved.runs['run-1'].recoveryLease.attemptId, 'attempt-2');
   assert.equal(saved.usage.windowAnchorAt, null, 'a superseded attempt must not anchor the window');
 });
 
@@ -199,15 +199,17 @@ test('the lease is renewed while the child is alive, and only for its own attemp
     store, config, now: () => now,
     runClaude: async () => {
       await renew();
-      renewed = (await store.read()).runs['run-1'].lease;
+      renewed = (await store.read()).runs['run-1'].recoveryLease;
       return { kind: 'success', startedAt: now };
     },
+    identity: { pid: 4242, startedAt: 111_000 },
     setInterval: (fn) => { renew = fn; return {}; },
     clearInterval: () => {}, notify: async () => {},
   });
   assert.equal(renewed.lastRenewedAt, now);
   assert.equal(renewed.expiresAt, now + config.leaseRenewalSeconds * config.leaseMissedRenewals);
-  assert.equal(renewed.pid, process.pid, 'the reconciler checks this pid before re-issuing the lease');
+  assert.equal(renewed.pid, 4242);
+  assert.equal(renewed.startedAt, 111_000, 'a pid alone is not an identity; the start time is what proves it is ours');
 });
 
 test('runAttempt notifies when consecutive quota rejection escalates', async () => {

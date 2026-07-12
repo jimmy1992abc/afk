@@ -27,6 +27,23 @@ export function createNotifier(options = {}) {
   );
 }
 
+// A run held by a runner that outlived its timeout. The operator is the escape
+// hatch here, so they have to actually be told — and told what to do about it.
+export function createStuckNotifier(options = {}) {
+  const platform = options.platform ?? process.platform;
+  const join = platform === 'win32' ? win32.join : posix.join;
+  const adapter = options.adapter ?? platformAdapter(platform, {
+    execFile: (file, args) => execFile(file, args, { windowsHide: true }),
+  });
+  return async (run, liveness = 'alive') => adapter.notify(
+    'AFK Supervisor needs attention',
+    liveness === 'unknown'
+      ? `Run ${run.runId} is held by process ${run.recoveryLease?.pid}, which cannot be checked. Recovery of this run is paused. \`afk-supervisor trigger-now --run-id ${run.runId} --force\` releases it.`
+      : `Run ${run.runId} is still held by a runner (pid ${run.recoveryLease?.pid}) that outlived its timeout. If that process is stuck, \`afk-supervisor trigger-now --run-id ${run.runId} --force\` releases it.`,
+    { notifyScript: join(options.root, 'worker', 'notify-windows.ps1') },
+  );
+}
+
 export function createWindowNotifier(options = {}) {
   const platform = options.platform ?? process.platform;
   const join = platform === 'win32' ? win32.join : posix.join;

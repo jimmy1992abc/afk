@@ -211,7 +211,7 @@ test('an ordinary window boundary does not disprove a long-window limit', () => 
   state.runs['1'] = {
     ...state.runs['1'], state: 'RATE_LIMITED',
     quotaRejections: { consecutive: 3, backoffLevel: 2, nextProbeAt: 900_000, lastNotifiedAt: 1 },
-    scheduledResumeAt: 900_000, scheduleState: 'pending', scheduleConfidence: 'estimated',
+    scheduledResumeAt: 900_000, scheduleState: 'pending', scheduleConfidence: 'exact', scheduleSource: 'quota-backoff',
   };
   const weeklyFull = { ...exact(5, 30_000, 2_000), sevenDayUsedPercentage: 99.9, sevenDayResetAt: 900_000 };
   const after = applyUsageObservation(state, weeklyFull, config);

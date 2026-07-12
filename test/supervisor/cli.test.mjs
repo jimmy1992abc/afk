@@ -18,6 +18,7 @@ function harness() {
     repair: async () => { calls.push('repair'); return { code: 'action:supervisor-repaired' }; },
     installStatus: async () => ({ installed: true, scheduler: { intervalSeconds: 60 } }),
     reconcile: async () => { calls.push('reconcile'); return { code: 'skip:no-active-run' }; },
+    runnerLiveness: async () => 'dead',
     now: () => 20_000,
     output: [],
     writeOutput(text) { this.output.push(text); },
@@ -67,7 +68,7 @@ test('internal register transition and lease commands update one run', async () 
   assert.equal((await runCli(args, h.deps)).code, 0);
   assert.equal(h.state.runs.one.state, 'RUNNING');
   assert.equal((await runCli(['lease', '--run-id', 'one'], h.deps)).code, 0);
-  assert.ok(h.state.runs.one.lease.expiresAt > 20_000);
+  assert.ok(h.state.runs.one.tickGuard.expiresAt > 20_000);
   assert.equal((await runCli(['lease', '--run-id', 'one'], h.deps)).code, 0);
   assert.equal((await runCli(['transition', '--run-id', 'one', '--state', 'COMPLETED'], h.deps)).code, 0);
   assert.equal(h.state.runs.one.state, 'COMPLETED');
@@ -130,7 +131,7 @@ test('trigger-now revives exactly the runs the selector refuses', async () => {
     runId: 'stuck', state: 'FAILED',
     retry: { attempts: 4, nextAttemptAt: null },
     quotaRejections: { consecutive: 3, backoffLevel: 2, nextProbeAt: 999_999, lastNotifiedAt: 1 },
-    lease: { attemptId: 'dead-runner', token: 'x', expiresAt: 999_999, pid: 4242 },
+    recoveryLease: { attemptId: 'dead-runner', token: 'x', expiresAt: 999_999, pid: 4242, startedAt: 1 },
     scheduledResumeAt: 999_999, scheduleState: 'pending',
   };
   h.state = state;
@@ -141,16 +142,17 @@ test('trigger-now revives exactly the runs the selector refuses', async () => {
   assert.deepEqual(run.retry, { attempts: 0, nextAttemptAt: null });
   assert.equal(run.quotaRejections.consecutive, 0);
   assert.equal(run.quotaRejections.nextProbeAt, null);
-  assert.equal(run.lease.attemptId, null, 'a lease whose runner is gone must be cleared');
-  assert.equal(run.lease.pid, null);
+  assert.equal(run.recoveryLease.attemptId, null, 'a lease whose runner is gone must be cleared');
+  assert.equal(run.recoveryLease.pid, null);
   assert.equal(run.scheduledResumeAt, 20_000);
   assert.ok(h.calls.includes('reconcile'));
 });
 
-// KNOWN BROKEN — the supervisor's core function does not work, and the logs say
-// it does. The lease is overloaded: it is both the supervisor's "I am driving
-// this run" claim and the in-session tick's overlap guard, and they are not the
-// same thing.
+// The acceptance test for the whole restructuring. Before the lease was split,
+// this failed: the supervisor resumed a run, and the session it started asked for
+// the lease, found the supervisor's own claim, was told another layer owned
+// recovery, and exited having done nothing — for ever, while every log line said
+// result:success.
 //
 //   1. reconciler leases run.lease with a supervisor attemptId and the runner
 //      renews it for the whole life of the child.
@@ -167,23 +169,62 @@ test('trigger-now revives exactly the runs the selector refuses', async () => {
 // runner records result:success, and 25 minutes later the stale heartbeat makes
 // the supervisor resume it again. For ever.
 //
-// This cannot be patched here. The fix is structural: split run.lease into a
-// supervisor `recoveryLease` and an in-session `tickGuard`. Left failing on
-// purpose so it cannot be lost.
-test('a session the supervisor resumed can acquire its own tick guard', { todo: 'lease is overloaded; needs recoveryLease/tickGuard split' }, async () => {
+// The two claims are separate fields now, so a resumed session takes its own
+// guard and gets on with the work.
+test('a session the supervisor resumed can acquire its own tick guard', async () => {
   const h = harness();
   const state = defaultState();
   state.runs.one = {
     runId: 'one', sessionId: '00000000-0000-4000-8000-000000000001', state: 'RECOVERING',
     // exactly what reconciler.mjs writes before it spawns the runner
-    lease: { attemptId: 'supervisor-attempt', token: 'tok', expiresAt: 20_180, pid: 4242 },
+    recoveryLease: { attemptId: 'supervisor-attempt', token: 'tok', expiresAt: 20_180, pid: 4242, startedAt: 1 },
   };
   h.state = state;
 
   const result = await runCli(['lease', '--run-id', 'one'], h.deps);
 
   assert.equal(result.code, 0, 'the session the supervisor just resumed must be able to work');
-  assert.notEqual(h.deps.output.at(-1).trim(), 'skip:recovery-lease-held');
+  assert.equal(h.deps.output.at(-1).trim(), 'action:tick-guard-acquired');
+  // ...and the supervisor's own claim on the run is untouched by it.
+  assert.equal(h.state.runs.one.recoveryLease.attemptId, 'supervisor-attempt');
+  assert.equal(h.state.runs.one.tickGuard.sessionId, '00000000-0000-4000-8000-000000000001');
+});
+
+test('a different session cannot steal a live tick guard', async () => {
+  const h = harness();
+  const state = defaultState();
+  state.runs.one = {
+    runId: 'one', sessionId: '00000000-0000-4000-8000-000000000001', state: 'RUNNING',
+    tickGuard: { sessionId: '00000000-0000-4000-8000-0000000000ff', expiresAt: 21_000 },
+  };
+  h.state = state;
+  const result = await runCli(['lease', '--run-id', 'one'], h.deps);
+  assert.equal(result.code, 1);
+  assert.equal(h.deps.output.at(-1).trim(), 'skip:tick-guard-held');
+});
+
+test('trigger-now refuses to release a runner that is still working', async () => {
+  // Clearing that lease would start a second `claude --resume` on the same
+  // session, concurrently with the first — the exact corruption the whole
+  // liveness check exists to prevent. The operator can still force it.
+  const h = harness();
+  const state = defaultState();
+  state.runs.busy = {
+    runId: 'busy', sessionId: '00000000-0000-4000-8000-000000000001', state: 'RECOVERING',
+    recoveryLease: { attemptId: 'live-runner', token: 'tok', expiresAt: 20_180, pid: 4242, startedAt: 1 },
+  };
+  h.state = state;
+  h.deps.runnerLiveness = async () => 'alive';
+
+  const refused = await runCli(['trigger-now', '--run-id', 'busy'], h.deps);
+  assert.equal(refused.code, 1);
+  assert.equal(h.deps.output.at(-1).trim(), 'skip:runner-alive');
+  assert.equal(h.state.runs.busy.recoveryLease.attemptId, 'live-runner', 'the lease must be untouched');
+  assert.ok(!h.calls.includes('reconcile'));
+
+  const forced = await runCli(['trigger-now', '--run-id', 'busy', '--force'], h.deps);
+  assert.equal(forced.code, 0);
+  assert.equal(h.state.runs.busy.recoveryLease.attemptId, null);
 });
 
 test('unknown commands and missing runs emit distinct errors', async () => {

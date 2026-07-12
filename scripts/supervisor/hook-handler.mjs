@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { ConfigStore } from './config.mjs';
 import { parseSupervisorLedger } from './ledger.mjs';
 import { isTerminalState } from './state-machine.mjs';
-import { StateStore } from './state-store.mjs';
+import { StateStore, emptyRecoveryLease } from './state-store.mjs';
 import { currentRateLimitStart, estimateReset, stableJitterSeconds } from './usage-provider.mjs';
 
 function dataRoot() {
@@ -34,7 +34,8 @@ function newRun(metadata, event, ledgerPath) {
     scheduleState: null,
     scheduleConfidence: null,
     updatedAt: metadata.heartbeatAt,
-    lease: { attemptId: null, token: null, lastRenewedAt: null, expiresAt: null },
+    recoveryLease: emptyRecoveryLease(),
+    tickGuard: null,
     retry: { attempts: 0, nextAttemptAt: null },
     quotaRejections: { consecutive: 0, backoffLevel: 0, nextProbeAt: null, lastNotifiedAt: null },
   };

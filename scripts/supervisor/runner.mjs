@@ -7,13 +7,14 @@ import { ConfigStore } from './config.mjs';
 import { WINDOW_SECONDS } from './constants.mjs';
 import { mkdir } from 'node:fs/promises';
 import { runActivation as executeActivation, runClaude as executeClaude, startActivationProcess, startClaudeProcess } from './claude-runner.mjs';
-import { StateStore } from './state-store.mjs';
+import { StateStore, emptyRecoveryLease } from './state-store.mjs';
 import { currentRateLimitStart, estimateReset, stableJitterSeconds } from './usage-provider.mjs';
 import { createNotifier } from './notifier.mjs';
+import { processStartedAt } from './platform.mjs';
 import { appendBoundedLog } from './logger.mjs';
 
 function clearLease() {
-  return { attemptId: null, token: null, lastRenewedAt: null, expiresAt: null };
+  return emptyRecoveryLease();
 }
 
 function resetQuota() {
@@ -30,7 +31,7 @@ function allowedAnchor(usage, now) {
 
 export function finalizeAttempt(state, runId, token, result, now, config) {
   const run = state.runs[runId];
-  if (!run || run.lease?.token !== token) return state;
+  if (!run || run.recoveryLease?.token !== token) return state;
   const next = structuredClone(state);
   const current = next.runs[runId];
   if (result.kind === 'success') {
@@ -48,7 +49,7 @@ export function finalizeAttempt(state, runId, token, result, now, config) {
       ...current,
       state: 'RUNNING', lastHeartbeatAt: now, updatedAt: now,
       firstRateLimitedAt: null, rateLimitedUntil: null, resetConfidence: 'unknown',
-      lease: clearLease(), retry: { attempts: 0, nextAttemptAt: null },
+      recoveryLease: clearLease(), retry: { attempts: 0, nextAttemptAt: null },
       quotaRejections: resetQuota(), scheduleState: current.scheduleState === 'leased' ? 'handled' : current.scheduleState,
       lastResult: 'result:success',
     };
@@ -73,7 +74,11 @@ export function finalizeAttempt(state, runId, token, result, now, config) {
       state: 'RATE_LIMITED', firstRateLimitedAt, rateLimitedUntil: reset.resetAt,
       resetConfidence: reset.confidence, scheduledResetAt: reset.resetAt,
       scheduledResumeAt: nextProbeAt ?? reset.resetAt + jitter,
-      scheduleConfidence: reset.confidence, scheduleState: 'pending', lease: clearLease(),
+      // Why this run is parked. Inferring it later from scheduleConfidence was
+      // wrong in exactly the common case: an escalation records the *usage*
+      // confidence, which is 'exact' whenever a status line is present.
+      scheduleSource: nextProbeAt ? 'quota-backoff' : 'reset',
+      scheduleConfidence: reset.confidence, scheduleState: 'pending', recoveryLease: clearLease(),
       quotaRejections: { consecutive, backoffLevel, nextProbeAt, lastNotifiedAt: lastResult.endsWith('escalated') ? now : current.quotaRejections?.lastNotifiedAt ?? null },
       lastResult, updatedAt: now,
     };
@@ -83,7 +88,7 @@ export function finalizeAttempt(state, runId, token, result, now, config) {
   const delays = [300, 1200, 3600];
   next.runs[runId] = {
     ...current,
-    state: 'FAILED', lease: clearLease(),
+    state: 'FAILED', recoveryLease: clearLease(),
     // `attempts` already counts this failure, so scheduling while `attempts <=
     // max` schedules one more invocation than the configured maximum: three
     // permitted failures produced a fourth `claude --resume`.
@@ -118,24 +123,25 @@ export function finalizeActivation(state, token, result, now) {
   return next;
 }
 
-async function renewLease(store, runId, token, now, config, pid = process.pid) {
+// A pid alone is not an identity — the OS reuses it. Recording the process start
+// time alongside it is what lets the reconciler tell "our runner, still working
+// through a suspend" from "a stranger who inherited its number".
+async function renewLease(store, runId, token, now, config, identity) {
   await store.update((state) => {
     const run = state.runs[runId];
-    if (!run || run.lease?.token !== token) return state;
+    if (!run || run.recoveryLease?.token !== token) return state;
     const renewedAt = now();
-    run.lease.lastRenewedAt = renewedAt;
-    run.lease.expiresAt = renewedAt + config.leaseRenewalSeconds * config.leaseMissedRenewals;
-    // Expiry alone does not mean this runner died — a suspended machine stops
-    // the timer while the process lives. The reconciler checks this pid before
-    // it re-issues the lease.
-    run.lease.pid = pid;
+    run.recoveryLease.lastRenewedAt = renewedAt;
+    run.recoveryLease.expiresAt = renewedAt + config.leaseRenewalSeconds * config.leaseMissedRenewals;
+    run.recoveryLease.pid = identity.pid;
+    run.recoveryLease.startedAt = identity.startedAt;
     return state;
   });
 }
 
 export async function runAttempt(attemptId, deps) {
   const state = await deps.store.read();
-  const entry = Object.entries(state.runs).find(([, run]) => run.lease?.attemptId === attemptId);
+  const entry = Object.entries(state.runs).find(([, run]) => run.recoveryLease?.attemptId === attemptId);
   if (!entry && state.activation.inProgress && state.activation.attemptId === attemptId) {
     const interval = deps.setInterval(() => {
       deps.store.update((current) => {
@@ -165,7 +171,7 @@ export async function runAttempt(attemptId, deps) {
   if (!entry) return { code: 'skip:attempt-not-found' };
   const [runId, run] = entry;
   const interval = deps.setInterval(
-    () => renewLease(deps.store, runId, run.lease.token, deps.now, deps.config).catch(() => {}),
+    () => renewLease(deps.store, runId, run.recoveryLease.token, deps.now, deps.config, deps.identity).catch(() => {}),
     deps.config.leaseRenewalSeconds * 1000,
   );
   let result;
@@ -184,8 +190,8 @@ export async function runAttempt(attemptId, deps) {
     // finalizeAttempt no-ops on a token mismatch and returns the state unchanged,
     // so the saved record still carries the winner's result. Without this flag a
     // superseded attempt would report the winner's success as its own.
-    applied = current.runs[runId]?.lease?.token === run.lease.token;
-    finalized = finalizeAttempt(current, runId, run.lease.token, result, deps.now(), deps.config);
+    applied = current.runs[runId]?.recoveryLease?.token === run.recoveryLease.token;
+    finalized = finalizeAttempt(current, runId, run.recoveryLease.token, result, deps.now(), deps.config);
     return finalized;
   });
   if (!applied) return { code: 'skip:stale-attempt' };
@@ -220,8 +226,11 @@ async function main() {
   await mkdir(activationCwd, { recursive: true });
   const config = await new ConfigStore(root).read();
   const now = () => Math.floor(Date.now() / 1000);
+  // Read once, at start: this is the identity the reconciler later matches a
+  // surviving pid against, so that a recycled number cannot pose as this runner.
+  const identity = { pid: process.pid, startedAt: await processStartedAt(process.pid) };
   const result = await runAttempt(attemptId, {
-    store: new StateStore(root), config, now,
+    store: new StateStore(root), config, now, identity,
     runClaude: (attempt) => executeClaude(attempt, {
       now,
       startClaude: (value) => startClaudeProcess(value, { executable: config.claudePath }),

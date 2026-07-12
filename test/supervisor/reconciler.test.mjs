@@ -22,7 +22,8 @@ async function harness(run, overrides = {}) {
       store, config: defaultConfig(), now: () => now,
       readObservationBatch: async () => [], commitObservationBatch: async () => {},
       readHeartbeats: async () => ({}), readLedgerHeartbeat: async () => null,
-      isRunnerAlive: async () => false,
+      runnerLiveness: async () => 'dead',
+      notifyStuck: async () => {},
       spawnRunner: (attempt) => { spawnCalls.push(attempt); return { unref() {} }; },
       notifyWindow: async () => {},
       randomUUID: () => 'attempt-1',
@@ -37,7 +38,8 @@ function run(overrides = {}) {
     state: 'RUNNING', cwd: 'C:\\repo', ledgerPath: 'C:\\repo\\.afk\\afk-ledger.md',
     lastHeartbeatAt: now - 2_000, nextExpectedTickAt: now - 500,
     scheduledResetAt: null, scheduledResumeAt: null, scheduleState: null,
-    lease: { attemptId: null, token: null, expiresAt: null }, retry: { attempts: 0, nextAttemptAt: null },
+    recoveryLease: { attemptId: null, token: null, expiresAt: null, pid: null, startedAt: null, stuckNotifiedAt: null },
+    tickGuard: null, retry: { attempts: 0, nextAttemptAt: null },
     quotaRejections: { consecutive: 0, backoffLevel: 0, nextProbeAt: null },
     ...overrides,
   };
@@ -56,7 +58,7 @@ test('a pass that lost the race never leases a run a second time', async () => {
     // Another pass leased this run while we were reading its ledger.
     await h.store.update((state) => {
       state.runs['run-1'].state = 'RECOVERING';
-      state.runs['run-1'].lease = { attemptId: 'other', token: 'other-token', expiresAt: now + 180, pid: null };
+      state.runs['run-1'].recoveryLease = { attemptId: 'other', token: 'other-token', expiresAt: now + 180, pid: null, startedAt: null };
       return state;
     });
     return null;
@@ -64,7 +66,7 @@ test('a pass that lost the race never leases a run a second time', async () => {
   const result = await reconcileOnce(h.deps);
   assert.equal(result.code, 'skip:state-changed');
   assert.equal(h.spawnCalls.length, 0);
-  assert.equal((await h.store.read()).runs['run-1'].lease.attemptId, 'other');
+  assert.equal((await h.store.read()).runs['run-1'].recoveryLease.attemptId, 'other');
 });
 
 test('a runner that outlived its lease still occupies its invocation slot', async () => {
@@ -74,8 +76,8 @@ test('a runner that outlived its lease still occupies its invocation slot', asyn
   // a second one against the same session.
   const h = await harness(run({
     state: 'RECOVERING', lastHeartbeatAt: now - 99_999, nextExpectedTickAt: null,
-    lease: { attemptId: 'a', token: 't', expiresAt: now - 1, pid: 4242 },
-  }), { isRunnerAlive: async (pid) => pid === 4242 });
+    recoveryLease: { attemptId: 'a', token: 't', expiresAt: now - 1, pid: 4242, startedAt: 1 },
+  }), { runnerLiveness: async (l) => (l.pid === 4242 ? 'alive' : 'dead'), notifyStuck: async () => {} });
   const result = await reconcileOnce(h.deps);
   assert.equal(result.code, 'skip:concurrency-exhausted');
   assert.equal(h.spawnCalls.length, 0);
@@ -88,11 +90,12 @@ test('an occupied run is skipped, never re-leased, and never starves the others'
   const busy = run({
     runId: 'a-busy', state: 'RECOVERING', scheduledResumeAt: 100, scheduleState: 'leased',
     lastHeartbeatAt: now - 99_999, nextExpectedTickAt: null,
-    lease: { attemptId: 'a', token: 't', expiresAt: now - 1, pid: 4242 },
+    recoveryLease: { attemptId: 'a', token: 't', expiresAt: now - 1, pid: 4242, startedAt: 1 },
   });
   const h = await harness(busy, {
     config: { ...defaultConfig(), maxConcurrentInvocations: 2 },
-    isRunnerAlive: async (pid) => pid === 4242,
+    runnerLiveness: async (l) => (l.pid === 4242 ? 'alive' : 'dead'),
+    notifyStuck: async () => {},
   });
   await h.store.update((state) => {
     state.runs['b-due'] = run({
@@ -107,7 +110,7 @@ test('an occupied run is skipped, never re-leased, and never starves the others'
   assert.equal(result.code, 'action:runner-started');
   assert.equal(h.spawnCalls.length, 1);
   assert.equal(h.spawnCalls[0].runId, 'b-due', 'the occupied run must not be resumed a second time');
-  assert.equal((await h.store.read()).runs['a-busy'].lease.attemptId, 'a', 'its lease is untouched');
+  assert.equal((await h.store.read()).runs['a-busy'].recoveryLease.attemptId, 'a', 'its lease is untouched');
 });
 
 test('a ledger heartbeat from the future never satisfies a reset', async () => {
@@ -134,8 +137,8 @@ test('a live runner occupies its slot however long the machine slept', async () 
   // session. A live pid occupies, with no time bound.
   const h = await harness(run({
     state: 'RECOVERING', lastHeartbeatAt: now - 99_999, nextExpectedTickAt: null,
-    lease: { attemptId: 'a', token: 't', expiresAt: now - 5 * defaultConfig().recoveryAttemptTimeoutSeconds, pid: 4242 },
-  }), { isRunnerAlive: async () => true, notifyStuck: async () => {} });
+    recoveryLease: { attemptId: 'a', token: 't', expiresAt: now - 5 * defaultConfig().recoveryAttemptTimeoutSeconds, pid: 4242, startedAt: 1 },
+  }), { runnerLiveness: async () => 'alive', notifyStuck: async () => {} });
   const result = await reconcileOnce(h.deps);
   assert.equal(result.code, 'skip:concurrency-exhausted');
   assert.equal(h.spawnCalls.length, 0);
@@ -147,8 +150,8 @@ test('a lease held past its timeout by a live pid tells the operator', async () 
   const stuck = [];
   const h = await harness(run({
     state: 'RECOVERING', lastHeartbeatAt: now - 99_999, nextExpectedTickAt: null,
-    lease: { attemptId: 'a', token: 't', expiresAt: now - defaultConfig().recoveryAttemptTimeoutSeconds - 1, pid: 4242 },
-  }), { isRunnerAlive: async () => true, notifyStuck: async (r) => { stuck.push(r.runId); } });
+    recoveryLease: { attemptId: 'a', token: 't', expiresAt: now - defaultConfig().recoveryAttemptTimeoutSeconds - 1, pid: 4242, startedAt: 1 },
+  }), { runnerLiveness: async () => 'alive', notifyStuck: async (r) => { stuck.push(r.runId); } });
   await reconcileOnce(h.deps);
   assert.deepEqual(stuck, ['run-1']);
 });
@@ -159,10 +162,10 @@ test('an in-session AFK lease never consumes the supervisor invocation slot', as
   // running repo disable recovery for every other repo, continuously.
   const insession = run({
     runId: 'a-interactive', state: 'RUNNING',
-    lease: { attemptId: 'in-session-00000000-0000-4000-8000-000000000001', token: 't', expiresAt: now + 1_500, pid: null },
+    tickGuard: { sessionId: '00000000-0000-4000-8000-000000000001', expiresAt: now + 1_500 },
     lastHeartbeatAt: now - 10, nextExpectedTickAt: now + 900,
   });
-  const h = await harness(insession, { isRunnerAlive: async () => false });
+  const h = await harness(insession, { runnerLiveness: async () => 'dead' });
   await h.store.update((state) => {
     state.runs['b-due'] = run({
       runId: 'b-due', sessionId: '00000000-0000-4000-8000-000000000002',
@@ -182,7 +185,7 @@ test('a lease expiry from a stepped clock does not occupy its slot for ever', as
   // reaps run leases, so an unclamped one holds the only invocation slot for good.
   const h = await harness(run({
     state: 'RECOVERING', lastHeartbeatAt: now - 99_999, nextExpectedTickAt: null,
-    lease: { attemptId: 'a', token: 't', expiresAt: now + 400 * 86_400, pid: null },
+    recoveryLease: { attemptId: 'a', token: 't', expiresAt: now + 400 * 86_400, pid: null, startedAt: 1 },
   }));
   const result = await reconcileOnce(h.deps);
   assert.equal(result.code, 'action:runner-started');
@@ -292,5 +295,5 @@ test('dry run reports action without writing lease or spawning', async () => {
   const result = await reconcileOnce(h.deps);
   assert.equal(result.code, 'action:would-start-runner');
   assert.equal(h.spawnCalls.length, 0);
-  assert.equal((await h.store.read()).runs['run-1'].lease.attemptId, before.runs['run-1'].lease.attemptId);
+  assert.equal((await h.store.read()).runs['run-1'].recoveryLease.attemptId, before.runs['run-1'].recoveryLease.attemptId);
 });

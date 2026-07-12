@@ -53,9 +53,38 @@ function plainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+export function emptyRecoveryLease() {
+  return { attemptId: null, token: null, lastRenewedAt: null, expiresAt: null, pid: null, startedAt: null, stuckNotifiedAt: null };
+}
+
+// The old shape had one `lease` field carrying two different claims. Which one it
+// held was encoded in a string prefix on the attempt id — that overload is the
+// bug this schema exists to remove, so the migration decodes it once and for all.
+function migrateRun(run) {
+  if (!plainObject(run)) return run;
+  const { lease, ...rest } = run;
+  if (!plainObject(lease)) {
+    return { recoveryLease: emptyRecoveryLease(), tickGuard: null, ...rest };
+  }
+  const owner = String(lease.attemptId ?? '');
+  if (owner.startsWith('in-session-')) {
+    return {
+      ...rest,
+      recoveryLease: emptyRecoveryLease(),
+      tickGuard: { sessionId: owner.slice('in-session-'.length), expiresAt: lease.expiresAt ?? null },
+    };
+  }
+  return {
+    ...rest,
+    recoveryLease: { ...emptyRecoveryLease(), ...lease },
+    tickGuard: null,
+  };
+}
+
 export function migrateState(value) {
   if (!plainObject(value)) throw new TypeError('state must be an object');
   const base = defaultState();
+  const runs = plainObject(value.runs) ? value.runs : {};
   const migrated = {
     ...base,
     ...value,
@@ -63,7 +92,7 @@ export function migrateState(value) {
     revision: Number.isInteger(value.revision) && value.revision >= 0 ? value.revision : 0,
     usage: { ...base.usage, ...(plainObject(value.usage) ? value.usage : {}) },
     sessions: plainObject(value.sessions) ? value.sessions : {},
-    runs: plainObject(value.runs) ? value.runs : {},
+    runs: Object.fromEntries(Object.entries(runs).map(([id, run]) => [id, migrateRun(run)])),
     activation: {
       ...base.activation,
       ...(plainObject(value.activation) ? value.activation : {}),

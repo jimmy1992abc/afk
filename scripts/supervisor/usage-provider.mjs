@@ -83,6 +83,7 @@ export function scheduleRun(run, resetAt, confidence, config, now) {
     scheduledResumeAt: Math.max(resetAt + jitter, now),
     scheduleState: 'pending',
     scheduleConfidence: confidence,
+    scheduleSource: 'reset',
   };
 }
 
@@ -156,12 +157,15 @@ export function applyUsageObservation(state, observation, config) {
     if (!(newWindow && weeklyHeadroom)) continue;
     run.quotaRejections = { consecutive: 0, backoffLevel: 0, nextProbeAt: null, lastNotifiedAt: null };
     // Clearing the counter is not enough: the escalation also parked the run on a
-    // 24-hour scheduledResumeAt, which would still hold it out.
-    if (run.scheduleConfidence === 'estimated') {
+    // 24-hour scheduledResumeAt, which would still hold it out. Release exactly
+    // the schedules the escalation created — recorded at the time, not guessed
+    // afterwards from a confidence flag that says something else.
+    if (run.scheduleSource === 'quota-backoff') {
       run.scheduledResumeAt = null;
       run.scheduledResetAt = null;
       run.scheduleState = null;
       run.scheduleConfidence = null;
+      run.scheduleSource = null;
     }
   }
   // used_percentage is a float derived from a utilization ratio, so an exhausted

@@ -6,9 +6,10 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { ConfigStore, validateConfig } from './config.mjs';
 import { createInstallDeps, installSupervisor, preflightClaude, repairSupervisor, statusSupervisor, uninstallSupervisor } from './install.mjs';
+import { runnerLiveness } from './platform.mjs';
 import { main as reconcileMain } from './supervisor.mjs';
 import { transitionRun } from './state-machine.mjs';
-import { StateStore } from './state-store.mjs';
+import { StateStore, emptyRecoveryLease } from './state-store.mjs';
 import { scheduleRun } from './usage-provider.mjs';
 
 const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -100,7 +101,8 @@ function newRunRecovery() {
   return {
     firstRateLimitedAt: null, rateLimitedUntil: null, resetConfidence: 'unknown',
     scheduledResumeAt: null, scheduledResetAt: null, scheduleState: null, scheduleConfidence: null,
-    lease: { attemptId: null, token: null, lastRenewedAt: null, expiresAt: null },
+    recoveryLease: emptyRecoveryLease(),
+    tickGuard: null,
     retry: { attempts: 0, nextAttemptAt: null },
     quotaRejections: { consecutive: 0, backoffLevel: 0, nextProbeAt: null, lastNotifiedAt: null },
   };
@@ -123,7 +125,8 @@ async function transition(args, deps) {
       found = true;
       state.runs[args.runId] = transitionRun(run, args.state, deps.now());
       if (['COMPLETED', 'BLOCKED', 'AUTO_PAUSED'].includes(args.state)) {
-        state.runs[args.runId].lease = { attemptId: null, token: null, lastRenewedAt: null, expiresAt: null };
+        state.runs[args.runId].recoveryLease = emptyRecoveryLease();
+        state.runs[args.runId].tickGuard = null;
         state.runs[args.runId].scheduleState = 'cancelled';
       }
       return state;
@@ -132,47 +135,63 @@ async function transition(args, deps) {
   return found ? emit(deps, `action:run-${args.state.toLowerCase()}`) : emit(deps, 'skip:run-not-registered', 1);
 }
 
+// The in-session tick's overlap guard. It is NOT the supervisor's recovery lease:
+// when the supervisor resumes a run, the session it starts runs this command, and
+// under the old single-lease shape it found the supervisor's own claim, concluded
+// another layer owned recovery, and exited without doing any work — for ever.
+//
+// The two claims are now separate fields. A session resumed by the supervisor
+// takes its own guard and gets on with it. The only thing that blocks it is
+// *another session* holding the guard, which is the overlap this guard is for.
 async function lease(args, deps) {
   let result = 'skip:run-not-registered';
   await deps.stateStore.update((state) => {
     const run = state.runs[args.runId];
     if (!run) return state;
-    const owner = `in-session-${run.sessionId}`;
-    if (run.lease?.expiresAt > deps.now() && run.lease.attemptId !== owner) {
-      result = 'skip:recovery-lease-held'; return state;
+    const guard = run.tickGuard;
+    const mine = guard?.sessionId === run.sessionId;
+    if (guard && !mine && guard.expiresAt > deps.now()) {
+      result = 'skip:tick-guard-held'; return state;
     }
-    const config = deps.currentConfig;
-    run.lease = {
-      attemptId: owner, token: run.lease?.attemptId === owner ? run.lease.token : randomUUID(), lastRenewedAt: deps.now(),
-      expiresAt: deps.now() + config.heartbeatStaleSeconds,
+    run.tickGuard = {
+      sessionId: run.sessionId,
+      expiresAt: deps.now() + deps.currentConfig.heartbeatStaleSeconds,
     };
     run.lastHeartbeatAt = deps.now();
-    result = 'action:in-session-lease-acquired';
+    result = 'action:tick-guard-acquired';
     return state;
   });
   return emit(deps, result, result.startsWith('action:') ? 0 : 1);
 }
 
+// The operator's only manual escape hatch, and the runs they reach for it with are
+// exactly the ones the selector refuses: a run in retry backoff, a run that
+// exhausted its attempts, a run wedged behind a lease whose runner is gone.
+// Arming a schedule alone changes none of those, so it clears every hold it may
+// safely clear.
+//
+// What it must NOT clear is a lease whose runner is genuinely still working:
+// wiping that would start a second `claude --resume` on the same session, which
+// is the corruption the whole liveness check exists to prevent.
 async function triggerNow(args, deps) {
-  let found = false;
+  const before = await deps.stateStore.read();
+  const target = before.runs[args.runId];
+  if (!target) return emit(deps, 'skip:run-not-registered', 1);
+  if (await deps.runnerLiveness(target.recoveryLease) === 'alive' && !args.force) {
+    return emit(deps, 'skip:runner-alive', 1);
+  }
+
   await deps.stateStore.update((state) => {
     const run = state.runs[args.runId];
     if (!run) return state;
-    found = true;
-    // The operator's only manual escape hatch, and the runs they reach for it
-    // with are exactly the ones the selector refuses: a run in retry backoff, a
-    // run that exhausted its attempts, a run wedged behind a lease whose runner
-    // is gone. Arming a schedule alone changes none of those — the selector
-    // short-circuits long before it looks at the schedule.
     run.quotaRejections = { consecutive: 0, backoffLevel: 0, nextProbeAt: null, lastNotifiedAt: null };
     run.retry = { attempts: 0, nextAttemptAt: null };
-    run.lease = { attemptId: null, token: null, lastRenewedAt: null, expiresAt: null, pid: null };
+    run.recoveryLease = emptyRecoveryLease();
     run.scheduledResumeAt = deps.now();
     run.scheduledResetAt ??= deps.now();
     run.scheduleState = 'pending';
     return state;
   });
-  if (!found) return emit(deps, 'skip:run-not-registered', 1);
   const result = await deps.reconcile();
   return emit(deps, result.code);
 }
@@ -218,6 +237,7 @@ export function productionDeps() {
     install: () => installSupervisor(installDeps), repair: () => repairSupervisor(installDeps),
     uninstall: () => uninstallSupervisor(installDeps), installStatus: () => statusSupervisor(installDeps),
     reconcile: () => reconcileMain(['--once']), writeOutput: (text) => process.stdout.write(text),
+    runnerLiveness: (lease) => runnerLiveness(lease),
   };
 }
 

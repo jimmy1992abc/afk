@@ -121,8 +121,10 @@ or renew the shared guard:
 node "<plugin-root>/scripts/supervisor/cli.mjs" lease --run-id "<run-id>"
 ```
 
-`skip:recovery-lease-held` means another lifecycle layer owns recovery; exit the
-tick without counting it as no progress.
+`skip:tick-guard-held` means another *session* is already ticking this run; exit
+the tick without counting it as no progress. The OS supervisor's own recovery
+lease is a separate claim and never blocks you — if it has resumed you, it wants
+you to work.
 
 - **If the host supports scheduled re-invocation** (a cron or wake-up), set up a
   recurring tick that re-invokes you; the tick prompt is static (scope, order,

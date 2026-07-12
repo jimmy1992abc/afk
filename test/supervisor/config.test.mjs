@@ -82,3 +82,14 @@ test('a config file is written without world-readable secrets in its path', asyn
   const raw = await readFile(join(root, 'config.json'), 'utf8');
   assert.deepEqual(JSON.parse(raw), defaultConfig());
 });
+
+test('retention must outlast the longest hold a run can legitimately wait out', () => {
+  // These two constants used to be equal (604800), so a run parked on the maximum
+  // quota probe was deleted at the exact moment that probe became due. Make it
+  // arithmetically impossible to configure that again.
+  assert.throws(
+    () => validateConfig({ terminalRunRetentionSeconds: defaultConfig().quotaEscalationMaxSeconds }),
+    /must exceed the longest hold/,
+  );
+  assert.doesNotThrow(() => validateConfig({}));
+});

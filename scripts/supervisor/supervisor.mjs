@@ -9,7 +9,8 @@ import { commitObservationBatch, readObservationBatch, sweepObservations } from 
 import { readLedgerHeartbeatFile } from './ledger.mjs';
 import { reconcileOnce } from './reconciler.mjs';
 import { StateStore } from './state-store.mjs';
-import { createWindowNotifier } from './notifier.mjs';
+import { createStuckNotifier, createWindowNotifier } from './notifier.mjs';
+import { runnerLiveness } from './platform.mjs';
 import { appendBoundedLog } from './logger.mjs';
 
 // The scheduler pins the root it installed into. Without it the worker would
@@ -44,10 +45,15 @@ export async function main(argv = process.argv.slice(2)) {
       return Object.fromEntries(pairs.filter(([, heartbeat]) => Number.isFinite(heartbeat)));
     },
     readLedgerHeartbeat: (run) => readLedgerHeartbeatFile(run.ledgerPath, run.runId, run.sessionId),
-    // A lease that expired while its runner slept is not an abandoned lease.
-    isRunnerAlive: async (pid) => {
-      try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; }
-    },
+    // A pid is not an identity. Only a process whose start time matches the one
+    // the runner recorded is that runner; anything else is a stranger wearing a
+    // recycled number.
+    runnerLiveness: (lease) => runnerLiveness(lease),
+    // This is the operator's signal that a run is wedged behind a runner that
+    // will not finish. It was written last round and never wired up, so the whole
+    // "the operator has trigger-now" argument rested on a notification that could
+    // not fire.
+    notifyStuck: createStuckNotifier({ root: data }),
     notifyWindow: createWindowNotifier({ root: data }),
     dryRun: argv.includes('--dry-run'),
     spawnRunner: (attempt) => spawn(process.execPath, [fileURLToPath(runner), '--attempt', attempt.id], {

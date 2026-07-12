@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { applyUsageObservation } from './usage-provider.mjs';
-import { pruneState, selectCandidate, transitionRun, usableHeartbeat } from './state-machine.mjs';
+import { pruneState, runnerOwns, selectCandidate, transitionRun, usableHeartbeat } from './state-machine.mjs';
 
 function applyBatch(state, batch, config) {
   return batch.reduce((current, item) => applyUsageObservation(current, item.observation, config), state);
@@ -21,43 +21,67 @@ function heartbeatDecision(run, rawHeartbeat, config, now) {
   return null;
 }
 
-// A lease that expired while its machine slept still has a live runner behind it,
-// so a live pid always means occupied — with no time bound. Bounding it by the
-// action timeout would be self-defeating: that timeout is a timer, and suspend
-// stops timers while the wall clock keeps running, so the bound would expire in
-// exactly the scenario the check exists for and a second Claude would resume the
-// same session.
+// Liveness only has to be resolved for a lease that has already expired. While it
+// is live the lease itself says the run is occupied, so the steady state costs
+// nothing — the OS is asked only after a crash or a suspend.
 //
-// The residual risk is pid reuse: a recycled pid keeps a run occupied for ever.
-// That is a wedged run, not a corrupted one, and the operator has `trigger-now`
-// to clear the lease by hand. The supervisor says so rather than guessing.
-async function aliveRunIds(state, deps, now) {
-  const alive = new Set();
+// A pid is not an identity: the OS reuses it, aggressively on Windows. Only a pid
+// whose process *start time* matches the one we recorded is our runner. That is
+// what lets a live runner be trusted with no time bound — which suspend requires,
+// because suspend stops the very timers any time bound would rely on.
+//
+//   alive   — our runner is still working. Occupied, and it is a real Claude
+//             invocation, so it consumes a slot.
+//   dead    — gone, or a stranger wearing its number. Free to re-lease.
+//   unknown — we could not tell. Occupied, so we never double-drive it, but it
+//             does NOT consume the global slot: an unverifiable pid must be able
+//             to wedge at most its own run, never the whole supervisor.
+async function resolveLiveness(state, deps, now) {
+  const aliveRuns = new Set();
+  const unknownRuns = new Set();
   for (const [runId, run] of Object.entries(state.runs)) {
-    const lease = run.lease;
-    if (!Number.isFinite(lease?.pid)) continue;
-    if (!await deps.isRunnerAlive(lease.pid)) continue;
-    alive.add(runId);
+    const lease = run.recoveryLease;
+    if (!Number.isInteger(lease?.pid)) continue;
+    if (runnerOwns(run, now, deps.config)) continue;
+
+    const liveness = await deps.runnerLiveness(lease);
+    if (liveness === 'alive') aliveRuns.add(runId);
+    else if (liveness === 'unknown') unknownRuns.add(runId);
+    else continue;
+
     const overdue = Number.isFinite(lease.expiresAt)
       && now - lease.expiresAt > deps.config.recoveryAttemptTimeoutSeconds;
-    if (overdue) await deps.notifyStuck?.(run).catch?.(() => {});
+    const quiet = !Number.isFinite(lease.stuckNotifiedAt)
+      || now - lease.stuckNotifiedAt > deps.config.recoveryAttemptTimeoutSeconds;
+    if (overdue && quiet) {
+      await deps.notifyStuck(run, liveness);
+      await deps.store.update((current) => {
+        const held = current.runs[runId];
+        if (held?.recoveryLease) held.recoveryLease.stuckNotifiedAt = now;
+        return current;
+      });
+    }
   }
-  return alive;
+  return { aliveRuns, unknownRuns };
 }
 
 export async function reconcileOnce(deps) {
   const now = deps.now();
   const batch = await deps.readObservationBatch();
   const heartbeats = await deps.readHeartbeats();
-  let state = await deps.store.update((current) => {
-    pruneState(current, deps.config, now);
-    return batch.length > 0 ? applyBatch(current, batch, deps.config) : current;
-  });
+  let state = await deps.store.update((current) => (
+    batch.length > 0 ? applyBatch(current, batch, deps.config) : current
+  ));
   if (batch.length > 0) {
     await deps.commitObservationBatch(batch);
   }
-  const aliveRuns = await aliveRunIds(state, deps, now);
-  const inputs = { heartbeats, aliveRuns };
+  const { aliveRuns, unknownRuns } = await resolveLiveness(state, deps, now);
+  const inputs = { heartbeats, aliveRuns, unknownRuns };
+  // Pruning asks the same runnability question the selector does, so it can only
+  // run once liveness is known: a run held by a live runner is waiting, not
+  // abandoned, and deleting it is how the mechanism meant to resume it destroyed
+  // it instead.
+  state = await deps.store.update((current) => pruneState(current, deps.config, now, inputs));
   const decision = selectCandidate(state, inputs, deps.config, now);
   if (decision.kind === 'notify') {
     if (deps.dryRun) return { code: 'action:would-notify-window' };
@@ -98,7 +122,15 @@ export async function reconcileOnce(deps) {
   if (decision.kind === 'handle') {
     await deps.store.update((current) => {
       const run = current.runs[decision.runId];
-      if (run) current.runs[decision.runId] = { ...run, scheduleState: 'handled', scheduleOutcome: decision.code, updatedAt: now };
+      if (!run) return current;
+      // The same write the invoke path performs for the same decision. The two
+      // used to diverge, one persisting the heartbeat that satisfied the reset and
+      // the other not.
+      const heartbeat = usableHeartbeat(heartbeats[decision.runId], now, deps.config);
+      current.runs[decision.runId] = {
+        ...run, scheduleState: 'handled', scheduleOutcome: decision.code, updatedAt: now,
+        ...(Number.isFinite(heartbeat) ? { lastHeartbeatAt: heartbeat } : {}),
+      };
       return current;
     });
     return { code: decision.code };
@@ -137,7 +169,7 @@ export async function reconcileOnce(deps) {
       : transitionRun(run.state === 'RATE_LIMITED' ? transitionRun(run, 'RECOVERY_DUE', now) : run, 'RECOVERING', now);
     current.runs[decision.runId] = {
       ...recovering,
-      lease: { attemptId, token, lastRenewedAt: now, expiresAt, pid: null },
+      recoveryLease: { attemptId, token, lastRenewedAt: now, expiresAt, pid: null, startedAt: null, stuckNotifiedAt: null },
       scheduleState: run.scheduleState === 'pending' ? 'leased' : run.scheduleState,
     };
     attempt = { id: attemptId, token, runId: decision.runId, sessionId: run.sessionId, cwd: run.cwd, ledgerPath: run.ledgerPath };
