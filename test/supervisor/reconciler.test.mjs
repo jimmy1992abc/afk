@@ -52,6 +52,29 @@ const OBSERVATION = {
   source: 'statusline', confidence: 'exact',
 };
 
+test('a pass never waits for the runner it started', async () => {
+  // The supervisor is a ONE-SHOT: the scheduler runs it every minute and it must
+  // exit. A recovery runner lives for hours. If the pass kept a handle on it, launchd
+  // would not start the next pass at all and Windows Task Scheduler would kill this
+  // one at its five-minute limit — and in the meantime nothing else gets reconciled:
+  // no other due run, no observation, no stale claim. The child is detached; the pass
+  // must let go of it.
+  //
+  // Nothing checked this. `spawnRunner` returns a live ChildProcess and the reconciler
+  // is what releases it, which is an implicit contract between two files — and the
+  // other spawn helper in the tree (defaultSpawnDetached) uses the opposite
+  // convention, releasing it itself.
+  const h = await harness(run());
+  const released = [];
+  h.deps.spawnRunner = (attempt) => {
+    h.spawnCalls.push(attempt);
+    return { pid: 4242, unref() { released.push(attempt.id); } };
+  };
+
+  assert.equal((await reconcileOnce(h.deps)).code, 'action:runner-started');
+  assert.equal(released.length, 1, 'the pass must release the runner it started');
+});
+
 test('a lease records the runner it started, at the moment it starts it', async () => {
   // The pid was written only by the runner's own first renewal, a minute later. A
   // runner that died inside that minute — a suspend, which is the very scenario
@@ -238,10 +261,12 @@ test('a new activation claim carries no trace of the last one', async () => {
     state.activation.childStartedAt = 2;
     return state;
   });
-  h.deps.spawnRunner = (attempt) => { h.spawnCalls.push(attempt); return { pid: 5555, unref() {} }; };
+  const released = [];
+  h.deps.spawnRunner = (attempt) => { h.spawnCalls.push(attempt); return { pid: 5555, unref() { released.push(attempt.id); } }; };
   h.deps.processStartedAt = async () => 1_700_000_009_000;
 
   assert.equal((await reconcileOnce(h.deps)).code, 'action:activation-runner-started');
+  assert.equal(released.length, 1, 'an activation runner is released by the pass too');
   const activation = (await h.store.read()).activation;
   assert.equal(activation.pid, 5555, 'the claim must identify THIS attempt, not the last');
   assert.equal(activation.startedAt, 1_700_000_009_000);
