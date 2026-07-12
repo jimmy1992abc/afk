@@ -27,6 +27,7 @@
 ### Task 1: State schema, configuration, atomic store, and lock
 
 **Files:**
+
 - Create: `scripts/supervisor/constants.mjs`
 - Create: `scripts/supervisor/config.mjs`
 - Create: `scripts/supervisor/state-store.mjs`
@@ -35,6 +36,7 @@
 - Create: `test/supervisor/lock.test.mjs`
 
 **Interfaces:**
+
 - Produces: `defaultConfig()`, `validateConfig(value)`, `defaultState()`, `migrateState(value)`, `StateStore`, `withFileLock(options, fn)`.
 - `StateStore` methods: `read()`, `write(next, expectedRevision)`, `update(mutator)`.
 - State writes increment `revision`; stale revisions throw `StateConflictError`.
@@ -95,6 +97,7 @@ git commit -m "feat: add supervisor state store"
 ### Task 2: Usage observations, status-line parser, scheduling, and retention
 
 **Files:**
+
 - Create: `scripts/supervisor/usage-provider.mjs`
 - Create: `scripts/supervisor/observation-inbox.mjs`
 - Create: `scripts/supervisor/statusline-bridge.mjs`
@@ -102,6 +105,7 @@ git commit -m "feat: add supervisor state store"
 - Create: `test/supervisor/observation-inbox.test.mjs`
 
 **Interfaces:**
+
 - Produces: `parseStatuslineSnapshot(json, observedAt)`, `publishObservation(root, snapshot)`, `readObservationBatch(root)`, `applyUsageObservation(state, observation, config)`, `stableJitterSeconds(run, resetAt, config)`.
 - Status-line `resets_at` accepts plausible Unix epoch seconds only; `/usage` ISO strings are rejected.
 
@@ -169,6 +173,7 @@ git commit -m "feat: capture supervisor usage observations"
 ### Task 3: AFK run registration, ledger guard, and Claude hooks
 
 **Files:**
+
 - Create: `scripts/supervisor/ledger.mjs`
 - Create: `scripts/supervisor/hook-handler.mjs`
 - Create: `hooks/hooks.json`
@@ -176,6 +181,7 @@ git commit -m "feat: capture supervisor usage observations"
 - Create: `test/supervisor/hooks.test.mjs`
 
 **Interfaces:**
+
 - Produces: `parseSupervisorLedger(text)`, `registerRun(store, input)`, `transitionRun(store, input)`, `handleHook(event, deps)`.
 - Accepted hook events: `SessionStart` and `StopFailure`; no SessionEnd hook is installed.
 
@@ -231,6 +237,7 @@ git commit -m "feat: register AFK supervisor runs"
 ### Task 4: State machine, reconciler, leases, quota backoff, and duplicate guard
 
 **Files:**
+
 - Create: `scripts/supervisor/state-machine.mjs`
 - Create: `scripts/supervisor/reconciler.mjs`
 - Create: `scripts/supervisor/supervisor.mjs`
@@ -238,6 +245,7 @@ git commit -m "feat: register AFK supervisor runs"
 - Create: `test/supervisor/reconciler.test.mjs`
 
 **Interfaces:**
+
 - Produces: `transitionRun(run, event)`, `selectCandidate(state, inputs, config, now)`, `reconcileOnce(deps)`, `main()`.
 - `reconcileOnce` reads external files outside the lock, applies state under CAS, re-reads the selected ledger outside the lock, then leases and detached-spawns at most one runner.
 
@@ -296,12 +304,14 @@ git commit -m "feat: reconcile AFK supervisor runs"
 ### Task 5: Detached runner and Claude process control
 
 **Files:**
+
 - Create: `scripts/supervisor/claude-runner.mjs`
 - Create: `scripts/supervisor/runner.mjs`
 - Create: `test/supervisor/claude-runner.test.mjs`
 - Create: `test/supervisor/runner.test.mjs`
 
 **Interfaces:**
+
 - Produces: `buildResumeArgs(run)`, `classifyStreamFrame(frame)`, `runClaude(attempt, deps)`, `runAttempt(attemptId, deps)`.
 - `runAttempt` renews leases, kills the process group on quota classification or timeout, and finalizes only a matching lease token.
 
@@ -363,6 +373,7 @@ git commit -m "feat: run headless AFK recovery"
 ### Task 6: Platform schedulers, stable installation, notifications, and status-line chaining
 
 **Files:**
+
 - Create: `scripts/supervisor/platform.mjs`
 - Create: `scripts/supervisor/platform-macos.mjs`
 - Create: `scripts/supervisor/platform-windows.mjs`
@@ -374,6 +385,7 @@ git commit -m "feat: run headless AFK recovery"
 - Create: `test/supervisor/install.test.mjs`
 
 **Interfaces:**
+
 - Produces: `platformAdapter(platform, deps)`, `renderLaunchAgent(values)`, `renderWindowsTask(values)`, `installSupervisor(options)`, `uninstallSupervisor(options)`, `repairSupervisor(options)`, `statusSupervisor(options)`.
 
 - [ ] **Step 1: Write failing platform and idempotence tests**
@@ -432,11 +444,13 @@ git commit -m "feat: install cross-platform AFK supervisor"
 ### Task 7: Supervisor CLI and user-facing skill
 
 **Files:**
+
 - Create: `scripts/supervisor/cli.mjs`
 - Create: `skills/afk-supervisor/SKILL.md`
 - Create: `test/supervisor/cli.test.mjs`
 
 **Interfaces:**
+
 - Produces commands: `setup`, `status`, `enable`, `disable`, `configure`, `repair`, `uninstall`, `trigger-now`, `register`, `transition`, `lease`.
 
 - [ ] **Step 1: Write failing CLI tests**
@@ -486,6 +500,7 @@ git commit -m "feat: add AFK supervisor commands"
 ### Task 8: Integrate AFK lifecycle, documentation, manifests, and release version
 
 **Files:**
+
 - Modify: `skills/afk/SKILL.md`
 - Modify: `README.md`
 - Modify: `plugin.json`
@@ -497,6 +512,7 @@ git commit -m "feat: add AFK supervisor commands"
 - Create: `test/supervisor/afk-integration.test.mjs`
 
 **Interfaces:**
+
 - AFK kickoff registers run/session/cwd/ledger and heartbeat metadata.
 - Every in-session tick calls `lease` before resumable work.
 - Completion, permanent block, and auto-pause call `transition` and retain global usage state.
@@ -541,9 +557,11 @@ git commit -m "feat: integrate AFK supervisor lifecycle"
 ### Task 9: Adversarial self-review and final validation
 
 **Files:**
+
 - Modify only files with confirmed findings from review.
 
 **Interfaces:**
+
 - Produces a clean, PR-ready branch with no unresolved structural finding.
 
 - [ ] **Step 1: Review the complete diff against every design requirement**
