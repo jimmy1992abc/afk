@@ -35,11 +35,15 @@ export function createStuckNotifier(options = {}) {
   const adapter = options.adapter ?? platformAdapter(platform, {
     execFile: (file, args) => execFile(file, args, { windowsHide: true }),
   });
+  // The two cases need different advice, and telling the operator to --force a
+  // runner that is verifiably ALIVE was advice to corrupt the session: the command
+  // now refuses that, because clearing a live claim leaves one Claude writing to the
+  // session and starts a second on top of it. A live runner is ended by ending it.
   return async (run, liveness = 'alive') => adapter.notify(
     'AFK Supervisor needs attention',
     liveness === 'unknown'
       ? `Run ${run.runId} is held by process ${run.recoveryLease?.pid}, which cannot be checked. Recovery of this run is paused. \`afk-supervisor trigger-now --run-id ${run.runId} --force\` releases it.`
-      : `Run ${run.runId} is still held by a runner (pid ${run.recoveryLease?.pid}) that outlived its timeout. If that process is stuck, \`afk-supervisor trigger-now --run-id ${run.runId} --force\` releases it.`,
+      : `Run ${run.runId} is still held by a runner (pid ${run.recoveryLease?.pid}) that outlived its timeout but is still running. It will stop at its own action timeout. To end it sooner, stop pid ${run.recoveryLease?.pid} yourself, then \`afk-supervisor trigger-now --run-id ${run.runId}\`.`,
     { notifyScript: join(options.root, 'worker', 'notify-windows.ps1') },
   );
 }

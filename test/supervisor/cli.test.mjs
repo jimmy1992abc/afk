@@ -213,6 +213,51 @@ test('a stale guard is taken over, not waited on', async () => {
   assert.equal(h.state.runs.one.tickGuard.sessionId, SESSION);
 });
 
+test('trigger-now does not erase a claim taken while it was probing', async () => {
+  // The same check-then-act the tick's guard had, in the other command: the liveness
+  // probe is taken on the lease read BEFORE the lock, and the update then cleared
+  // whichever lease was current. A supervisor pass that claimed the run in that gap
+  // had its claim erased — orphaning a live runner, and letting the reconcile that
+  // trigger-now itself kicks off start a SECOND claude --resume on the same session.
+  const h = harness();
+  await runCli(REGISTER, h.deps);
+  // The gap is between the read and the write, and it exists whether or not a probe
+  // runs: a supervisor pass claims the run while trigger-now is deciding.
+  const realUpdate = h.deps.stateStore.update;
+  h.deps.stateStore.update = async (fn) => realUpdate((state) => {
+    state.runs.one.recoveryLease = {
+      attemptId: 'attempt-B', token: 'tok-B', lastRenewedAt: 20_000, expiresAt: 20_180,
+      pid: 4242, startedAt: 1_700_000_000_000, childPid: null, childStartedAt: null, stuckNotifiedAt: null,
+    };
+    return fn(state);
+  });
+
+  const result = await runCli(['trigger-now', '--run-id', 'one'], h.deps);
+  assert.equal(result.code, 1);
+  assert.match(h.deps.output.at(-1), /skip:runner-active/);
+  assert.equal(h.state.runs.one.recoveryLease.attemptId, 'attempt-B', 'the new claim must survive');
+});
+
+test('trigger-now --force never orphans a Claude that is verifiably alive', async () => {
+  // --force overrides the timers, the tick guard, and a claim we cannot verify — the
+  // states an operator actually reaches for it in. It must not override a runner we
+  // can SEE is alive: clearing that claim leaves a live Claude writing to the session
+  // and starts a second one on top of it. The runner's own action timeout bounds it.
+  const h = harness();
+  await runCli(REGISTER, h.deps);
+  const live = {
+    attemptId: 'attempt-A', token: 'tok-A', lastRenewedAt: 20_000, expiresAt: 20_180,
+    pid: 4242, startedAt: 1_700_000_000_000, childPid: null, childStartedAt: null, stuckNotifiedAt: null,
+  };
+  h.state.runs.one.recoveryLease = { ...live };
+  h.deps.runnerLiveness = async () => 'alive';
+
+  const result = await runCli(['trigger-now', '--run-id', 'one', '--force'], h.deps);
+  assert.equal(result.code, 1);
+  assert.match(h.deps.output.at(-1), /skip:runner-alive/);
+  assert.deepEqual(h.state.runs.one.recoveryLease, live, 'a live claim is left exactly as it was');
+});
+
 test('trigger-now --force releases the claims the notification says it releases', async () => {
   // The stuck notification tells the operator that `trigger-now --force` releases
   // the run. It released only the recovery lease: a live tick guard still returned
@@ -355,9 +400,12 @@ test('a different session cannot steal a live tick guard', async () => {
 });
 
 test('trigger-now refuses to release a runner that is still working', async () => {
-  // Clearing that lease would start a second `claude --resume` on the same
-  // session, concurrently with the first — the exact corruption the whole
-  // liveness check exists to prevent. The operator can still force it.
+  // Clearing that lease would start a second `claude --resume` on the same session,
+  // concurrently with the first — the exact corruption the whole liveness check
+  // exists to prevent. This test used to assert that --force could do it anyway,
+  // which is the same corruption with the operator's name on it. --force overrides
+  // the timers, the tick guard, and a claim we cannot VERIFY; it does not override a
+  // Claude we can see is alive. That runner's own action timeout bounds it.
   const h = harness();
   const state = defaultState();
   state.runs.busy = {
@@ -367,15 +415,13 @@ test('trigger-now refuses to release a runner that is still working', async () =
   h.state = state;
   h.deps.runnerLiveness = async () => 'alive';
 
-  const refused = await runCli(['trigger-now', '--run-id', 'busy'], h.deps);
-  assert.equal(refused.code, 1);
-  assert.equal(h.deps.output.at(-1).trim(), 'skip:runner-alive');
-  assert.equal(h.state.runs.busy.recoveryLease.attemptId, 'live-runner', 'the lease must be untouched');
-  assert.ok(!h.calls.includes('reconcile'));
-
-  const forced = await runCli(['trigger-now', '--run-id', 'busy', '--force'], h.deps);
-  assert.equal(forced.code, 0);
-  assert.equal(h.state.runs.busy.recoveryLease.attemptId, null);
+  for (const argv of [['trigger-now', '--run-id', 'busy'], ['trigger-now', '--run-id', 'busy', '--force']]) {
+    const refused = await runCli(argv, h.deps);
+    assert.equal(refused.code, 1, argv.join(' '));
+    assert.equal(h.deps.output.at(-1).trim(), 'skip:runner-alive');
+    assert.equal(h.state.runs.busy.recoveryLease.attemptId, 'live-runner', 'the lease must be untouched');
+    assert.ok(!h.calls.includes('reconcile'));
+  }
 });
 
 test('unknown commands and missing runs emit distinct errors', async () => {

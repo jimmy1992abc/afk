@@ -223,13 +223,30 @@ async function triggerNow(args, deps) {
   const before = await deps.stateStore.read();
   const target = before.runs[args.runId];
   if (!target) return emit(deps, 'skip:run-not-registered', 1);
-  if (await deps.runnerLiveness(target.recoveryLease) === 'alive' && !args.force) {
+
+  // --force overrides the timers, the tick guard, and a claim we cannot verify — the
+  // states an operator actually reaches for it in. It does not override a runner we
+  // can SEE is alive: clearing that claim would leave a live Claude writing to the
+  // session and start a second one on top of it. The runner's own action timeout
+  // bounds how long it can hold the run.
+  const probed = target.recoveryLease;
+  if (await claimLiveness(probed, deps.runnerLiveness) === 'alive') {
     return emit(deps, 'skip:runner-alive', 1);
   }
 
+  let outcome = null;
   await deps.stateStore.update((state) => {
     const run = state.runs[args.runId];
-    if (!run) return state;
+    if (!run) { outcome = 'skip:run-not-registered'; return state; }
+
+    // The probe was taken before the lock, and it only speaks for the claim it was
+    // taken against. A supervisor pass that claimed the run in that gap knows things
+    // we do not — clearing its claim orphaned a live runner, and the reconcile this
+    // command then kicks off started a second Claude on the same session.
+    const claim = run.recoveryLease;
+    const sameClaim = claim?.attemptId === probed?.attemptId && claim?.token === probed?.token;
+    if (!sameClaim && claim?.attemptId) { outcome = 'skip:runner-active'; return state; }
+
     run.quotaRejections = { consecutive: 0, backoffLevel: 0, nextProbeAt: null, lastNotifiedAt: null };
     run.retry = { attempts: 0, nextAttemptAt: null };
     run.recoveryLease = emptyRecoveryLease();
@@ -246,6 +263,7 @@ async function triggerNow(args, deps) {
     }
     return state;
   });
+  if (outcome) return emit(deps, outcome, 1);
   const result = await deps.reconcile();
   return emit(deps, result.code);
 }

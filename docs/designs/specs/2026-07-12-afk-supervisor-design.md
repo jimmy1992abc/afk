@@ -991,7 +991,24 @@ very timers any time bound would rely on.
 A claim whose liveness cannot be determined holds its own run — we never
 double-drive it — but it does **not** consume the global invocation slot. A
 recycled pid must be able to wedge one run, never the whole supervisor. The
-operator is notified, and `trigger-now` releases it.
+operator is notified, and `trigger-now --force` releases it.
+
+### What `--force` may and may not override
+
+`--force` overrides the timers, the tick guard, and a claim we cannot **verify** —
+the states an operator actually reaches for it in. It does **not** override a
+Claude we can see is alive. Clearing a live claim leaves one Claude writing to the
+session and starts a second on top of it: the corruption everything else here
+exists to prevent, with the operator's name on it. A live runner is ended by
+ending it — the notification names the pid — or by its own action timeout.
+
+Both `lease` and `trigger-now` probe liveness **outside** the state lock, because
+the probe shells out to PowerShell or `ps` and is bounded at ten seconds. A
+supervisor pass fits inside that gap easily. The probe's answer is therefore
+advisory: each command re-validates the claim **under the lock** and refuses when
+the claim it probed is no longer the claim that is there. Deciding outside and
+writing inside is how a command came to erase a claim that had been taken while it
+was still deciding.
 
 ## Who may drive a run
 
