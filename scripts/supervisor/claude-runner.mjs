@@ -52,13 +52,34 @@ async function killTree(child) {
   }
 }
 
+// Node refuses to spawn a .cmd or .bat without a shell (EINVAL since Node 20), and
+// npm installs Claude Code on Windows as exactly that. Running it through
+// `cmd.exe /c` with an argument array keeps the arguments out of any shell's
+// hands — a `shell: true` string would put a prompt and a path there.
+// `detached` exists for one reason: POSIX needs a process group so killTree can
+// signal the whole tree with process.kill(-pid). Windows kills by pid with
+// taskkill /t and needs no group — and worse, a detached child on Windows gets a
+// new console and its stdout never reaches our pipe at all. The runner would then
+// read zero frames from `--output-format stream-json`: it could not see a success,
+// could not see a quota rejection, and recorded every recovery as a failure while
+// Claude was in fact doing the work.
+export const DETACHED = process.platform !== 'win32';
+
+export function spawnClaude(executable, args, options = {}) {
+  const { spawn: launch = spawn, ...rest } = options;
+  const shim = /\.(cmd|bat)$/i.test(executable);
+  const spawnOptions = { ...rest, detached: DETACHED };
+  return shim
+    ? launch(process.env.COMSPEC ?? 'cmd.exe', ['/d', '/s', '/c', executable, ...args], spawnOptions)
+    : launch(executable, args, spawnOptions);
+}
+
 export function startClaudeProcess(attempt, options = {}) {
   validateRecoveryRun(attempt.run);
   const executable = options.executable ?? process.env.AFK_CLAUDE_PATH ?? 'claude';
-  const child = spawn(executable, buildResumeArgs(attempt.run), {
+  const child = spawnClaude(executable, buildResumeArgs(attempt.run), {
     cwd: attempt.run.cwd,
     shell: false,
-    detached: true,
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'ignore'],
   });
@@ -72,8 +93,8 @@ export function startClaudeProcess(attempt, options = {}) {
 
 export function startActivationProcess(attempt, options = {}) {
   const executable = options.executable ?? process.env.AFK_CLAUDE_PATH ?? 'claude';
-  const child = spawn(executable, buildActivationArgs(), {
-    cwd: options.cwd, shell: false, detached: true, windowsHide: true,
+  const child = spawnClaude(executable, buildActivationArgs(), {
+    cwd: options.cwd, shell: false, windowsHide: true,
     stdio: ['ignore', 'pipe', 'ignore'],
   });
   const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });

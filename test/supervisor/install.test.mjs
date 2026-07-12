@@ -115,6 +115,29 @@ test('an unauthenticated Claude CLI reports the documented repairable reason', a
   await assert.rejects(() => preflightClaude(HOST.platform, { execFile }), /claude-auth-missing/);
 });
 
+test('preflight finds the shim npm actually installs on Windows', async () => {
+  // npm installs Claude Code on Windows as claude.cmd — there is no claude.exe.
+  // Asking `where.exe` for claude.exe found nothing and reported the CLI as
+  // missing when it was sitting right there on PATH.
+  const asked = [];
+  const execFile = async (file, args) => {
+    asked.push([file, ...args]);
+    if (file === 'where.exe') return { stdout: String.raw`C:\npm\claude.cmd` + '\r\n' };
+    return { stdout: JSON.stringify({ loggedIn: true }) };
+  };
+  const found = await preflightClaude('win32', { execFile });
+  assert.deepEqual(asked[0], ['where.exe', 'claude'], 'ask for every shim, not only the native build');
+  assert.equal(found.claudePath, String.raw`C:\npm\claude.cmd`);
+});
+
+test('preflight prefers a real executable over a script shim', async () => {
+  const listed = [String.raw`C:\npm\claude.cmd`, String.raw`C:\native\claude.exe`].join('\r\n');
+  const execFile = async (file) => (file === 'where.exe'
+    ? { stdout: listed }
+    : { stdout: JSON.stringify({ loggedIn: true }) });
+  assert.equal((await preflightClaude('win32', { execFile })).claudePath, String.raw`C:\native\claude.exe`);
+});
+
 test('preflight returns the located CLI when it is present and authenticated', async () => {
   const execFile = locate(JSON.stringify({ loggedIn: true, subscriptionType: 'max' }));
   assert.deepEqual(await preflightClaude(HOST.platform, { execFile }), {

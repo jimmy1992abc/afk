@@ -15,8 +15,12 @@ export const STATUSLINE_MARKER = '--afk-supervisor:1';
 export const CLI_MISSING = 'claude-cli-missing';
 export const AUTH_MISSING = 'claude-auth-missing';
 
+// npm installs Claude Code on Windows as `claude.cmd` — there is no `claude.exe`.
+// Accepting only the native build silently locked every npm user out.
+export const CLAUDE_EXECUTABLE = /^claude(?:\.(?:exe|cmd|bat))?$/i;
+
 export function validateClaudeStatus(claudePath, statusJson) {
-  if (!isAbsolute(claudePath) || !/^claude(?:\.exe)?$/i.test(basename(claudePath))) {
+  if (!isAbsolute(claudePath) || !CLAUDE_EXECUTABLE.test(basename(claudePath))) {
     throw new Error(CLI_MISSING);
   }
   let status;
@@ -27,7 +31,10 @@ export function validateClaudeStatus(claudePath, statusJson) {
 
 export async function preflightClaude(platform = process.platform, deps = {}) {
   const execFile = deps.execFile ?? execFileAsync;
-  const locator = platform === 'win32' ? ['where.exe', ['claude.exe']] : ['which', ['claude']];
+  // `where.exe claude` finds every shim on PATH: the native claude.exe, or the
+  // claude.cmd that npm installs. Asking only for claude.exe found neither for an
+  // npm user, and reported the CLI as missing when it was right there.
+  const locator = platform === 'win32' ? ['where.exe', ['claude']] : ['which', ['claude']];
   let located;
   try {
     located = await execFile(locator[0], locator[1], { windowsHide: true });
@@ -37,7 +44,13 @@ export async function preflightClaude(platform = process.platform, deps = {}) {
     // a plainly repairable condition.
     throw new Error(CLI_MISSING);
   }
-  const claudePath = located.stdout.split(/\r?\n/).map((line) => line.trim()).find(Boolean);
+  // `where` lists every match on PATH. Keep only the ones that really are Claude,
+  // and prefer a native executable over a script shim: an npm install puts
+  // claude.cmd, claude.ps1 and a bare `claude` beside each other.
+  const candidates = located.stdout.split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && CLAUDE_EXECUTABLE.test(basename(line)));
+  const claudePath = candidates.find((line) => /\.exe$/i.test(line)) ?? candidates[0];
   if (!claudePath) throw new Error(CLI_MISSING);
   let status;
   try {

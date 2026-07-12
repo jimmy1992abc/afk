@@ -2,10 +2,12 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  DETACHED,
   buildResumeArgs,
   buildActivationArgs,
   classifyStreamFrame,
   runClaude,
+  spawnClaude,
   validateRecoveryRun,
 } from '../../scripts/supervisor/claude-runner.mjs';
 
@@ -88,4 +90,35 @@ test('wall-clock timeout kills a child whose stream never completes', async () =
   });
   assert.equal(result.reason, 'action-timeout');
   assert.equal(killed, 1);
+});
+
+test('a Claude child is never detached on Windows', () => {
+  // detached exists for one reason: POSIX needs a process group so killTree can
+  // signal the whole tree. Windows kills by pid with taskkill /t and needs no
+  // group — and a detached child there gets a new console, so its stdout never
+  // reaches our pipe. The runner then read ZERO frames from stream-json: it could
+  // not see a success, could not see a quota rejection, and recorded every
+  // recovery as a failure while Claude was in fact doing the work.
+  assert.equal(DETACHED, process.platform !== 'win32');
+});
+
+test('an npm-installed Claude is a .cmd shim, which cannot be spawned directly', () => {
+  // npm installs Claude Code on Windows as claude.cmd — there is no claude.exe —
+  // and Node refuses to spawn a .cmd without a shell (EINVAL since Node 20). It
+  // goes through cmd.exe with its arguments still an array: a shell string would
+  // put a prompt and a path in a shell's hands.
+  const calls = [];
+  const fake = (file, args) => { calls.push({ file, args }); return {}; };
+  const shim = String.raw`C:
+pm\claude.cmd`;
+
+  spawnClaude(shim, ['--print', 'hi'], { spawn: fake });
+  assert.match(calls[0].file, /cmd\.exe$/i, 'a .cmd must go through cmd.exe');
+  assert.ok(calls[0].args.includes(shim));
+  assert.ok(calls[0].args.includes('--print'), 'and the arguments stay an array, never a shell string');
+
+  calls.length = 0;
+  spawnClaude('/usr/local/bin/claude', ['--print', 'hi'], { spawn: fake });
+  assert.equal(calls[0].file, '/usr/local/bin/claude', 'a real executable is spawned directly');
+  assert.deepEqual(calls[0].args, ['--print', 'hi']);
 });
