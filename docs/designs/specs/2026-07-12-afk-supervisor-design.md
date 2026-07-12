@@ -945,6 +945,58 @@ or host process exits and cannot perform login/reboot catch-up. It remains the
 first-line in-session mechanism, while the supervisor handles lost process
 lifecycle.
 
+## Status: BLOCKED — the lease is overloaded and the feature does not work
+
+Five adversarial review rounds. The fifth found that **the supervisor's core
+function does not work at all, and every log line says it does.**
+
+`run.lease` serves two different concepts with different owners and lifetimes:
+the supervisor's *"I am driving this run"* claim, and the in-session tick's
+*overlap guard*. Because they are one field:
+
+1. The reconciler leases `run.lease` and the runner renews it for the whole life
+   of the Claude child.
+2. The runner spawns `claude --resume` with a prompt telling that session to
+   continue the AFK run.
+3. That session enters the AFK skill, which tells it to take `afk-supervisor
+   lease` before any resumable step.
+4. `lease` finds a live lease owned by someone else — **the supervisor itself** —
+   and returns `skip:recovery-lease-held`.
+5. The skill tells the session that another layer owns recovery, so it exits.
+
+The resumed session does nothing. Claude exits 0, the runner records
+`result:success`, and 25 minutes later the stale heartbeat makes the supervisor
+resume it again. For ever. A `todo` test in `test/supervisor/cli.test.mjs` names
+this so it cannot be lost.
+
+The same overload also lets a per-run pid consume the *global* invocation slot —
+one stale pid stops the supervisor from invoking anything, on any repository,
+permanently — and lets `cli lease` wipe a live runner's pid.
+
+**Do not patch further before restructuring.** Four consecutive rounds each
+introduced about five new defects; round 4's nine individually-correct fixes
+composed into a new CRITICAL. There is no single place that answers *"may this
+run be driven right now, and by whom?"* — nine uncoordinated predicates across
+three files each answer part of it, over a shared mutable blob whose invariants
+live only in prose.
+
+The smallest restructuring that ends this:
+
+1. **Split the lease.** `run.recoveryLease` (supervisor) and `run.tickGuard`
+   (in-session). Different concepts, different lifetimes, different owners. This
+   alone removes the livelock, the `in-session-` string sniff, and the pid wipe.
+2. **Make liveness verifiable.** Store `{pid, startedAt}` and match the
+   OS-reported process start time, so pid reuse cannot masquerade as a live
+   runner. **Until that exists, a live pid must never consume the global
+   invocation slot** — per-run occupancy is not a global capacity claim.
+3. **One `runnability(run, state, config, now)` function** consumed by
+   `selectCandidate`, `pruneState`, and `status`. `pruneState` must never delete a
+   run with a future `notBefore`, rather than growing a fourth exception clause.
+4. **Stop overloading one constant.** `terminalRunRetentionSeconds` equals
+   `quotaEscalationMaxSeconds` (604800), so a run in maximum quota backoff is
+   deleted the moment its probe becomes due. Retention must exceed the longest
+   legitimate hold by construction, asserted in `validateConfig`.
+
 ## Open Questions and Manual Validation
 
 Windows setup, task registration, execution, and uninstall were validated on a

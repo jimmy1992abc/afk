@@ -147,6 +147,45 @@ test('trigger-now revives exactly the runs the selector refuses', async () => {
   assert.ok(h.calls.includes('reconcile'));
 });
 
+// KNOWN BROKEN — the supervisor's core function does not work, and the logs say
+// it does. The lease is overloaded: it is both the supervisor's "I am driving
+// this run" claim and the in-session tick's overlap guard, and they are not the
+// same thing.
+//
+//   1. reconciler leases run.lease with a supervisor attemptId and the runner
+//      renews it for the whole life of the child.
+//   2. the runner spawns `claude --resume` with RESUME_PROMPT: "Resume the active
+//      AFK run ... continue from the first unfinished step".
+//   3. that session enters the AFK skill, which says (SKILL.md:117) "Before each
+//      resumable step and every tick ... use `afk-supervisor lease`".
+//   4. `lease` sees a live lease owned by someone else — the supervisor itself —
+//      and returns skip:recovery-lease-held.
+//   5. the skill says (SKILL.md:124) skip:recovery-lease-held "means another
+//      lifecycle layer owns recovery; exit the tick".
+//
+// The resumed session exits immediately having done nothing. Claude exits 0, the
+// runner records result:success, and 25 minutes later the stale heartbeat makes
+// the supervisor resume it again. For ever.
+//
+// This cannot be patched here. The fix is structural: split run.lease into a
+// supervisor `recoveryLease` and an in-session `tickGuard`. Left failing on
+// purpose so it cannot be lost.
+test('a session the supervisor resumed can acquire its own tick guard', { todo: 'lease is overloaded; needs recoveryLease/tickGuard split' }, async () => {
+  const h = harness();
+  const state = defaultState();
+  state.runs.one = {
+    runId: 'one', sessionId: '00000000-0000-4000-8000-000000000001', state: 'RECOVERING',
+    // exactly what reconciler.mjs writes before it spawns the runner
+    lease: { attemptId: 'supervisor-attempt', token: 'tok', expiresAt: 20_180, pid: 4242 },
+  };
+  h.state = state;
+
+  const result = await runCli(['lease', '--run-id', 'one'], h.deps);
+
+  assert.equal(result.code, 0, 'the session the supervisor just resumed must be able to work');
+  assert.notEqual(h.deps.output.at(-1).trim(), 'skip:recovery-lease-held');
+});
+
 test('unknown commands and missing runs emit distinct errors', async () => {
   const h = harness();
   assert.equal((await runCli(['unknown'], h.deps)).code, 2);
