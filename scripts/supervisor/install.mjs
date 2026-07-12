@@ -1,7 +1,7 @@
 import { execFile as execFileCallback } from 'node:child_process';
 import { access, cp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir, userInfo } from 'node:os';
-import { basename, dirname, isAbsolute, join } from 'node:path';
+import { dirname, join, posix, win32 } from 'node:path';
 import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
 
@@ -20,8 +20,15 @@ export const AUTH_MISSING = 'claude-auth-missing';
 // Accepting only the native build silently locked every npm user out.
 export const CLAUDE_EXECUTABLE = /^claude(?:\.(?:exe|cmd|bat))?$/i;
 
-export function validateClaudeStatus(claudePath, statusJson) {
-  if (!isAbsolute(claudePath) || !CLAUDE_EXECUTABLE.test(basename(claudePath))) {
+// Path checks follow the TARGET platform, not the host: preflight('win32') must
+// judge a Windows path by Windows rules wherever the test happens to run.
+function pathApi(platform) {
+  return platform === 'win32' ? win32 : posix;
+}
+
+export function validateClaudeStatus(claudePath, statusJson, platform = process.platform) {
+  const api = pathApi(platform);
+  if (!api.isAbsolute(claudePath) || !CLAUDE_EXECUTABLE.test(api.basename(claudePath))) {
     throw new Error(CLI_MISSING);
   }
   let status;
@@ -50,7 +57,7 @@ export async function preflightClaude(platform = process.platform, deps = {}) {
   // claude.cmd, claude.ps1 and a bare `claude` beside each other.
   const candidates = located.stdout.split(/\r?\n/)
     .map((line) => line.trim())
-    .filter((line) => line.length > 0 && CLAUDE_EXECUTABLE.test(basename(line)));
+    .filter((line) => line.length > 0 && CLAUDE_EXECUTABLE.test(pathApi(platform).basename(line)));
   const claudePath = candidates.find((line) => /\.exe$/i.test(line)) ?? candidates[0];
   if (!claudePath) throw new Error(CLI_MISSING);
   // Node cannot execute a .cmd directly, and the shim npm installs is exactly that.
@@ -63,7 +70,7 @@ export async function preflightClaude(platform = process.platform, deps = {}) {
   } catch {
     throw new Error(AUTH_MISSING);
   }
-  return validateClaudeStatus(claudePath, status.stdout);
+  return validateClaudeStatus(claudePath, status.stdout, platform);
 }
 
 export function patchStatuslineSettings(settings, wrapperCommand) {
