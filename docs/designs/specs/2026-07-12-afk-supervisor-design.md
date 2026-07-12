@@ -25,7 +25,8 @@ checks, ledger-driven continuation, overlap prevention, and run shutdown.
 - Observe exact five-hour and seven-day usage data through documented Claude
   Code status-line JSON.
 - Queue all recoverable AFK sessions when exact five-hour usage reaches 90%.
-- Resume each queued session 60–180 seconds after the exact reset time.
+- Give each queued session a target start time 60–180 seconds after the exact
+  reset, then start it subject to the configured concurrency limit.
 - Recover unfinished sessions after frontend exit, sleep, login, or reboot.
 - Prevent duplicate work between the in-session tick and OS supervisor.
 - Support explicit, idempotent setup, status, configuration, repair, disable,
@@ -121,32 +122,41 @@ AFK lifecycle steps also call a small bundled registration command. Registration
 is best-effort but loud: failure is recorded in the ledger and surfaced to the
 operator without changing the existing run semantics.
 
+The SessionStart hook also checks the current cwd for a valid
+`.afk/afk-ledger.md` and reconstructs missing registration from its public AFK
+metadata. This is the unattended fallback when the original registration call
+failed. It never registers an arbitrary directory or infers terminal state.
+
 ### Layer 2: OS-level AFK supervisor
 
-A shared dependency-free Node ESM worker performs one reconciliation pass per
-invocation. A per-user LaunchAgent or Windows scheduled task invokes it about
-once per minute and once at login/load. Each pass:
+A shared dependency-free Node ESM reconciler performs one short pass per
+invocation. A per-user LaunchAgent or Windows scheduled task invokes it at the
+configured interval, 30 seconds where supported and 60 seconds on Windows, and
+once at login/load. Each pass:
 
 1. acquires the global lock;
 2. re-reads and validates state;
 3. imports fresh ledger heartbeats for registered sessions;
 4. evaluates all sessions in stable order;
 5. records an action-specific lease and releases the global lock;
-6. performs at most one Claude invocation while renewing that lease;
-7. reacquires the global lock and commits the result only if the lease token
-   still matches; and
-8. exits with a distinct action, skip, or error reason.
+6. detached-spawns at most one runner when capacity is available; and
+7. exits immediately with a distinct action, skip, or error reason.
 
-Limiting each pass to one Claude invocation prevents bursts. Due sessions remain
-queued and are handled on later scheduler passes. The short global lock protects
-state transactions only; it is never held while Claude, a notification adapter,
-or an existing status-line command runs.
+The detached runner owns one Claude child, renews its lease, enforces its timeout,
+and finalizes the matching attempt under the lock. The reconciler does not wait
+for either process. It normally finishes within one second, so platform overlap
+suppression cannot block observation import, lateness accounting, or later
+selection passes.
 
-The recurring scheduler is a catch-up mechanism. When a new earliest due time
-is committed, the platform adapter also installs or updates one per-user
-one-shot wake-up for that time. The worker replaces or removes that wake-up
-after each pass. This avoids adding one native task per run while providing a
-closer start time than interval polling alone.
+Each pass starts at most one new runner. `maxConcurrentInvocations` limits live
+runners globally and defaults to `1`; operators with independent repositories
+may raise it explicitly. Due sessions remain queued in `(scheduledResumeAt,
+runId)` order. Jitter supplies stable ordering and spreads eligible start times;
+it does not guarantee that every run starts within three minutes when the queue
+exceeds available concurrency.
+
+The short global lock protects state transactions only. It is never held while
+Claude, a notification adapter, or an existing status-line command runs.
 
 ## Repository Layout
 
@@ -161,9 +171,11 @@ scripts/supervisor/
   lock.mjs
   usage-provider.mjs
   statusline-bridge.mjs
+  observation-inbox.mjs
   hook-handler.mjs
   ledger.mjs
-  reconcile.mjs
+  reconciler.mjs
+  runner.mjs
   supervisor.mjs
   claude-runner.mjs
   platform.mjs
@@ -188,9 +200,10 @@ The worker uses a stable per-user directory:
 - macOS: `~/Library/Application Support/afk-supervisor/`
 - Windows: `%LOCALAPPDATA%/afk-supervisor/`
 
-It contains `state.json`, `config.json`, a lock record, bounded logs, a stable
-copy of the worker bundle, and scheduler metadata. It contains no credentials,
-prompts, transcript contents, or repository contents.
+It contains `state.json`, `config.json`, a lock record, a bounded observation
+inbox, bounded logs, a stable copy of the worker bundle, and scheduler metadata.
+It contains no credentials, prompts, transcript contents, or repository
+contents.
 
 ```json
 {
@@ -212,7 +225,7 @@ prompts, transcript contents, or repository contents.
     "attemptId": null,
     "lastAttemptAt": null,
     "lastResult": null,
-    "dailyAttempts": []
+    "activationAttempts": []
   }
 }
 ```
@@ -228,6 +241,11 @@ rename, and parent-directory sync where supported. Readers validate the entire
 shape. Unknown fields are preserved during compatible migrations. Corrupt state
 is moved to a timestamped quarantine file only after a valid replacement is
 written; recovery defaults to no invocation.
+
+Each successful reconciliation removes terminal runs older than seven days,
+expired observation files, and activation attempts older than 24 hours. The
+activation cap is evaluated over that rolling 24-hour history, not a calendar
+day, so it has no timezone reset boundary.
 
 ## Configuration
 
@@ -245,10 +263,14 @@ Global configuration is separate from repository `.afk/config.md`:
   "graceSeconds": 90,
   "heartbeatStaleSeconds": 1500,
   "overdueAutoActivationSeconds": 7200,
-  "maxWindowActivationsPerDay": 4,
+  "maxWindowActivationsPer24Hours": 4,
   "maxRecoveryAttempts": 3,
   "recoveryAttemptTimeoutSeconds": 14400,
-  "pollIntervalSeconds": 60
+  "leaseRenewalSeconds": 60,
+  "leaseMissedRenewals": 3,
+  "maxConcurrentInvocations": 1,
+  "pollIntervalSeconds": 30,
+  "terminalRunRetentionSeconds": 604800
 }
 ```
 
@@ -259,8 +281,17 @@ and atomically replaced.
 ## Ninety-percent Scheduling
 
 Only an exact status-line snapshot with a valid reset time may arm the 90%
-schedule. When usage crosses from below 90% or unknown to at least 90% for a
-reset timestamp not previously armed, the bridge transaction:
+schedule. The status-line bridge does not acquire the supervisor lock or mutate
+`state.json`. It validates stdin and atomically publishes a uniquely named event
+file in the observation inbox, then exits. It emits no stdout and does no
+cross-run work. Unique files prevent an older concurrent writer from replacing
+a newer unimported observation. Each file carries `session_id` and `observedAt`;
+the reconciler ignores an observation older than state already imported for
+that session.
+
+During the next pass, the reconciler imports all valid observations in timestamp
+order. When usage crosses from below 90% or unknown to at least 90% for a reset
+timestamp not previously armed, the locked import transaction:
 
 1. records the exact usage snapshot;
 2. marks that reset timestamp as the threshold event;
@@ -274,8 +305,8 @@ stable across repeated snapshots, process restarts, and reboot. No duplicate
 tasks are created for the same run and reset.
 
 `scheduledResumeAt` is the target start time. Under normal awake operation, the
-one-shot wake-up starts reconciliation at or shortly after that target. Native
-scheduler granularity, process startup, another leased action, sleep, or power
+next 30-second interval pass observes it at or shortly after that target. Native
+scheduler granularity, process startup, exhausted concurrency, sleep, or power
 loss can delay the actual invocation. The supervisor records this lateness and
 never claims a strict 180-second guarantee that the operating system cannot
 provide. It does not start early to compensate.
@@ -285,6 +316,19 @@ for the current reset. Completed, blocked, and auto-paused runs retain audit
 fields but become ineligible. A newer exact reset replaces only schedules that
 have not started. Missing or estimated reset data never invents a threshold
 schedule.
+
+A rate-limit StopFailure without an exact reset records
+`firstRateLimitedAt` and a conservative estimated reset of
+`firstRateLimitedAt + 5 hours`. Estimated resets never arm the 90% queue and are
+never presented as exact. They only make an otherwise stranded `RATE_LIMITED`
+run eligible for one bounded recovery probe after the estimate, followed by the
+normal retry policy and a user notification. A later exact observation replaces
+the estimate immediately.
+
+When an exact seven-day snapshot reports 100% usage and a future seven-day reset,
+it suppresses five-hour recovery probes and empty-window activation until that
+reset plus grace. This prevents bounded retries from repeatedly hitting a known
+weekly limit. Missing seven-day data does not block recovery.
 
 At or after a schedule's due time, a heartbeat newer than the associated reset
 proves that the session already made progress in the new window. The supervisor
@@ -318,18 +362,24 @@ UNKNOWN | ACTIVE_EXACT | ACTIVE_ESTIMATED | RESET_DUE | ACTIVATING | FAILED
 
 ## Reconciliation Order
 
-During the locked selection transaction, the worker evaluates:
+During the locked selection transaction, the reconciler evaluates:
 
 1. disabled configuration;
 2. corrupt or unsupported state;
-3. terminal runs, which are skipped;
-4. fresh ledger or registered heartbeat;
-5. next expected tick plus grace;
-6. scheduled 90% resume times;
-7. exact rate-limit reset plus grace;
-8. stale non-rate-limited recovery;
-9. empty-window reset policy; and
-10. retry backoff and daily caps.
+3. observation import, expired-lease cleanup, and retention cleanup;
+4. terminal runs, which are skipped;
+5. exact seven-day suppression;
+6. available invocation capacity;
+7. scheduled 90% resume times;
+8. exact rate-limit reset plus grace;
+9. estimated rate-limit recovery probes;
+10. stale non-rate-limited recovery; and
+11. empty-window reset policy.
+
+For each candidate, the reconciler applies retry backoff and rolling activation
+caps, then checks the ledger heartbeat and next expected tick plus grace. A
+post-reset heartbeat satisfies its threshold schedule. Other fresh progress
+defers recovery without discarding the schedule.
 
 Before leasing an invocation it re-reads the selected run's ledger and state. A
 post-reset heartbeat satisfies a threshold schedule; another fresh heartbeat
@@ -337,19 +387,22 @@ defers ordinary stale recovery. The in-session tick calls the same lease helper
 before beginning resumable work, so both lifecycle layers share the authoritative
 guard in addition to checking the ledger heartbeat.
 
-The lease transaction stores a random attempt token and expiry before releasing
-the global lock. The action runner renews the lease through short locked writes
-while the child is alive. Finalization only updates an attempt whose token still
-matches, so a stale process cannot overwrite a later result. The invocation is
-spawned without a shell.
+The lease transaction stores a random attempt token, `lastRenewedAt`, and
+`expiresAt = lastRenewedAt + leaseRenewalSeconds * leaseMissedRenewals` before
+releasing the global lock. The detached runner renews the lease through short
+locked writes while the child is alive. Finalization only updates an attempt
+whose token still matches, so a stale process cannot overwrite a later result.
+The invocation is spawned without a shell.
 
-The lease expiry is longer than the configured action timeout. The runner sends
-a graceful termination and then a forced termination when that timeout is
-exceeded, using a platform process group so descendants do not remain detached.
-After an unclean worker exit, a later pass waits for both lease expiry and retry
-backoff, then re-reads the ledger before retrying. Process detection is only a
-secondary conservative signal; a matching live process postpones recovery but
-never proves progress.
+Lease expiry and action timeout are independent. Missing three default renewals
+makes a lease stale after three minutes; the four-hour action timeout separately
+bounds a healthy runner and its Claude child. The runner sends a graceful
+termination and then a forced termination when that timeout is exceeded, using
+a platform process group so descendants do not remain detached. After an
+unclean runner exit, a later pass waits for lease expiry and retry backoff, then
+re-reads the ledger before retrying. Process detection is only a secondary
+conservative signal; a matching live process postpones recovery but never proves
+progress.
 
 New AFK ticks use the shared lease helper. An older installed tick that does not
 yet know the helper is still protected by the pre-invocation ledger heartbeat
@@ -375,6 +428,15 @@ Empty-window auto activation, when explicitly enabled, uses print mode,
 `--disallowedTools "mcp__*"`, and `--strict-mcp-config` from an empty stable
 working directory. Success marks the old reset handled and estimates the next
 reset at activation time plus five hours. A later exact snapshot replaces it.
+
+Setup reports the installed Claude version and compares required flags with the
+officially supported capability set. A zero exit from argument parsing is not
+accepted as proof because some CLI versions tolerate unknown flags. The runner
+always enforces a wall-clock timeout and validates structured print output, so
+`--max-turns 1` is defense in depth rather than the only bound. Setup also runs
+a local, non-requesting argument-construction check for the empty `--tools`
+value; if the installed version cannot be confirmed compatible, auto activation
+is disabled while AFK recovery remains available.
 
 Authentication is checked during setup through supported CLI behavior without
 reading credential stores. Missing CLI or authentication disables invocation
@@ -412,24 +474,24 @@ network access.
 ### macOS
 
 Setup copies the worker into the stable data directory and installs a per-user
-LaunchAgent under `~/Library/LaunchAgents/`. It runs at load and every 60 seconds
-without administrator access. A second LaunchAgent entry provides the replaceable
-one-shot wake-up. Launchd's single-job semantics prevent concurrent copies of
-the same worker. Logs rotate by size and retained-file count.
+LaunchAgent under `~/Library/LaunchAgents/`. It runs at load and every 30 seconds
+without administrator access. Launchd's single-job semantics prevent concurrent
+reconciler copies. Logs rotate by size and retained-file count.
 Notifications use `osascript`; actionable behavior is capability-tested and
 falls back to an informational notification.
 
 ### Windows
 
 Setup copies the worker into `%LOCALAPPDATA%` and installs per-user Task
-Scheduler entries for a one-minute recurring trigger and user-logon catch-up.
-An additional replaceable one-shot trigger targets the earliest queued resume.
-Task settings use `IgnoreNew` for overlapping instances. The adapter uses the
-resolved absolute Node executable and a stable wrapper, with paths passed as
-argument arrays or correctly XML-escaped values. It does not use a VS Code
-extension binary or require WSL. Notifications use a PowerShell-compatible
-interactive-user adapter and fall back to an informational dialog when actions
-are unavailable.
+Scheduler entries for a recurring trigger and user-logon catch-up. Windows Task
+Scheduler repetition has a one-minute floor on supported configurations, so the
+Windows adapter clamps a requested 30-second interval to 60 seconds and reports
+the effective value. Task settings use `IgnoreNew` for overlapping reconciler
+instances. The adapter uses the resolved absolute Node executable and a stable
+wrapper, with paths passed as argument arrays or correctly XML-escaped values.
+It does not use a VS Code extension binary or require WSL. Notifications use a
+PowerShell-compatible interactive-user adapter and fall back to an informational
+dialog when actions are unavailable.
 
 Install, repair, status, and uninstall are idempotent on both platforms. Worker
 updates are copied to a temporary path and verified before replacing the stable
@@ -463,7 +525,7 @@ skip:reset-already-handled
 skip:recovery-lease-held
 skip:run-terminal
 skip:retry-backoff
-skip:daily-activation-cap
+skip:rolling-activation-cap
 action:resume-afk
 action:activate-window
 error:state-corrupt
@@ -503,11 +565,13 @@ Coverage includes:
 - exact-reset and stale-heartbeat recovery;
 - fresh heartbeat and tick-grace no-op;
 - tick/supervisor race and stale-lock cleanup;
-- worker crash after lease acquisition and action timeout cleanup;
-- one-shot wake-up replacement and scheduler overlap suppression;
+- runner crash after lease acquisition and action timeout cleanup;
+- detached runner capacity and scheduler overlap suppression;
 - login, reboot, and sleep-style catch-up;
 - empty-window notify and opt-in auto modes;
-- daily activation cap and bounded retries;
+- rolling 24-hour activation cap and bounded retries;
+- exact seven-day suppression and missing seven-day fallback;
+- terminal-run, observation, and activation-attempt retention cleanup;
 - corrupt state recovery and schema migration;
 - missing CLI and authentication;
 - duplicate reset handling;
@@ -515,6 +579,44 @@ Coverage includes:
 - Windows quoting and task generation;
 - macOS LaunchAgent generation; and
 - repeated setup, repair, disable, and uninstall.
+
+## Alternatives
+
+### Always-running daemon
+
+A daemon would avoid 1,440–2,880 short reconciler process starts per day and
+could schedule sub-minute timers directly. It also adds a continuously resident
+process, daemon health supervision, upgrade handoff, crash-loop handling, and a
+larger cross-platform lifecycle surface. Version 1 uses short deterministic
+passes because launchd and Task Scheduler already provide restart and login
+recovery. Process-start overhead is measured during manual validation; a later
+daemon is justified only if that evidence shows material battery or CPU cost.
+
+### Native one-shot triggers
+
+A replaceable one-shot trigger improves an interval schedule by at most one
+poll interval but adds a second mutable scheduler path on both platforms. It
+does not wake a sleeping or powered-off machine. Version 1 uses interval and
+login triggers only and records scheduling lateness.
+
+### Claude Code retry alone
+
+Claude Code's in-session behavior cannot recover after its frontend, terminal,
+or host process exits and cannot perform login/reboot catch-up. It remains the
+first-line in-session mechanism, while the supervisor handles lost process
+lifecycle.
+
+## Open Questions and Manual Validation
+
+- Confirm the effective minimum Task Scheduler repetition interval across the
+  supported Windows versions; report a 60-second clamp where required.
+- Canary whether the current VS Code graphical extension executes user
+  status-line commands; absence keeps exact usage capability `unobserved`.
+- Measure reconciler startup overhead and scheduler lateness on macOS and
+  Windows before claiming operational timing.
+- Exercise subscription authentication, empty `--tools` behavior, and
+  `--max-turns` with an explicitly approved minimal request; automated tests do
+  not spend Claude usage.
 
 ## Documentation and Release
 
