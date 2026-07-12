@@ -22,8 +22,8 @@ checks, ledger-driven continuation, overlap prevention, and run shutdown.
 ## Goals
 
 - Preserve the existing AFK in-session tick unchanged in purpose.
-- Observe exact five-hour and seven-day usage data through documented Claude
-  Code status-line JSON.
+- Observe exact reset data opportunistically from headless quota frames and
+  proactively from documented Claude Code status-line JSON.
 - Queue all recoverable AFK sessions when exact five-hour usage reaches 90%.
 - Give each queued session a target start time 60–180 seconds after the exact
   reset, then start it subject to the configured concurrency limit.
@@ -47,6 +47,21 @@ checks, ledger-driven continuation, overlap prevention, and run shutdown.
 
 The design uses only behavior documented by Anthropic and confirmed against the
 installed CLI where applicable.
+
+### Headless stream data
+
+Claude Code supports `--print --output-format stream-json`. Inspection of the
+current installed CLI shows `system/api_error` frames, also represented as
+`api_retry` messages, whose quota-error payload may include
+`error.rate_limits.resets_at` and `error.rate_limits.rate_limit_type` alongside
+retry metadata. This can expose an exact reset directly to a headless runner.
+
+Anthropic's public CLI documentation does not currently specify this error-frame
+schema. The runner therefore treats it as a capability-gated provider, not an
+unconditional contract: it accepts only validated frames, records the observed
+CLI version, and falls back safely when the frame or fields are absent or change.
+Manual validation against a real quota response is required before setup reports
+this provider as confirmed.
 
 ### Status-line data
 
@@ -123,16 +138,19 @@ is best-effort but loud: failure is recorded in the ledger and surfaced to the
 operator without changing the existing run semantics.
 
 The SessionStart hook also checks the current cwd for a valid
-`.afk/afk-ledger.md` and reconstructs missing registration from its public AFK
-metadata. This is the unattended fallback when the original registration call
-failed. It never registers an arbitrary directory or infers terminal state.
+`.afk/afk-ledger.md`. It reconstructs missing registration only when the ledger
+contains the supervisor metadata block, explicitly reports a recoverable
+non-terminal state, contains unfinished scoped work, and has a heartbeat within
+the configured registration-recovery age. A completed, blocked, auto-paused,
+ambiguous, or old ledger is ignored. The hook only updates registration metadata;
+it never acquires an action lease, spawns a runner, or invokes Claude, including
+when SessionStart was triggered by the supervisor's own `--resume` call.
 
 ### Layer 2: OS-level AFK supervisor
 
 A shared dependency-free Node ESM reconciler performs one short pass per
-invocation. A per-user LaunchAgent or Windows scheduled task invokes it at the
-configured interval, 30 seconds where supported and 60 seconds on Windows, and
-once at login/load. Each pass:
+invocation. A per-user LaunchAgent or Windows scheduled task invokes it every
+60 seconds and once at login/load. Each pass:
 
 1. acquires the global lock;
 2. re-reads and validates state;
@@ -216,9 +234,34 @@ contents.
     "observedAt": null,
     "source": "unknown",
     "confidence": "unknown",
-    "thresholdResetAt": null
+    "thresholdResetAt": null,
+    "lastImportedObservationAt": null,
+    "sevenDaySuppressedUntil": null
   },
-  "runs": {},
+  "runs": {
+    "example-run-id": {
+      "sessionId": "00000000-0000-0000-0000-000000000000",
+      "cwd": null,
+      "ledgerPath": null,
+      "state": "RUNNING",
+      "lastHeartbeatAt": null,
+      "nextExpectedTickAt": null,
+      "firstRateLimitedAt": null,
+      "rateLimitedUntil": null,
+      "resetConfidence": "unknown",
+      "scheduledResumeAt": null,
+      "scheduledResetAt": null,
+      "lease": {
+        "attemptId": null,
+        "lastRenewedAt": null,
+        "expiresAt": null
+      },
+      "retry": {
+        "attempts": 0,
+        "nextAttemptAt": null
+      }
+    }
+  },
   "activation": {
     "handledResetAt": null,
     "inProgress": false,
@@ -235,6 +278,9 @@ ledger path, run state, heartbeat, expected tick, rate-limit reset, recovery
 lease token and expiry, retry state, and optional threshold recovery schedule.
 Each threshold schedule records its reset timestamp, due time, state
 (`pending`, `leased`, `handled`, `cancelled`, or `failed`), and outcome.
+`firstRateLimitedAt` and an estimated reset are per-run because StopFailure is
+session-scoped. Exact usage snapshots are account-level and replace compatible
+per-run estimates during reconciliation.
 
 Writes use a same-directory temporary file, fsync where supported, atomic
 rename, and parent-directory sync where supported. Readers validate the entire
@@ -269,8 +315,9 @@ Global configuration is separate from repository `.afk/config.md`:
   "leaseRenewalSeconds": 60,
   "leaseMissedRenewals": 3,
   "maxConcurrentInvocations": 1,
-  "pollIntervalSeconds": 30,
-  "terminalRunRetentionSeconds": 604800
+  "pollIntervalSeconds": 60,
+  "terminalRunRetentionSeconds": 604800,
+  "registrationRecoveryMaxAgeSeconds": 86400
 }
 ```
 
@@ -278,16 +325,40 @@ Automatic recovery of registered unfinished AFK runs defaults on. Empty-window
 activation defaults to notification. Configuration changes are schema-validated
 and atomically replaced.
 
+## Usage Provider Precedence
+
+The state store accepts normalized usage observations from three providers:
+
+1. **Headless runner frame:** preferred for rate-limit recovery. A validated
+   quota `api_error` or `api_retry` frame supplies an exact reset and, when
+   present, distinguishes five-hour from seven-day limits. Because the frame
+   schema is not publicly documented, setup reports it as `confirmed` only after
+   a canary or real observation for the installed CLI version; otherwise the
+   parser remains opportunistic and fallback paths stay enabled.
+2. **Status-line snapshot:** preferred for proactive 90% scheduling while an
+   interactive surface emits status-line data. It can avoid one quota failure
+   but is not required for continued headless recovery.
+3. **Conservative estimate:** used only when neither exact provider has supplied
+   a reset. It never arms the 90% queue or claims exact timing.
+
+An exact observation always replaces a compatible estimate. Conflicting exact
+observations fail toward no invocation and produce a diagnostic until a newer
+observation resolves the conflict.
+
 ## Ninety-percent Scheduling
 
 Only an exact status-line snapshot with a valid reset time may arm the 90%
 schedule. The status-line bridge does not acquire the supervisor lock or mutate
-`state.json`. It validates stdin and atomically publishes a uniquely named event
-file in the observation inbox, then exits. It emits no stdout and does no
+`state.json`. It validates stdin and writes only when the reset timestamp changes,
+the integer usage bucket changes, or 60 seconds have elapsed since the last
+accepted write for that session. It then atomically publishes a uniquely named
+event file in the observation inbox and exits. It emits no stdout and does no
 cross-run work. Unique files prevent an older concurrent writer from replacing
 a newer unimported observation. Each file carries `session_id` and `observedAt`;
-the reconciler ignores an observation older than state already imported for
-that session.
+the reconciler applies an account-level import watermark and ignores older
+account snapshots. A small per-session atomic marker provides best-effort
+write-side throttling; races may create a duplicate event but cannot remove or
+corrupt a newer one.
 
 During the next pass, the reconciler imports all valid observations in timestamp
 order. When usage crosses from below 90% or unknown to at least 90% for a reset
@@ -362,11 +433,13 @@ UNKNOWN | ACTIVE_EXACT | ACTIVE_ESTIMATED | RESET_DUE | ACTIVATING | FAILED
 
 ## Reconciliation Order
 
-During the locked selection transaction, the reconciler evaluates:
+Before locking, the reconciler reads and validates observation files, ledger
+heartbeats, and retention candidates into bounded in-memory inputs. During the
+short locked transaction it re-reads state, merges those inputs, and evaluates:
 
 1. disabled configuration;
 2. corrupt or unsupported state;
-3. observation import, expired-lease cleanup, and retention cleanup;
+3. expired-lease cleanup and state retention;
 4. terminal runs, which are skipped;
 5. exact seven-day suppression;
 6. available invocation capacity;
@@ -376,16 +449,16 @@ During the locked selection transaction, the reconciler evaluates:
 10. stale non-rate-limited recovery; and
 11. empty-window reset policy.
 
-For each candidate, the reconciler applies retry backoff and rolling activation
-caps, then checks the ledger heartbeat and next expected tick plus grace. A
-post-reset heartbeat satisfies its threshold schedule. Other fresh progress
-defers recovery without discarding the schedule.
-
-Before leasing an invocation it re-reads the selected run's ledger and state. A
-post-reset heartbeat satisfies a threshold schedule; another fresh heartbeat
-defers ordinary stale recovery. The in-session tick calls the same lease helper
-before beginning resumable work, so both lifecycle layers share the authoritative
-guard in addition to checking the ledger heartbeat.
+For each candidate, it applies retry backoff and rolling activation caps. It
+then releases the lock, re-reads only the selected ledger, reacquires the lock,
+and verifies the state revision before writing a lease. A changed revision
+restarts selection. A post-reset heartbeat satisfies its threshold schedule;
+other fresh progress defers recovery without discarding the schedule. After
+releasing the lock, the reconciler deletes only inbox files whose identities
+were committed as imported and removes filesystem retention candidates. The
+in-session tick calls the same lease helper before beginning resumable work, so
+both lifecycle layers share the authoritative guard in addition to checking the
+ledger heartbeat.
 
 The lease transaction stores a random attempt token, `lastRenewedAt`, and
 `expiresAt = lastRenewedAt + leaseRenewalSeconds * leaseMissedRenewals` before
@@ -414,7 +487,8 @@ stable worker and skill installation.
 AFK recovery runs in the validated original cwd and uses the recorded session:
 
 ```text
-claude --resume <session-id> --print <static AFK resume prompt>
+claude --resume <session-id> --print --output-format stream-json
+  <static AFK resume prompt>
 ```
 
 The prompt directs Claude to read `.afk/afk-ledger.md`, continue the first
@@ -422,6 +496,27 @@ unfinished step, and preserve existing scope, constraints, merge policy, and
 overlap guard. Recovery loads normal project and user configuration. Session
 IDs must satisfy the documented UUID shape, cwd must be an existing directory,
 and the ledger must resolve within that cwd.
+
+The runner parses stdout incrementally as JSON Lines and treats normal assistant
+content as opaque. On a validated quota error frame with `resets_at`, it records
+an exact five-hour or seven-day reset according to `rate_limit_type`, terminates
+the Claude process group immediately, and finalizes the run as rescheduled. It
+does not wait for the CLI's built-in retry loop or the action timeout. Unknown,
+malformed, or changed frames are ignored safely and the documented StopFailure
+and estimate fallbacks remain active. Raw frames and rendered API errors are not
+logged.
+
+A five-hour quota frame is account-level evidence. During runner finalization,
+the locked state transaction schedules every recoverable run for that reset with
+its stable per-run jitter, not only the run that encountered the 429. A seven-day
+quota frame updates the global suppression boundary for every run. Repeated
+frames for the same reset are idempotent.
+
+Because the frame contract is undocumented, the parser accepts only a
+version-tested event envelope, a plausible Unix-seconds reset, and a recognized
+rate-limit type. An unknown type may be retained as an unclassified diagnostic
+but cannot drive five-hour or seven-day transitions. It never guesses time units
+or derives fields from rendered error text.
 
 Empty-window auto activation, when explicitly enabled, uses print mode,
 `--safe-mode`, `--no-session-persistence`, `--max-turns 1`, `--tools ""`,
@@ -444,18 +539,21 @@ and reports a repairable error.
 
 ## Retry Policy
 
-Failures never retry every minute. Each run has at most three attempts for a
-reset event, with delays of 5, 20, and 60 minutes. A successful heartbeat or a
-terminal transition clears retry state. Exhaustion marks the attempt failed and
-notifies the user. A new exact reset or explicit `trigger-now` starts a new
-bounded attempt series.
+Failures never retry every minute. Each run has at most three non-quota failures
+for a reset event, with delays of 5, 20, and 60 minutes. A validated quota result
+updates or estimates the reset and reschedules the run without incrementing
+`retry.attempts`; learning a quota boundary is expected control flow, not a
+failed recovery. A successful heartbeat or a terminal transition clears retry
+state. Exhaustion marks the attempt failed and notifies the user. A new exact
+reset or explicit `trigger-now` starts a new bounded attempt series.
 
 ## Hooks and Status-line Installation
 
 The plugin provides `SessionStart` and `StopFailure` hooks. SessionStart performs
 fast reconciliation of registered metadata. StopFailure with `rate_limit`
 records the structured failure without guessing a reset time or launching
-Claude. SessionEnd may record an observation but never clears a run.
+Claude. Version 1 does not install a SessionEnd hook because its documented
+reasons cannot establish AFK completion and add no authoritative transition.
 
 Setup explicitly asks to install the status-line bridge. It parses the current
 user setting, writes a backup before modification, and installs a stable wrapper
@@ -474,7 +572,7 @@ network access.
 ### macOS
 
 Setup copies the worker into the stable data directory and installs a per-user
-LaunchAgent under `~/Library/LaunchAgents/`. It runs at load and every 30 seconds
+LaunchAgent under `~/Library/LaunchAgents/`. It runs at load and every 60 seconds
 without administrator access. Launchd's single-job semantics prevent concurrent
 reconciler copies. Logs rotate by size and retained-file count.
 Notifications use `osascript`; actionable behavior is capability-tested and
@@ -483,15 +581,13 @@ falls back to an informational notification.
 ### Windows
 
 Setup copies the worker into `%LOCALAPPDATA%` and installs per-user Task
-Scheduler entries for a recurring trigger and user-logon catch-up. Windows Task
-Scheduler repetition has a one-minute floor on supported configurations, so the
-Windows adapter clamps a requested 30-second interval to 60 seconds and reports
-the effective value. Task settings use `IgnoreNew` for overlapping reconciler
-instances. The adapter uses the resolved absolute Node executable and a stable
-wrapper, with paths passed as argument arrays or correctly XML-escaped values.
-It does not use a VS Code extension binary or require WSL. Notifications use a
-PowerShell-compatible interactive-user adapter and fall back to an informational
-dialog when actions are unavailable.
+Scheduler entries for a 60-second recurring trigger and user-logon catch-up.
+Task settings use `IgnoreNew` for overlapping reconciler instances. The adapter
+uses the resolved absolute Node executable and a stable wrapper, with paths
+passed as argument arrays or correctly XML-escaped values. It does not use a VS
+Code extension binary or require WSL. Notifications use a PowerShell-compatible
+interactive-user adapter and fall back to an informational dialog when actions
+are unavailable.
 
 Install, repair, status, and uninstall are idempotent on both platforms. Worker
 updates are copied to a temporary path and verified before replacing the stable
@@ -521,8 +617,11 @@ skip:no-active-run
 skip:heartbeat-fresh
 skip:tick-grace
 skip:reset-not-due
+skip:estimate-not-due
 skip:reset-already-handled
 skip:recovery-lease-held
+skip:concurrency-exhausted
+skip:seven-day-limit
 skip:run-terminal
 skip:retry-backoff
 skip:rolling-activation-cap
@@ -554,14 +653,19 @@ scheduler or settings.
 Coverage includes:
 
 - exact and malformed status-line parsing;
+- headless quota-frame parsing, changed-schema fallback, and rate-limit type;
+- active child termination after a validated quota frame;
 - preservation and replacement of snapshots;
+- status-line write throttling and account-level import ordering;
 - 90% crossing for every active run;
 - stable independent 60–180 second delays;
 - sessions registered after threshold crossing;
 - terminal-run cancellation;
 - existing status-line chaining and idempotence;
 - lifecycle registration and explicit completion;
+- SessionStart reconstruction guards for completed, old, and ambiguous ledgers;
 - rate-limit StopFailure without reset-time guessing;
+- quota rescheduling without consuming the non-quota retry budget;
 - exact-reset and stale-heartbeat recovery;
 - fresh heartbeat and tick-grace no-op;
 - tick/supervisor race and stale-lock cleanup;
@@ -572,6 +676,7 @@ Coverage includes:
 - rolling 24-hour activation cap and bounded retries;
 - exact seven-day suppression and missing seven-day fallback;
 - terminal-run, observation, and activation-attempt retention cleanup;
+- observation parsing and deletion outside the global lock;
 - corrupt state recovery and schema migration;
 - missing CLI and authentication;
 - duplicate reset handling;
@@ -584,7 +689,7 @@ Coverage includes:
 
 ### Always-running daemon
 
-A daemon would avoid 1,440–2,880 short reconciler process starts per day and
+A daemon would avoid about 1,440 short reconciler process starts per day and
 could schedule sub-minute timers directly. It also adds a continuously resident
 process, daemon health supervision, upgrade handoff, crash-loop handling, and a
 larger cross-platform lifecycle surface. Version 1 uses short deterministic
@@ -608,12 +713,14 @@ lifecycle.
 
 ## Open Questions and Manual Validation
 
-- Confirm the effective minimum Task Scheduler repetition interval across the
-  supported Windows versions; report a 60-second clamp where required.
 - Canary whether the current VS Code graphical extension executes user
   status-line commands; absence keeps exact usage capability `unobserved`.
 - Measure reconciler startup overhead and scheduler lateness on macOS and
   Windows before claiming operational timing.
+- With explicit approval, capture one real quota-limited
+  `--print --output-format stream-json` run and confirm the installed CLI emits
+  the expected `rate_limits.resets_at` and `rate_limit_type` fields before
+  reporting the headless provider as confirmed.
 - Exercise subscription authentication, empty `--tools` behavior, and
   `--max-turns` with an explicitly approved minimal request; automated tests do
   not spend Claude usage.
