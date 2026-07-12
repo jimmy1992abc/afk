@@ -53,6 +53,11 @@ export function selectCandidate(state, inputs, config, now) {
 
   let nearest = null;
   for (const run of recoverable) {
+    if (run.state === 'FAILED' && (run.retry?.attempts ?? 0) >= config.maxRecoveryAttempts
+        && !Number.isFinite(run.retry?.nextAttemptAt)) {
+      nearest ??= { kind: 'skip', code: 'skip:recovery-attempts-exhausted' };
+      continue;
+    }
     if (Number.isFinite(run.quotaRejections?.nextProbeAt) && run.quotaRejections.nextProbeAt > now) {
       nearest ??= { kind: 'skip', code: 'skip:quota-backoff', dueAt: run.quotaRejections.nextProbeAt };
       continue;

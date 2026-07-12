@@ -72,3 +72,8 @@ test('quota backoff and estimate-not-due have distinct skips', () => {
   const estimate = stateWith(run({ state: 'RATE_LIMITED', rateLimitedUntil: now + 10, resetConfidence: 'estimated' }));
   assert.equal(selectCandidate(estimate, {}, config, now).code, 'skip:estimate-not-due');
 });
+
+test('exhausted ordinary recovery attempts are not selected again', () => {
+  const exhausted = stateWith(run({ state: 'FAILED', retry: { attempts: config.maxRecoveryAttempts, nextAttemptAt: null } }));
+  assert.equal(selectCandidate(exhausted, {}, config, now).code, 'skip:recovery-attempts-exhausted');
+});
