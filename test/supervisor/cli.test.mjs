@@ -5,6 +5,14 @@ import { defaultConfig } from '../../scripts/supervisor/config.mjs';
 import { runCli } from '../../scripts/supervisor/cli.mjs';
 import { defaultState } from '../../scripts/supervisor/state-store.mjs';
 
+// Registration now refuses a path recovery could never use, and "absolute" is a
+// question only the host can answer: C:\repo is not an absolute path on Linux.
+const WIN = process.platform === 'win32';
+const CWD = WIN ? String.raw`C:\repo` : '/repo';
+const LEDGER = WIN ? String.raw`C:\repo\.afk\afk-ledger.md` : '/repo/.afk/afk-ledger.md';
+const OUTSIDE = WIN ? String.raw`C:\other\afk-ledger.md` : '/other/afk-ledger.md';
+const SESSION = '00000000-0000-4000-8000-000000000001';
+
 function harness() {
   let config = defaultConfig();
   let state = defaultState();
@@ -82,8 +90,26 @@ test('register resolves a recent SessionStart observation for the cwd', async ()
   assert.equal(h.state.runs.one.sessionId, '00000000-0000-4000-8000-000000000001');
 });
 
-const REGISTER = ['register', '--run-id', 'one', '--session-id', '00000000-0000-4000-8000-000000000001',
-  '--cwd', 'C:\\repo', '--ledger', 'C:\\repo\\.afk\\afk-ledger.md'];
+const REGISTER = ['register', '--run-id', 'one', '--session-id', SESSION, '--cwd', CWD, '--ledger', LEDGER];
+
+test('registration refuses the paths recovery would later refuse', async () => {
+  // register accepted any truthy cwd and ledger. validateRecoveryRun rejects a
+  // relative cwd, a relative ledger, and a ledger outside the run — but only at
+  // recovery time, where the throw burns one of the run's finite recovery attempts
+  // on every invocation until they are exhausted. The run could never be resumed,
+  // and nothing said so while there was still an operator there to see it.
+  for (const paths of [
+    ['--cwd', 'repo', '--ledger', LEDGER],
+    ['--cwd', CWD, '--ledger', 'afk-ledger.md'],
+    ['--cwd', CWD, '--ledger', OUTSIDE],
+  ]) {
+    const h = harness();
+    const result = await runCli(['register', '--run-id', 'one', '--session-id', SESSION, ...paths], h.deps);
+    assert.equal(result.code, 2, paths.join(' '));
+    assert.match(h.deps.output.at(-1), /error:registration-invalid/);
+    assert.deepEqual(h.state.runs, {}, 'a run recovery can never use must not be stored');
+  }
+});
 
 test('re-registering a run preserves its recovery state', async () => {
   const h = harness();

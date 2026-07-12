@@ -65,13 +65,20 @@ async function killTree(child) {
 // Claude was in fact doing the work.
 export const DETACHED = process.platform !== 'win32';
 
+// Every place that runs the Claude executable goes through here — the runner and
+// setup's preflight probe both do. Knowing this rule in only one of them is what
+// left preflight calling the shim directly: it threw, setup caught the throw, and
+// told the user their login was missing.
+export function claudeInvocation(executable, args) {
+  return /\.(cmd|bat)$/i.test(executable)
+    ? { file: process.env.COMSPEC ?? 'cmd.exe', args: ['/d', '/s', '/c', executable, ...args] }
+    : { file: executable, args };
+}
+
 export function spawnClaude(executable, args, options = {}) {
   const { spawn: launch = spawn, ...rest } = options;
-  const shim = /\.(cmd|bat)$/i.test(executable);
-  const spawnOptions = { ...rest, detached: DETACHED };
-  return shim
-    ? launch(process.env.COMSPEC ?? 'cmd.exe', ['/d', '/s', '/c', executable, ...args], spawnOptions)
-    : launch(executable, args, spawnOptions);
+  const invocation = claudeInvocation(executable, args);
+  return launch(invocation.file, invocation.args, { ...rest, detached: DETACHED });
 }
 
 export function startClaudeProcess(attempt, options = {}) {

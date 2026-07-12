@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import { validateRecoveryRun } from './claude-runner.mjs';
 import { ConfigStore, validateConfig } from './config.mjs';
 import { createInstallDeps, installSupervisor, preflightClaude, repairSupervisor, statusSupervisor, uninstallSupervisor } from './install.mjs';
 import { runnerLiveness } from './platform.mjs';
@@ -12,7 +13,6 @@ import { transitionRun } from './state-machine.mjs';
 import { StateStore, emptyRecoveryLease } from './state-store.mjs';
 import { scheduleRun } from './usage-provider.mjs';
 
-const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
 function dataRoot() {
@@ -74,7 +74,15 @@ async function register(args, deps) {
       sessionId = observed.sessionId;
     }
   }
-  if (!RUN_ID.test(args.runId ?? '') || !SESSION_ID.test(sessionId ?? '') || !args.cwd || !args.ledger) {
+  if (!RUN_ID.test(args.runId ?? '')) return emit(deps, 'error:registration-invalid', 2);
+  try {
+    // The one rule recovery itself applies. Accepting a relative cwd, a relative
+    // ledger, or a ledger outside the run only deferred the refusal to recovery
+    // time, where the throw burns one of the run's finite attempts on every
+    // invocation until they are exhausted — a run that can never be resumed, and
+    // no word of it while an operator was still there to see it.
+    validateRecoveryRun({ sessionId, cwd: args.cwd, ledgerPath: args.ledger });
+  } catch {
     return emit(deps, 'error:registration-invalid', 2);
   }
   await deps.stateStore.update((state) => {

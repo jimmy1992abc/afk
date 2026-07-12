@@ -5,6 +5,7 @@ import { basename, dirname, isAbsolute, join } from 'node:path';
 import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
 
+import { claudeInvocation } from './claude-runner.mjs';
 import { platformAdapter } from './platform.mjs';
 
 const execFileAsync = promisify(execFileCallback);
@@ -52,9 +53,13 @@ export async function preflightClaude(platform = process.platform, deps = {}) {
     .filter((line) => line.length > 0 && CLAUDE_EXECUTABLE.test(basename(line)));
   const claudePath = candidates.find((line) => /\.exe$/i.test(line)) ?? candidates[0];
   if (!claudePath) throw new Error(CLI_MISSING);
+  // Node cannot execute a .cmd directly, and the shim npm installs is exactly that.
+  // Probing it straight from execFile threw, and setup blamed the user's login for
+  // a CLI that was installed and logged in. The runner already knew this rule.
+  const probe = claudeInvocation(claudePath, ['auth', 'status', '--json']);
   let status;
   try {
-    status = await execFile(claudePath, ['auth', 'status', '--json'], { windowsHide: true, maxBuffer: 1024 * 1024 });
+    status = await execFile(probe.file, probe.args, { windowsHide: true, maxBuffer: 1024 * 1024 });
   } catch {
     throw new Error(AUTH_MISSING);
   }

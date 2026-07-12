@@ -1,5 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { execFile as execFileCallback } from 'node:child_process';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { promisify } from 'node:util';
 
 import {
   installSupervisor,
@@ -11,6 +16,8 @@ import {
   uninstallSupervisor,
   validateClaudeStatus,
 } from '../../scripts/supervisor/install.mjs';
+
+const execFileAsync = promisify(execFileCallback);
 
 function installDeps(overrides = {}) {
   const state = { record: null, settings: { statusLine: { type: 'command', command: 'user-status' } }, registered: false };
@@ -128,6 +135,42 @@ test('preflight finds the shim npm actually installs on Windows', async () => {
   const found = await preflightClaude('win32', { execFile });
   assert.deepEqual(asked[0], ['where.exe', 'claude'], 'ask for every shim, not only the native build');
   assert.equal(found.claudePath, String.raw`C:\npm\claude.cmd`);
+});
+
+test('preflight probes the shim through cmd.exe, as Node requires', async () => {
+  // Finding the shim is not enough: Node cannot execute a .cmd directly (EINVAL
+  // since Node 20). Calling it straight from execFile threw, preflight caught the
+  // throw, and setup reported claude-auth-missing — locking out the very npm
+  // install the locator was fixed to find, and blaming the user's login for it.
+  const asked = [];
+  const execFile = async (file, args) => {
+    asked.push({ file, args });
+    if (file === 'where.exe') return { stdout: String.raw`C:\npm\claude.cmd` + '\r\n' };
+    return { stdout: JSON.stringify({ loggedIn: true }) };
+  };
+  const found = await preflightClaude('win32', { execFile });
+  const probe = asked.at(-1);
+  assert.match(probe.file, /cmd\.exe$/i, 'a .cmd must be probed through cmd.exe');
+  assert.ok(probe.args.includes(String.raw`C:\npm\claude.cmd`));
+  assert.ok(probe.args.includes('auth'), 'and the arguments stay an array, never a shell string');
+  assert.equal(found.claudePath, String.raw`C:\npm\claude.cmd`);
+});
+
+test('a real .cmd shim is executable by preflight on this machine', { skip: process.platform !== 'win32' }, async () => {
+  // The fake execFile above cannot fail the way Node does, which is precisely how
+  // the defect survived: every preflight test passed against a stub that would
+  // happily "run" a .cmd. This one spawns a real shim with the real execFile.
+  const directory = await mkdtemp(join(tmpdir(), 'afk-preflight-'));
+  const shim = join(directory, 'claude.cmd');
+  await writeFile(shim, '@echo off\r\necho {"loggedIn":true}\r\n');
+  try {
+    const execFile = async (file, args, options) => (file === 'where.exe'
+      ? { stdout: `${shim}\r\n` }
+      : execFileAsync(file, args, options));
+    assert.deepEqual(await preflightClaude('win32', { execFile }), { claudePath: shim, authenticated: true });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test('preflight prefers a real executable over a script shim', async () => {
