@@ -227,6 +227,24 @@ test('runAttempt notifies when consecutive quota rejection escalates', async () 
   assert.equal(notified[0].runId, 'run-1');
 });
 
+test('an activation anchors the window at the request, not at the finalize', () => {
+  // The five-hour window opens at the FIRST request. Recovery already anchors at
+  // the runner's start for exactly this reason; activation used the finalize time,
+  // so a slow activation pushed the estimated reset late by its own duration — and
+  // every recovery keyed off that reset waited past the real one. It also wrote the
+  // anchor straight in, bypassing the clamp that stops an anchor moving inside a
+  // window that has not elapsed.
+  const startedAt = now - 240;
+  const current = state();
+  current.activation = {
+    ...current.activation, inProgress: true, attemptId: 'activation-1',
+    token: 'activation-token', resetAt: now - 90, activationAttempts: [now - 5],
+  };
+  const next = finalizeActivation(current, 'activation-token', { kind: 'success', startedAt }, now);
+  assert.equal(next.usage.windowAnchorAt, startedAt);
+  assert.equal(next.usage.fiveHourResetAt, startedAt + 18_000);
+});
+
 test('successful activation records a new estimated anchor', () => {
   const current = state();
   current.activation = {

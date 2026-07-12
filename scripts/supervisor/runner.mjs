@@ -111,11 +111,20 @@ export function finalizeActivation(state, token, result, now) {
   if (result.kind === 'success') {
     next.activation.handledResetAt = next.activation.resetAt;
     next.activation.lastResult = 'result:activation-success';
-    next.usage.windowAnchorAt = now;
-    next.usage.fiveHourResetAt = now + WINDOW_SECONDS;
-    next.usage.source = 'window-anchor';
-    next.usage.confidence = 'estimated';
-    next.usage.observedAt = now;
+    // The window opens at the first request, not when the activation finishes —
+    // the same reason recovery anchors at its runner's start. Anchoring at the
+    // finalize pushed the estimated reset late by the activation's own duration,
+    // and every recovery keyed off that reset then waited past the real one. It
+    // also goes through the clamp, so it cannot move an anchor inside a window
+    // that has not elapsed.
+    const anchorAt = Number.isFinite(result.startedAt) ? result.startedAt : now;
+    next.usage.windowAnchorAt = allowedAnchor(next.usage, anchorAt);
+    if (next.usage.confidence !== 'exact') {
+      next.usage.fiveHourResetAt = next.usage.windowAnchorAt + WINDOW_SECONDS;
+      next.usage.source = 'window-anchor';
+      next.usage.confidence = 'estimated';
+      next.usage.observedAt = now;
+    }
   } else {
     next.activation.lastResult = result.kind === 'quota'
       ? 'result:activation-quota-rejected' : 'error:activation-failed';
@@ -143,15 +152,19 @@ export async function runAttempt(attemptId, deps) {
   const state = await deps.store.read();
   const entry = Object.entries(state.runs).find(([, run]) => run.recoveryLease?.attemptId === attemptId);
   if (!entry && state.activation.inProgress && state.activation.attemptId === attemptId) {
-    const interval = deps.setInterval(() => {
-      deps.store.update((current) => {
-        if (current.activation.token !== state.activation.token) return current;
-        const renewedAt = deps.now();
-        current.activation.lastRenewedAt = renewedAt;
-        current.activation.expiresAt = renewedAt + deps.config.leaseRenewalSeconds * deps.config.leaseMissedRenewals;
-        return current;
-      }).catch(() => {});
-    }, deps.config.leaseRenewalSeconds * 1000);
+    const renewActivation = () => deps.store.update((current) => {
+      if (current.activation.token !== state.activation.token) return current;
+      const renewedAt = deps.now();
+      current.activation.lastRenewedAt = renewedAt;
+      current.activation.expiresAt = renewedAt + deps.config.leaseRenewalSeconds * deps.config.leaseMissedRenewals;
+      // Stamp the identity too: whichever of us gets there first, the claim is
+      // verifiable from the first second and never mistaken for abandoned.
+      current.activation.pid = deps.identity.pid;
+      current.activation.startedAt = deps.identity.startedAt;
+      return current;
+    }).catch(() => {});
+    await renewActivation();
+    const interval = deps.setInterval(renewActivation, deps.config.leaseRenewalSeconds * 1000);
     let result;
     try { result = await deps.runActivation({ id: attemptId, timeoutSeconds: deps.config.recoveryAttemptTimeoutSeconds }); }
     catch (error) { result = { kind: 'failure', reason: error?.code ?? 'runner-exception' }; }

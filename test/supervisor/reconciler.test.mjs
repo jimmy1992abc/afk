@@ -93,6 +93,31 @@ test('an operator force is spent once it has been acted on', async () => {
   assert.equal((await h.store.read()).runs['run-1'].forcedUntil, null);
 });
 
+test('an activation whose runner is still alive is never reclaimed', async () => {
+  // The activation lease was reclaimed on expiry alone, with no liveness check at
+  // all — the very defect that was fixed for recovery leases. A machine that sleeps
+  // longer than the lease expires it while the detached activation runner is still
+  // running, so the next pass starts a SECOND activation on top of it and burns
+  // another attempt from the daily cap.
+  const h = await harness(run({ state: 'RUNNING', lastHeartbeatAt: now - 10, nextExpectedTickAt: now + 900 }));
+  h.deps.runnerLiveness = async () => 'alive';
+  await h.store.update((state) => {
+    state.activation = {
+      ...state.activation, inProgress: true, attemptId: 'activation-1', token: 'tok',
+      resetAt: now - 90, lastAttemptAt: now - 5_000, lastRenewedAt: now - 5_000,
+      expiresAt: now - 1, pid: 4242, startedAt: 1_700_000_000_000, activationAttempts: [now - 5_000],
+    };
+    return state;
+  });
+
+  await reconcileOnce(h.deps);
+  const after = (await h.store.read()).activation;
+  assert.equal(after.inProgress, true, 'a live activation runner must keep its claim');
+  assert.notEqual(after.lastResult, 'error:activation-lease-expired', 'and must not be written off as expired');
+  assert.equal(after.attemptId, 'activation-1', 'its claim is intact');
+  assert.equal(h.spawnCalls.length, 0, 'and no second activation may be started');
+});
+
 test('a pass that lost the race never leases a run a second time', async () => {
   const h = await harness(run({ lastHeartbeatAt: now - 99_999, nextExpectedTickAt: null }));
   h.deps.readLedgerHeartbeat = async () => {
@@ -308,12 +333,20 @@ test('empty reset auto mode detached-spawns activation runner', async () => {
     state.usage.fiveHourResetAt = now - defaultConfig().graceSeconds;
     return state;
   });
+  h.deps.spawnRunner = (attempt) => { h.spawnCalls.push(attempt); return { pid: 5150, unref() {} }; };
+  h.deps.processStartedAt = async () => 1_700_000_000_000;
   const result = await reconcileOnce(h.deps);
   assert.equal(result.code, 'action:activation-runner-started');
   assert.equal(h.spawnCalls[0].kind, 'activation');
   // Counted at lease time: an activation whose runner crashes never finalizes,
   // so a cap counted at finalize would never trip and activations run unbounded.
-  assert.deepEqual((await h.store.read()).activation.activationAttempts, [now]);
+  const activation = (await h.store.read()).activation;
+  assert.deepEqual(activation.activationAttempts, [now]);
+  // And the claim is verifiable from the first second: without an identity, a
+  // sleeping machine expires the lease and a second activation starts on top of a
+  // live one. Same rule as a recovery runner.
+  assert.equal(activation.pid, 5150);
+  assert.equal(activation.startedAt, 1_700_000_000_000);
 });
 
 test('fresh heartbeat after provisional selection prevents spawn', async () => {

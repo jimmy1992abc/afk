@@ -42,6 +42,10 @@ export function defaultState() {
       token: null,
       lastRenewedAt: null,
       expiresAt: null,
+      // A pid is not an identity; the pair is. The activation runner is verified the
+      // same way a recovery runner is, so an expiry alone can never reclaim it.
+      pid: null,
+      startedAt: null,
       lastAttemptAt: null,
       lastResult: null,
       activationAttempts: [],

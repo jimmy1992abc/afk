@@ -91,8 +91,7 @@ const held = (code, notBefore = null, extra = {}) => ({ runnable: false, code, n
 // last renewal, so an expiry stands in for a missing `lastRenewedAt` — an old-shape
 // lease from before an upgrade carries no such stamp. A forward clock step cannot
 // make the answer negative, and so cannot buy a claim an indefinite hold.
-function unrenewedFor(run, config, now) {
-  const claim = run.recoveryLease;
+export function unrenewedFor(claim, config, now) {
   const ttl = config.leaseRenewalSeconds * config.leaseMissedRenewals;
   const renewed = Number.isFinite(claim?.lastRenewedAt)
     ? claim.lastRenewedAt
@@ -118,7 +117,8 @@ export function runnability(run, state, config, now, inputs = {}) {
   // A live runner renews, and a renewed claim is unexpired, so it never reaches
   // here. A claim unrenewed for longer than a runner can even live — its own action
   // timeout bounds that — has no runner behind it.
-  if (inputs.unknownRuns?.has(run.runId) && unrenewedFor(run, config, now) <= config.recoveryAttemptTimeoutSeconds) {
+  if (inputs.unknownRuns?.has(run.runId)
+      && unrenewedFor(run.recoveryLease, config, now) <= config.recoveryAttemptTimeoutSeconds) {
     return held('skip:runner-alive', now + config.leaseRenewalSeconds);
   }
 
@@ -286,7 +286,12 @@ export function pruneState(state, config, now, inputs = {}) {
   }
   state.activation.activationAttempts = state.activation.activationAttempts
     .filter((attemptAt) => Number.isFinite(attemptAt) && now - attemptAt <= 86_400);
-  if (state.activation.inProgress && (!Number.isFinite(state.activation.expiresAt) || state.activation.expiresAt <= now)) {
+  // An expiry is not a death certificate. The activation lease was reclaimed on
+  // expiry alone — no liveness check at all — so a machine that slept longer than
+  // the lease expired it while the detached activation runner was still running,
+  // and the next pass started a second activation on top of it.
+  if (state.activation.inProgress && !inputs.activationOccupied
+      && (!Number.isFinite(state.activation.expiresAt) || state.activation.expiresAt <= now)) {
     state.activation.inProgress = false;
     state.activation.attemptId = null;
     state.activation.token = null;

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import { processStartedAt } from './platform.mjs';
 import { applyUsageObservation } from './usage-provider.mjs';
-import { pruneState, runnerOwns, selectCandidate, transitionRun, usableHeartbeat } from './state-machine.mjs';
+import { pruneState, runnerOwns, selectCandidate, transitionRun, unrenewedFor, usableHeartbeat } from './state-machine.mjs';
 
 function applyBatch(state, batch, config) {
   return batch.reduce((current, item) => applyUsageObservation(current, item.observation, config), state);
@@ -66,7 +66,22 @@ async function resolveLiveness(state, deps, now) {
       });
     }
   }
-  return { aliveRuns, unknownRuns };
+  return { aliveRuns, unknownRuns, activationOccupied: await activationOccupied(state, deps, now) };
+}
+
+// The activation runner is a runner too, and its claim is reclaimed by the same
+// rules: an unexpired lease is occupied; an expired one is occupied only while a
+// live process stands behind it, or while it is too recently unrenewed for its
+// runner to have died. Reclaiming it on expiry alone started a second activation
+// on top of a live one, every time the machine slept.
+async function activationOccupied(state, deps, now) {
+  const claim = state.activation;
+  if (!claim?.inProgress) return false;
+  if (Number.isFinite(claim.expiresAt) && claim.expiresAt > now) return true;
+  const liveness = Number.isInteger(claim.pid) ? await deps.runnerLiveness(claim) : 'unknown';
+  if (liveness === 'alive') return true;
+  if (liveness === 'dead') return false;
+  return unrenewedFor(claim, deps.config, now) <= deps.config.recoveryAttemptTimeoutSeconds;
 }
 
 // The claim has to be written before the spawn, or two passes could both start a
@@ -89,6 +104,19 @@ async function recordRunnerIdentity(deps, runId, attempt, child) {
   });
 }
 
+async function recordActivationIdentity(deps, attempt, child) {
+  const pid = child?.pid;
+  if (!Number.isInteger(pid)) return;
+  const probe = deps.processStartedAt ?? processStartedAt;
+  const startedAt = await probe(pid);
+  await deps.store.update((current) => {
+    if (current.activation?.token !== attempt.token) return current;
+    current.activation.pid = pid;
+    current.activation.startedAt = Number.isFinite(startedAt) ? startedAt : null;
+    return current;
+  });
+}
+
 export async function reconcileOnce(deps) {
   const now = deps.now();
   const batch = await deps.readObservationBatch();
@@ -99,8 +127,8 @@ export async function reconcileOnce(deps) {
   if (batch.length > 0) {
     await deps.commitObservationBatch(batch);
   }
-  const { aliveRuns, unknownRuns } = await resolveLiveness(state, deps, now);
-  const inputs = { heartbeats, aliveRuns, unknownRuns };
+  const { aliveRuns, unknownRuns, activationOccupied } = await resolveLiveness(state, deps, now);
+  const inputs = { heartbeats, aliveRuns, unknownRuns, activationOccupied };
   // Pruning asks the same runnability question the selector does, so it can only
   // run once liveness is known: a run held by a live runner is waiting, not
   // abandoned, and deleting it is how the mechanism meant to resume it destroyed
@@ -140,7 +168,11 @@ export async function reconcileOnce(deps) {
       return current;
     });
     if (!attempt) return { code: 'skip:state-changed' };
-    deps.spawnRunner(attempt).unref();
+    const activationChild = deps.spawnRunner(attempt);
+    activationChild.unref?.();
+    // Same reason as a recovery runner: a claim whose process cannot be identified
+    // cannot be told apart from an abandoned one.
+    await recordActivationIdentity(deps, attempt, activationChild);
     return { code: 'action:activation-runner-started', attemptId };
   }
   if (decision.kind === 'handle') {
