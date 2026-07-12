@@ -558,10 +558,32 @@ The invocation is spawned without a shell.
 **An expired lease is not an abandoned one.** A suspended machine stops the
 renewal timer while the runner and its Claude child stay alive, so re-issuing a
 lease on expiry alone starts a second `claude --resume` against the same session.
-The runner records its pid on every renewal and the reconciler refuses to
-re-issue a lease whose runner is still alive (`skip:runner-alive`). An
-empty-window activation counts against the same invocation limit, because its
-Claude child lives just as long as any recovery.
+The runner records its pid on every renewal, and a live pid means the run is
+occupied — **with no time bound**. Bounding it by the action timeout is
+self-defeating: that timeout is a timer too, and suspend stops timers while the
+wall clock keeps running, so the bound expires in exactly the case the check
+exists for.
+
+The residual risk is pid reuse, which leaves a run occupied by a stranger's
+process. The supervisor does not paper over that by guessing the runner is dead —
+it notifies the operator, and `trigger-now` clears the lease by hand. **That
+command is the only manual escape hatch, so it must actually work on the runs an
+operator reaches for it with**: it clears the lease, the retry counter, and the
+quota backoff, because the selector short-circuits on all three long before it
+looks at a schedule.
+
+A lease expiry is written from the same clock as a heartbeat and gets the same
+distrust: a forward clock step during a renewal would otherwise persist an expiry
+years out and hold the only invocation slot for ever. The ceiling admits the
+longest lease anyone legitimately takes — the in-session tick's, which runs for
+`heartbeatStaleSeconds`.
+
+**Only a supervisor invocation counts against `maxConcurrentInvocations`.** The
+in-session AFK tick leases its own run as well; counting that would let one
+interactively-running repo disable recovery for every other repo. It still marks
+its run occupied, so the supervisor never resumes a run the tick is working on. An
+empty-window activation *does* count, because its Claude child lives as long as
+any recovery.
 
 The lease re-check before an invocation is given **the same inputs the selection
 saw**. Narrowing the heartbeat map to the selected run makes every other run fall
@@ -642,8 +664,9 @@ and reports a repairable error.
 
 ## Retry Policy
 
-Failures never retry every minute. Each run has at most three non-quota failures
-for a reset event, with delays of 5, 20, and 60 minutes. A validated quota result
+Failures never retry every minute. `maxRecoveryAttempts` counts **invocations, not
+retries after them**: three permitted failures means three `claude --resume`
+calls, spaced by 5 and 20 minutes, and then no more. A validated quota result
 updates or estimates the reset and reschedules the run without incrementing
 `retry.attempts`; classifying a quota rejection is expected control flow, not a
 failed recovery.
@@ -655,8 +678,14 @@ consecutive quota rejections without success, the supervisor notifies the user,
 marks the run as a possible long-window limit without claiming an exact
 seven-day boundary, and switches to 24-hour exponential probe delays capped at
 seven days. Later quota rejections advance that backoff and remain visible in
-status. An exact status-line snapshot or explicit `trigger-now` replaces the
-inference; success clears it.
+status.
+
+The escalation is the inference *"this account is against a long-window limit"*.
+An ordinary five-hour reset does not disprove that — it happens every five hours,
+and clearing on it would put the ladder permanently out of reach. Only **headroom
+in the weekly window**, a success, or an explicit `trigger-now` disproves it. And
+clearing the counter alone is not enough: the escalation also parked the run on a
+24-hour resume, which has to be released with it.
 
 A successful heartbeat or a terminal transition clears ordinary retry state.
 Exhaustion marks the attempt failed and notifies the user. A new exact reset or
