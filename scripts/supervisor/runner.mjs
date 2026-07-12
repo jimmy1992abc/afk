@@ -114,13 +114,17 @@ export function finalizeActivation(state, token, result, now) {
   return next;
 }
 
-async function renewLease(store, runId, token, now, config) {
+async function renewLease(store, runId, token, now, config, pid = process.pid) {
   await store.update((state) => {
     const run = state.runs[runId];
     if (!run || run.lease?.token !== token) return state;
     const renewedAt = now();
     run.lease.lastRenewedAt = renewedAt;
     run.lease.expiresAt = renewedAt + config.leaseRenewalSeconds * config.leaseMissedRenewals;
+    // Expiry alone does not mean this runner died — a suspended machine stops
+    // the timer while the process lives. The reconciler checks this pid before
+    // it re-issues the lease.
+    run.lease.pid = pid;
     return state;
   });
 }
@@ -151,9 +155,10 @@ export async function runAttempt(attemptId, deps) {
   }
   if (!entry) return { code: 'skip:attempt-not-found' };
   const [runId, run] = entry;
-  const interval = deps.setInterval(() => {
-    renewLease(deps.store, runId, run.lease.token, deps.now, deps.config).catch(() => {});
-  }, deps.config.leaseRenewalSeconds * 1000);
+  const interval = deps.setInterval(
+    () => renewLease(deps.store, runId, run.lease.token, deps.now, deps.config).catch(() => {}),
+    deps.config.leaseRenewalSeconds * 1000,
+  );
   let result;
   try {
     try {
@@ -165,13 +170,19 @@ export async function runAttempt(attemptId, deps) {
     deps.clearInterval(interval);
   }
   let finalized;
+  let applied = false;
   await deps.store.update((current) => {
+    // finalizeAttempt no-ops on a token mismatch and returns the state unchanged,
+    // so the saved record still carries the winner's result. Without this flag a
+    // superseded attempt would report the winner's success as its own.
+    applied = current.runs[runId]?.lease?.token === run.lease.token;
     finalized = finalizeAttempt(current, runId, run.lease.token, result, deps.now(), deps.config);
     return finalized;
   });
+  if (!applied) return { code: 'skip:stale-attempt' };
   const saved = finalized.runs[runId];
   if (saved?.lastResult === 'result:quota-backoff-escalated') await deps.notify(saved);
-  return { code: result.kind === 'success' ? 'result:success' : saved?.lastResult ?? 'skip:stale-attempt' };
+  return { code: result.kind === 'success' ? 'result:success' : saved?.lastResult ?? 'error:resume-failed' };
 }
 
 function dataRoot() {

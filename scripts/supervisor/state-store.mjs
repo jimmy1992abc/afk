@@ -1,9 +1,9 @@
-import { mkdir, open, readFile, rename } from 'node:fs/promises';
+import { copyFile, mkdir, open, readFile, rename } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 import { SCHEMA_VERSION, STATE_FILE } from './constants.mjs';
-import { CONTENDED, LockHeldError, withFileLock } from './lock.mjs';
+import { CONTENDED, LockHeldError, holdsLock, withFileLock } from './lock.mjs';
 
 export class StateConflictError extends Error {
   constructor(message = 'state revision changed') {
@@ -140,7 +140,11 @@ export class StateStore {
     this.now = options.now ?? Date.now;
   }
 
-  async read() {
+  // `repair` is only ever true under the global lock. A plain read is public and
+  // unlocked, so repairing there would let a reader rewrite state.json while a
+  // lock-holding writer is mid-transaction — and both would end up writing a
+  // default state over every registered run.
+  async read({ repair = false } = {}) {
     await mkdir(this.root, { recursive: true });
     let raw;
     try {
@@ -152,19 +156,26 @@ export class StateStore {
     try {
       return migrateState(JSON.parse(raw));
     } catch {
-      const quarantine = join(this.root, `state.corrupt-${this.now()}.json`);
-      await rename(this.path, quarantine);
+      if (!repair) return defaultState();
+      // Copy the corrupt file aside and only then replace it. Renaming it away
+      // first leaves no state.json at all if the process dies before the
+      // replacement lands, and the next read would silently start from scratch.
+      const quarantine = join(this.root, `state.corrupt-${Math.floor(this.now() / 1000)}.json`);
+      await copyFile(this.path, quarantine);
       await atomicWriteJson(this.path, defaultState());
       return defaultState();
     }
   }
 
   async write(next, expectedRevision) {
-    return withStateLock(this.root, () => this.writeUnlocked(next, expectedRevision));
+    return withStateLock(this.root, async ({ token }) => {
+      if (!await holdsLock(this.root, token)) throw new LockHeldError();
+      return this.writeUnlocked(next, expectedRevision);
+    });
   }
 
   async writeUnlocked(next, expectedRevision) {
-    const current = await this.read();
+    const current = await this.read({ repair: true });
     if (current.revision !== expectedRevision) throw new StateConflictError();
     const saved = validateState(migrateState({ ...next, revision: expectedRevision + 1 }));
     await atomicWriteJson(this.path, saved);
@@ -172,9 +183,13 @@ export class StateStore {
   }
 
   async update(mutator) {
-    return withStateLock(this.root, async () => {
-      const current = await this.read();
+    return withStateLock(this.root, async ({ token }) => {
+      const current = await this.read({ repair: true });
       const next = await mutator(structuredClone(current));
+      // Two holders would both read this revision and both pass the compare, and
+      // the loser's write would vanish with no error at all. Confirming the lock
+      // still names us turns that silent loss into a retry.
+      if (!await holdsLock(this.root, token)) throw new LockHeldError();
       return this.writeUnlocked(next, current.revision);
     });
   }

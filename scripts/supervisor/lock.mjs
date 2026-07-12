@@ -1,4 +1,4 @@
-import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
@@ -44,6 +44,31 @@ async function reclaimable(dir, now, ttlMs) {
   return stats ? now() - stats.mtimeMs >= ttlMs : false;
 }
 
+// Reclaiming by deleting the directory is not safe: `reclaimable()` is a read,
+// so two contenders can both judge the same expired lock reclaimable, one of them
+// reclaims and becomes the live holder, and the other's delete then destroys that
+// live lock — putting two callers in the critical section.
+//
+// The steal is therefore an atomic rename. Only one contender can move a given
+// directory, and the winner re-checks what it actually moved: if a live holder
+// had recreated the lock in the meantime, the winner moved *their* directory and
+// puts it straight back. Deleting only ever happens to a directory this process
+// exclusively owns.
+export async function steal(dir, now, ttlMs) {
+  const tombstone = `${dir}.stale-${randomUUID()}`;
+  try {
+    await rename(dir, tombstone);
+  } catch {
+    // Another contender moved it first, or it is momentarily unmovable.
+    throw new LockHeldError();
+  }
+  if (!await reclaimable(tombstone, now, ttlMs)) {
+    try { await rename(tombstone, dir); } catch { /* a third party already took it */ }
+    throw new LockHeldError();
+  }
+  await discard(tombstone);
+}
+
 async function acquire(dir, token, expiresAt, now, ttlMs) {
   for (let attempt = 0; attempt < 5; attempt += 1) {
     try {
@@ -56,10 +81,7 @@ async function acquire(dir, token, expiresAt, now, ttlMs) {
       if (CONTENDED.has(error.code)) throw new LockHeldError();
       if (error.code !== 'EEXIST') throw error;
       if (!await reclaimable(dir, now, ttlMs)) throw new LockHeldError();
-      try { await discard(dir); } catch (discardError) {
-        if (CONTENDED.has(discardError.code)) throw new LockHeldError();
-        throw discardError;
-      }
+      await steal(dir, now, ttlMs);
       continue;
     }
     try {
@@ -80,6 +102,15 @@ async function release(dir, token) {
   // The transaction already committed. A lock this holder cannot remove right
   // now expires on its own, so raising here would reject a completed write.
   try { await discard(dir); } catch { /* reclaimed by TTL */ }
+}
+
+// The last line of defence. Even an atomic steal leaves a hair-thin window in
+// which a holder can be displaced, and two holders that both pass the revision
+// compare-and-set lose a write silently. A holder that checks the lock still
+// names it before committing turns that silent loss into a retry.
+export async function holdsLock(root, token) {
+  const owner = await ownerOf(join(root, LOCK_FILE));
+  return owner?.token === token;
 }
 
 export async function withFileLock(options, callback) {

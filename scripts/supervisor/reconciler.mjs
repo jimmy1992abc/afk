@@ -85,10 +85,22 @@ export async function reconcileOnce(deps) {
     return { code: fresh };
   }
 
+  // A lease must not be re-issued just because the previous one expired: a
+  // suspended machine stops the renewal timer while the runner and its Claude
+  // child stay alive, and a second runner would then resume the same session.
+  const held = state.runs[decision.runId].lease;
+  if (Number.isFinite(held?.pid) && await deps.isRunnerAlive(held.pid)) {
+    return { code: 'skip:runner-alive', runId: decision.runId };
+  }
+
   const attemptId = deps.randomUUID?.() ?? randomUUID();
   let attempt = null;
   await deps.store.update((current) => {
-    const currentDecision = selectCandidate(current, { heartbeats: { [decision.runId]: heartbeat } }, deps.config, now);
+    // The re-check must see the same inputs the selection did. Narrowing the
+    // heartbeat map to one run makes every other run fall back to its persisted
+    // heartbeat, so the re-check can disagree with the selection even though the
+    // state never changed — and the pass then skips for ever.
+    const currentDecision = selectCandidate(current, { heartbeats: { ...heartbeats, [decision.runId]: heartbeat } }, deps.config, now);
     if (currentDecision.kind !== 'invoke' || currentDecision.runId !== decision.runId) return current;
     const run = current.runs[decision.runId];
     const token = deps.randomUUID?.() ?? randomUUID();
@@ -98,7 +110,7 @@ export async function reconcileOnce(deps) {
       : transitionRun(run.state === 'RATE_LIMITED' ? transitionRun(run, 'RECOVERY_DUE', now) : run, 'RECOVERING', now);
     current.runs[decision.runId] = {
       ...recovering,
-      lease: { attemptId, token, lastRenewedAt: now, expiresAt },
+      lease: { attemptId, token, lastRenewedAt: now, expiresAt, pid: null },
       scheduleState: run.scheduleState === 'pending' ? 'leased' : run.scheduleState,
     };
     attempt = { id: attemptId, token, runId: decision.runId, sessionId: run.sessionId, cwd: run.cwd, ledgerPath: run.ledgerPath };

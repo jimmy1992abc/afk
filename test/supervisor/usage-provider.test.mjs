@@ -5,6 +5,7 @@ import { defaultConfig } from '../../scripts/supervisor/config.mjs';
 import { defaultState } from '../../scripts/supervisor/state-store.mjs';
 import {
   applyUsageObservation,
+  estimateReset,
   parseStatuslineSnapshot,
   stableJitterSeconds,
 } from '../../scripts/supervisor/usage-provider.mjs';
@@ -148,6 +149,64 @@ test('a nearly exhausted seven-day window still suppresses recovery', () => {
     ...exact(50, 3_000), sevenDayUsedPercentage: 99.8, sevenDayResetAt: 400_000,
   }, config);
   assert.equal(next.usage.sevenDaySuppressedUntil, 400_000 + config.graceSeconds);
+});
+
+test('a payload with no five-hour reset cannot relabel the stored one as exact', () => {
+  // Seven-day data alone passes hasRateLimitData, so without this guard a
+  // seven-day-only payload launders a window-anchor estimate into "exact" — and
+  // once the stored reset claims to be exact, a genuine exact snapshot is no
+  // longer allowed to replace the schedules built on the estimate.
+  const state = withRuns(['1']);
+  state.usage = {
+    ...state.usage, fiveHourResetAt: 5_000, source: 'window-anchor', confidence: 'estimated',
+  };
+  const next = applyUsageObservation(state, {
+    fiveHourResetAt: null, fiveHourUsedPercentage: null,
+    sevenDayResetAt: 400_000, sevenDayUsedPercentage: 40,
+    observedAt: 1_000, source: 'statusline', confidence: 'exact',
+  }, config);
+  assert.equal(next.usage.confidence, 'estimated');
+  assert.equal(next.usage.source, 'window-anchor');
+  assert.equal(next.usage.sevenDayUsedPercentage, 40, 'the seven-day data is still imported');
+});
+
+test('a repeated threshold observation does not re-arm a schedule already handled', () => {
+  const state = withRuns(['1']);
+  const armed = applyUsageObservation(state, exact(91, 2_000), config);
+  armed.runs['1'].scheduleState = 'handled';
+  const again = applyUsageObservation(armed, exact(95, 2_000, 1_001), config);
+  assert.equal(again.runs['1'].scheduleState, 'handled', 'the same reset must never be armed twice');
+});
+
+test('an older observation cannot overwrite a newer import', () => {
+  const state = withRuns(['1']);
+  const newer = applyUsageObservation(state, exact(50, 3_000, 2_000), config);
+  const older = applyUsageObservation(newer, exact(95, 9_999, 1_000), config);
+  assert.equal(older.usage.fiveHourResetAt, 3_000);
+});
+
+test('a back-dated reset never schedules a resume in the past', () => {
+  // A status-line reset can arrive already behind local time. Scheduling on it
+  // makes the run due immediately, at 90%+ usage, straight back into the limit.
+  const state = withRuns(['1']);
+  const next = applyUsageObservation(state, exact(95, 500, 10_000), config);
+  assert.ok(next.runs['1'].scheduledResumeAt >= 10_000,
+    `scheduledResumeAt ${next.runs['1'].scheduledResumeAt} must not precede the observation`);
+});
+
+test('a new exact reset starts a fresh attempt series for an exhausted run', () => {
+  const state = withRuns(['1']);
+  state.runs['1'] = { ...state.runs['1'], state: 'FAILED', retry: { attempts: 3, nextAttemptAt: null } };
+  const next = applyUsageObservation(state, exact(50, 3_000), config);
+  assert.deepEqual(next.runs['1'].retry, { attempts: 0, nextAttemptAt: null },
+    'without this the run is skipped for ever and never pruned, because FAILED is not terminal');
+});
+
+test('an exact reset in the future outranks every estimate', () => {
+  const usage = { confidence: 'exact', fiveHourResetAt: 50_000, windowAnchorAt: 1_000 };
+  assert.deepEqual(estimateReset(usage, { firstRateLimitedAt: 1_000 }, 20_000, config), {
+    resetAt: 50_000, confidence: 'exact',
+  });
 });
 
 test('stable jitter is deterministic and inside the inclusive range', () => {

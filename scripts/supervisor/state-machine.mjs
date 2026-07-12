@@ -17,8 +17,15 @@ export function transitionRun(run, nextState, updatedAt = run.updatedAt) {
   return { ...run, state: nextState, updatedAt };
 }
 
-function heartbeatFor(run, inputs) {
-  return inputs.heartbeats?.[run.runId] ?? run.lastHeartbeatAt;
+// A heartbeat ahead of local time is a clock artefact, not progress. Trusting it
+// would mark the run fresh for ever, so it would never be recovered, and it would
+// also count as post-reset progress and silently discard the run's schedule.
+export function usableHeartbeat(value, now, config) {
+  return Number.isFinite(value) && value <= now + config.graceSeconds ? value : null;
+}
+
+function heartbeatFor(run, inputs, now, config) {
+  return usableHeartbeat(inputs.heartbeats?.[run.runId] ?? run.lastHeartbeatAt, now, config);
 }
 
 function dueForRateLimit(state, run, config, now) {
@@ -86,7 +93,7 @@ export function selectCandidate(state, inputs, config, now) {
       nearest ??= { kind: 'skip', code: 'skip:retry-backoff', dueAt: run.retry.nextAttemptAt };
       continue;
     }
-    const heartbeat = heartbeatFor(run, inputs);
+    const heartbeat = heartbeatFor(run, inputs, now, config);
     if (run.scheduleState === 'pending' && Number.isFinite(run.scheduledResumeAt)) {
       if (run.scheduledResumeAt > now) {
         nearest ??= { kind: 'skip', code: run.scheduleConfidence === 'estimated' ? 'skip:estimate-not-due' : 'skip:reset-not-due', dueAt: run.scheduledResumeAt };
@@ -96,7 +103,10 @@ export function selectCandidate(state, inputs, config, now) {
         return { kind: 'handle', code: 'skip:heartbeat-satisfied-reset', runId: run.runId };
       }
       if (Number.isFinite(heartbeat) && now - heartbeat < config.heartbeatStaleSeconds) {
-        return { kind: 'skip', code: 'skip:heartbeat-fresh', runId: run.runId };
+        // This run is working; the others behind it in the ordering are not.
+        // Returning here would let one healthy run starve every other due run.
+        nearest ??= { kind: 'skip', code: 'skip:heartbeat-fresh', runId: run.runId };
+        continue;
       }
       return { kind: 'invoke', code: 'action:resume-afk', runId: run.runId, dueAt: run.scheduledResumeAt };
     }

@@ -64,15 +64,26 @@ test('two writers for one revision cannot both commit', async () => {
   assert.equal(results.filter((result) => result.status === 'rejected' && result.reason instanceof StateConflictError).length, 1);
 });
 
-test('corrupt state is quarantined and fails closed to a clean state', async () => {
+test('an unlocked read fails closed without rewriting corrupt state', async () => {
+  // A reader that repaired would rewrite state.json while a writer holds the
+  // lock, and both would commit a default state over every registered run.
   const root = await tempRoot();
   await writeFile(join(root, 'state.json'), '{bad json', 'utf8');
-  const store = new StateStore(root, { now: () => 1234 });
-  const state = await store.read();
+  const store = new StateStore(root, { now: () => 1_234_000 });
+  assert.deepEqual(await store.read(), defaultState());
+  assert.equal(await readFile(join(root, 'state.json'), 'utf8'), '{bad json');
+});
 
-  assert.deepEqual(state, defaultState());
-  const quarantined = await readFile(join(root, 'state.corrupt-1234.json'), 'utf8');
-  assert.equal(quarantined, '{bad json');
+test('corrupt state is quarantined under the lock, and only after a replacement exists', async () => {
+  const root = await tempRoot();
+  await writeFile(join(root, 'state.json'), '{bad json', 'utf8');
+  const store = new StateStore(root, { now: () => 1_234_000 });
+  await store.update((state) => state);
+
+  assert.equal(await readFile(join(root, 'state.corrupt-1234.json'), 'utf8'), '{bad json');
+  // state.json must never stop existing: quarantining by renaming it away first
+  // would lose every run if the process died before the replacement landed.
+  assert.equal((await store.read()).revision, 1);
 });
 
 test('migrateState preserves unknown fields and fills schema defaults', () => {

@@ -54,6 +54,53 @@ test('seven-day suppression also blocks empty-window activation', () => {
   assert.equal(decision.code, 'skip:seven-day-limit');
 });
 
+test('a healthy run never starves the other due runs behind it', () => {
+  // Ordered first by scheduledResumeAt, still working, so not itself recoverable.
+  const busy = run({
+    runId: 'busy', scheduledResumeAt: 100, scheduledResetAt: now - 5, scheduleState: 'pending',
+    lastHeartbeatAt: now - 10,
+  });
+  const stranded = run({
+    runId: 'stranded', sessionId: '00000000-0000-4000-8000-000000000002',
+    state: 'RATE_LIMITED', rateLimitedUntil: now - 1_000, resetConfidence: 'exact',
+    lastHeartbeatAt: now - config.heartbeatStaleSeconds - 1,
+  });
+  const state = stateWith(busy);
+  state.runs.stranded = stranded;
+  const decision = selectCandidate(state, {}, config, now);
+  assert.equal(decision.kind, 'invoke');
+  assert.equal(decision.runId, 'stranded');
+});
+
+test('a heartbeat from the future is a clock artefact, not progress', () => {
+  const item = run({
+    lastHeartbeatAt: now + 10_000,
+    scheduledResumeAt: now - 100, scheduledResetAt: now - 200, scheduleState: 'pending',
+  });
+  const decision = selectCandidate(stateWith(item), {}, config, now);
+  assert.equal(decision.kind, 'invoke', 'a future heartbeat must not mark the run fresh for ever');
+});
+
+test('a failed run waits out its retry backoff', () => {
+  const item = run({ state: 'FAILED', retry: { attempts: 1, nextAttemptAt: now + 300 } });
+  const decision = selectCandidate(stateWith(item), {}, config, now);
+  assert.equal(decision.code, 'skip:retry-backoff');
+  assert.equal(decision.dueAt, now + 300);
+});
+
+test('a run still inside its tick grace is left alone', () => {
+  const item = run({ lastHeartbeatAt: now - config.heartbeatStaleSeconds - 1, nextExpectedTickAt: now - 10 });
+  assert.equal(selectCandidate(stateWith(item), {}, config, now).code, 'skip:tick-grace');
+});
+
+test('the rolling cap stops a fifth window activation in 24 hours', () => {
+  const state = defaultState();
+  state.usage = { ...state.usage, confidence: 'exact', fiveHourResetAt: now - 200 };
+  state.activation.activationAttempts = [now - 100, now - 200, now - 300, now - 400];
+  const decision = selectCandidate(state, {}, { ...config, windowMode: 'auto' }, now);
+  assert.equal(decision.code, 'skip:rolling-activation-cap');
+});
+
 test('post-reset heartbeat satisfies a due schedule', () => {
   const item = run({ scheduledResetAt: 19_000, scheduledResumeAt: 19_100, scheduleState: 'pending' });
   const decision = selectCandidate(stateWith(item), { heartbeats: { 'run-1': 19_001 } }, config, now);

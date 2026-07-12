@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { isAbsolute, join, relative } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { ConfigStore } from './config.mjs';
@@ -14,11 +14,6 @@ function dataRoot() {
   if (process.platform === 'darwin') return join(homedir(), 'Library', 'Application Support', 'afk-supervisor');
   if (process.platform === 'win32' && process.env.LOCALAPPDATA) return join(process.env.LOCALAPPDATA, 'afk-supervisor');
   return join(homedir(), '.local', 'share', 'afk-supervisor');
-}
-
-function containedPath(cwd, target) {
-  const rel = relative(cwd, target);
-  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
 }
 
 function newRun(metadata, event, ledgerPath) {
@@ -51,7 +46,6 @@ async function sessionStart(event, deps) {
     return state;
   });
   const ledgerPath = join(event.cwd, '.afk', 'afk-ledger.md');
-  if (!containedPath(event.cwd, ledgerPath)) return { code: 'skip:ledger-path-invalid' };
   let text;
   try { text = await deps.readFile(ledgerPath); } catch { return { code: 'skip:ledger-missing' }; }
   const metadata = parseSupervisorLedger(text);

@@ -71,12 +71,16 @@ export function stableJitterSeconds(run, resetAt, config) {
   return config.thresholdJitterMinSeconds + (digest.readUInt32BE(0) % width);
 }
 
-export function scheduleRun(run, resetAt, confidence, config) {
+// The reset may already be behind us — a status-line reset can be back-dated by
+// clock skew, and an anchor boundary is usable up to graceSeconds into the past.
+// A resume time in the past is due immediately, which turns a schedule into a
+// hot re-probe loop, so the target never precedes the moment it was computed.
+export function scheduleRun(run, resetAt, confidence, config, now) {
   const jitter = stableJitterSeconds(run, resetAt, config);
   return {
     ...run,
     scheduledResetAt: resetAt,
-    scheduledResumeAt: resetAt + jitter,
+    scheduledResumeAt: Math.max(resetAt + jitter, now),
     scheduleState: 'pending',
     scheduleConfidence: confidence,
   };
@@ -90,6 +94,12 @@ export function applyUsageObservation(state, observation, config) {
 
   const next = structuredClone(state);
   const previousConfidence = next.usage.confidence;
+  // Only a five-hour reset the observation actually carried may change how the
+  // stored one is labelled. A payload with seven-day data but no five_hour
+  // resets_at would otherwise relabel a retained window-anchor estimate as
+  // exact — and once the stored reset says "exact", a genuine exact snapshot is
+  // no longer allowed to replace the schedules built on the estimate.
+  const carriesFiveHourReset = Number.isFinite(observation.fiveHourResetAt);
   Object.assign(next.usage, {
     fiveHourResetAt: observation.fiveHourResetAt ?? next.usage.fiveHourResetAt,
     fiveHourUsedPercentage: observation.fiveHourUsedPercentage ?? next.usage.fiveHourUsedPercentage,
@@ -97,8 +107,9 @@ export function applyUsageObservation(state, observation, config) {
     sevenDayUsedPercentage: observation.sevenDayUsedPercentage ?? next.usage.sevenDayUsedPercentage,
     observedAt: observation.observedAt,
     lastImportedObservationAt: observation.observedAt,
-    source: observation.source,
-    confidence: observation.confidence,
+    ...(carriesFiveHourReset
+      ? { source: observation.source, confidence: observation.confidence }
+      : {}),
   });
 
   const exact = observation.confidence === 'exact';
@@ -114,7 +125,7 @@ export function applyUsageObservation(state, observation, config) {
     for (const [id, run] of Object.entries(next.runs)) {
       if (!RECOVERABLE.has(run.state)) continue;
       if (!newThreshold && run.scheduleConfidence !== 'estimated') continue;
-      const scheduled = scheduleRun({ ...run, runId: run.runId ?? id }, resetAt, 'exact', config);
+      const scheduled = scheduleRun({ ...run, runId: run.runId ?? id }, resetAt, 'exact', config, observation.observedAt);
       // A rate-limited run also carries its own reset deadline, which the
       // selector consults whenever its schedule is no longer pending. Leaving it
       // on an estimate while the schedule became exact would let a stale
@@ -128,6 +139,10 @@ export function applyUsageObservation(state, observation, config) {
     for (const run of Object.values(next.runs)) {
       if (!RECOVERABLE.has(run.state)) continue;
       run.quotaRejections = { consecutive: 0, backoffLevel: 0, nextProbeAt: null, lastNotifiedAt: null };
+      // A new exact reset starts a new bounded attempt series. Without this a run
+      // that exhausted its retries is skipped for ever, is never terminal, and so
+      // is never pruned either.
+      run.retry = { attempts: 0, nextAttemptAt: null };
     }
   }
   // used_percentage is a float derived from a utilization ratio, so an exhausted

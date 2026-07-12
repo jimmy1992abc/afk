@@ -41,6 +41,10 @@ export async function main(argv = process.argv.slice(2)) {
       return Object.fromEntries(pairs.filter(([, heartbeat]) => Number.isFinite(heartbeat)));
     },
     readLedgerHeartbeat: (run) => readLedgerHeartbeatFile(run.ledgerPath, run.runId, run.sessionId),
+    // A lease that expired while its runner slept is not an abandoned lease.
+    isRunnerAlive: async (pid) => {
+      try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; }
+    },
     notifyWindow: createWindowNotifier({ root: data }),
     dryRun: argv.includes('--dry-run'),
     spawnRunner: (attempt) => spawn(process.execPath, [fileURLToPath(runner), '--attempt', attempt.id], {

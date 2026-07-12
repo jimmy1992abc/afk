@@ -111,7 +111,7 @@ function newRunRecovery() {
 function inheritThresholdSchedule(run, usage, config, now) {
   const resetAt = usage.thresholdResetAt;
   if (usage.confidence !== 'exact' || !Number.isFinite(resetAt) || resetAt <= now) return run;
-  return scheduleRun(run, resetAt, 'exact', config);
+  return scheduleRun(run, resetAt, 'exact', config, now);
 }
 
 async function transition(args, deps) {
