@@ -41,8 +41,17 @@ function claimLive(claim, now, config, longest) {
 // lifetimes. Collapsing them into one field is what made the supervisor resume a
 // session that then saw the supervisor's own claim, concluded another layer owned
 // recovery, and exited without doing anything.
+//
+// The guard fails CLOSED, and it is the one claim that must. On the other side of it
+// is an interactive Claude that a human may be sitting in front of. The clamp that
+// (correctly) refuses to believe a RUNNER's lease from a stepped clock was, for the
+// guard, an instruction to resume that person's session out from under them: an
+// expiry we cannot believe made the guard not hold at all. So any future expiry
+// holds, and `repairGuard` is what bounds it — by clamping the guard and writing the
+// clamp down, rather than by disbelieving it.
 export function tickOwns(run, now, config) {
-  return claimLive(run.tickGuard, now, config, config.heartbeatStaleSeconds);
+  void config;
+  return Number.isFinite(run.tickGuard?.expiresAt) && run.tickGuard.expiresAt > now;
 }
 
 export function runnerOwns(run, now, config) {
@@ -87,10 +96,6 @@ const held = (code, notBefore = null, extra = {}) => ({ runnable: false, code, n
  * liveness could not be determined. Both mean "do not touch this run"; only a
  * verified one is a real Claude invocation that counts against the global cap.
  */
-// How long a claim has gone without a renewal. A claim expires one TTL after its
-// last renewal, so an expiry stands in for a missing `lastRenewedAt` — an old-shape
-// lease from before an upgrade carries no such stamp. A forward clock step cannot
-// make the answer negative, and so cannot buy a claim an indefinite hold.
 // How long this claim has gone unrenewed. The bound has now been wrong in BOTH
 // directions — held for ever (a recycled pid wedged its run), then freed instantly
 // (a clock-stepped claim let a live runner be driven twice) — because each version
@@ -109,12 +114,24 @@ export function unrenewedFor(claim, config, now) {
   return Math.max(0, now - stamp);
 }
 
+// The tick guard is a claim too, and it was the one claim nothing repaired — so the
+// only bound on it was a clamp that made it fail open. Repaired, it holds for its
+// normal window and no longer: if the session behind it is really gone, it expires;
+// if it is alive, its next tick renews it.
+export function repairGuard(guard, config, now) {
+  if (!guard) return false;
+  const ceiling = now + config.heartbeatStaleSeconds + config.graceSeconds;
+  if (Number.isFinite(guard.expiresAt) && guard.expiresAt <= ceiling) return false;
+  guard.expiresAt = now + config.heartbeatStaleSeconds;
+  return true;
+}
+
 // A claim stamped in the future is corrupt: a clock that ran ahead and was corrected
 // back, a VM's drifted RTC, an NTP step after a suspend — and suspend is the very
 // scenario this supervisor exists for. Such a claim is neither trustworthy (it would
 // hold the run for ever) nor discardable (a live runner may be behind it, and
-// discarding it drives the session twice). It is REPAIRED: dated now, so that it is
-// held from here and expires on schedule. Returns true when it changed something.
+// discarding it drives the session twice). It is REPAIRED: dated now, so it is held
+// from here and expires on schedule. Returns true when it changed something.
 export function repairClaim(claim, config, now) {
   if (!claim?.attemptId) return false;
   const ttl = config.leaseRenewalSeconds * config.leaseMissedRenewals;
@@ -273,13 +290,19 @@ function orderedRuns(state) {
   });
 }
 
-function emptyWindow(state, config, now) {
+function emptyWindow(state, inputs, config, now) {
   const resetAt = state.usage.confidence === 'exact' ? state.usage.fiveHourResetAt : null;
   if (!Number.isFinite(resetAt) || now < resetAt + config.graceSeconds
       || state.activation.handledResetAt === resetAt) return { kind: 'skip', code: 'skip:no-active-run' };
   if (config.windowMode === 'off') return { kind: 'skip', code: 'skip:window-mode-off' };
   if (config.windowMode === 'notify') return { kind: 'notify', code: 'action:notify-window-reset', resetAt };
-  if (state.activation.inProgress && state.activation.expiresAt > now) {
+  // The one predicate, again — this was the last caller still answering the question
+  // by itself, with a raw expiry and no liveness. The reconciler resolved the answer
+  // properly and then handed it only to the pruner, so the path that actually SELECTS
+  // never asked: a suspend past the lease TTL, with the activation runner still
+  // running, started a second one on top of it. A caller that has not resolved
+  // liveness gets the safe answer, not a guess of its own.
+  if (state.activation.inProgress && (inputs.activationOccupied ?? true)) {
     return { kind: 'skip', code: 'skip:activation-in-progress' };
   }
   if (state.activation.activationAttempts.length >= config.maxWindowActivationsPer24Hours) {
@@ -313,7 +336,7 @@ export function selectCandidate(state, inputs, config, now) {
   }
 
   const drivable = orderedRuns(state).filter((run) => !TERMINAL.has(run.state) && TRANSITIONS[run.state]);
-  if (drivable.length === 0) return emptyWindow(state, config, now);
+  if (drivable.length === 0) return emptyWindow(state, inputs, config, now);
 
   let nearest = null;
   let handled = null;

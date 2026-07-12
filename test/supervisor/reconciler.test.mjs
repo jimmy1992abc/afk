@@ -92,6 +92,24 @@ test('the reconciler never downgrades the identity the runner verified', async (
   assert.equal(lease.startedAt, 1_700_000_000_000, 'a probe that could not ask must not erase what we know');
 });
 
+test('a tick guard from a stepped clock is repaired on disk, so it cannot hold for ever', async () => {
+  // The guard fails closed — any future expiry holds — which without a repair means a
+  // guard expiring in the year 2400 holds the run until the year 2400. Failing closed
+  // is only safe when something bounds it, and for every other claim that something is
+  // the persisted repair. The guard was the one claim nothing repaired.
+  const h = await harness(run({
+    state: 'RUNNING',
+    tickGuard: { sessionId: '00000000-0000-4000-8000-000000000001', expiresAt: now + 400 * 86_400 },
+    lastHeartbeatAt: now - 99_999, nextExpectedTickAt: null,
+  }));
+
+  await reconcileOnce(h.deps);
+  const guard = (await h.store.read()).runs['run-1'].tickGuard;
+  assert.equal(guard.expiresAt, now + defaultConfig().heartbeatStaleSeconds,
+    'the guard holds for its normal window, and the clamp is written down');
+  assert.equal(h.spawnCalls.length, 0, 'and meanwhile the session behind it is left alone');
+});
+
 test('a claim stamped in the future is repaired on disk, so the bound is real', async () => {
   // A clamp that lives only in the reader resets on every pass, and is therefore no
   // bound at all — that is precisely how the first version of this bound came to hold

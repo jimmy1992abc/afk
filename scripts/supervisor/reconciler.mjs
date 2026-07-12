@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 
-import { processStartedAt } from './platform.mjs';
+import { killProcess, processStartedAt } from './platform.mjs';
 import { applyUsageObservation } from './usage-provider.mjs';
-import { claimLiveness, claimOccupied, pruneState, repairClaim, runnerOwns, selectCandidate, transitionRun, usableHeartbeat } from './state-machine.mjs';
+import { claimLiveness, claimOccupied, pruneState, repairClaim, repairGuard, runnerOwns, selectCandidate, transitionRun, unrenewedFor, usableHeartbeat } from './state-machine.mjs';
 
 function applyBatch(state, batch, config) {
   return batch.reduce((current, item) => applyUsageObservation(current, item.observation, config), state);
@@ -48,7 +48,17 @@ async function resolveLiveness(state, deps, now) {
     // A claim with no pid cannot be verified — an upgrade mid-recovery leaves
     // exactly that. Skipping it read it as free and started a second runner on top
     // of a live one. Unverifiable is `unknown`: occupied, and loudly so.
-    const liveness = await claimLiveness(lease, deps.runnerLiveness);
+    let liveness = await claimLiveness(lease, deps.runnerLiveness);
+
+    // A claim kept alive only by a Claude child that outlived its runner's kill is
+    // safe — nothing will double-drive it — but nothing renews it and nothing kills
+    // the child either, so it would hold the run for ever. Held for ever is not a
+    // bound. Once the claim is older than any runner may live, the orphan is stopped
+    // for real and the run becomes recoverable again.
+    if (liveness === 'alive' && await orphanedChild(lease, deps, now)) {
+      await (deps.killProcess ?? killProcess)(lease.childPid);
+      liveness = await claimLiveness({ ...lease, childPid: null, childStartedAt: null }, deps.runnerLiveness);
+    }
     if (liveness === 'alive') aliveRuns.add(runId);
     else if (liveness === 'unknown') unknownRuns.add(runId);
     else continue;
@@ -69,11 +79,19 @@ async function resolveLiveness(state, deps, now) {
   return { aliveRuns, unknownRuns, activationOccupied: await activationOccupied(state, deps, now) };
 }
 
-// The activation runner is a runner too, and its claim is reclaimed by the same
-// rules: an unexpired lease is occupied; an expired one is occupied only while a
-// live process stands behind it, or while it is too recently unrenewed for its
-// runner to have died. Reclaiming it on expiry alone started a second activation
-// on top of a live one, every time the machine slept.
+// The runner is gone, only its Claude child is still there, and the claim has gone
+// unrenewed for longer than a runner is even allowed to live. Nobody is coming back
+// for this one.
+async function orphanedChild(lease, deps, now) {
+  if (!Number.isInteger(lease.childPid)) return false;
+  if (unrenewedFor(lease, deps.config, now) <= deps.config.recoveryAttemptTimeoutSeconds) return false;
+  const runner = await claimLiveness({ ...lease, childPid: null, childStartedAt: null }, deps.runnerLiveness);
+  return runner === 'dead';
+}
+
+// The activation runner is a runner too, and its claim is reclaimed by the same rules:
+// an unexpired lease is occupied; an expired one is occupied only while a live process
+// stands behind it, or while it is too recently unrenewed for its runner to have died.
 async function activationOccupied(state, deps, now) {
   const claim = state.activation;
   if (!claim?.inProgress) return false;
@@ -127,7 +145,13 @@ async function recordActivationIdentity(deps, attempt, child) {
 // is how the bound on an unverifiable claim came to be no bound at all.
 async function repairClaims(deps, now) {
   await deps.store.update((current) => {
-    for (const run of Object.values(current.runs)) repairClaim(run.recoveryLease, deps.config, now);
+    for (const run of Object.values(current.runs)) {
+      repairClaim(run.recoveryLease, deps.config, now);
+      // The guard was the one claim nothing repaired, so the only bound on it was a
+      // clamp that made it fail open — and the supervisor resumed the session behind
+      // it. Every claim is repaired, or the next one nobody repaired is the next bug.
+      repairGuard(run.tickGuard, deps.config, now);
+    }
     if (current.activation?.inProgress) repairClaim(current.activation, deps.config, now);
     return current;
   });

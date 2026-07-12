@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { defaultConfig } from '../../scripts/supervisor/config.mjs';
 import { defaultState } from '../../scripts/supervisor/state-store.mjs';
-import { pruneState, repairClaim, runnability, selectCandidate, transitionRun } from '../../scripts/supervisor/state-machine.mjs';
+import { pruneState, repairClaim, repairGuard, runnability, selectCandidate, transitionRun } from '../../scripts/supervisor/state-machine.mjs';
 
 const config = defaultConfig();
 const now = 20_000;
@@ -191,6 +191,48 @@ test('an unverifiable claim holds its run, but not for ever', () => {
   const ancient = claim(EPOCH - config.recoveryAttemptTimeoutSeconds - 1);
   assert.equal(runnability(ancient, stateWith(ancient), config, EPOCH, inputs).runnable, true,
     'past the longest a runner can live, an unrenewed claim is not a runner');
+});
+
+test('a tick guard we cannot believe still holds the run', () => {
+  // The guard is the one claim that must fail CLOSED, and it was the one claim that
+  // failed open. On the other side of it is an interactive Claude that a human may be
+  // sitting in front of. The clamp that (rightly) disbelieves a RUNNER's lease from a
+  // stepped clock was, for the guard, an instruction to resume that person's session
+  // out from under them — the guard simply stopped holding.
+  //
+  // `repairGuard` clamps it in the reconciler, but `runnability` is also asked about
+  // state nobody repaired (status, and any future caller), so the raw check is the
+  // floor: any future expiry holds.
+  const guarded = run({
+    runId: 'guarded', state: 'RUNNING',
+    tickGuard: { sessionId: '00000000-0000-4000-8000-000000000001', expiresAt: EPOCH + 400 * 86_400 },
+    lastHeartbeatAt: EPOCH - 99_999, nextExpectedTickAt: null,
+  });
+  const verdict = runnability(guarded, stateWith(guarded), config, EPOCH, {});
+  assert.equal(verdict.runnable, false);
+  assert.equal(verdict.code, 'skip:tick-owns-run');
+
+  // ...and the repair is what bounds it, rather than disbelief.
+  assert.equal(repairGuard(guarded.tickGuard, config, EPOCH), true);
+  assert.equal(guarded.tickGuard.expiresAt, EPOCH + config.heartbeatStaleSeconds);
+});
+
+test('an expiry from a stepped clock does not own the run', () => {
+  // This was the other half of the round that unified the predicate, and it shipped
+  // with no test at all: it could be reverted to a raw `expiresAt > now` and the whole
+  // suite stayed green. A claim expiring in the year 2400 is a clock step, not a
+  // lease, and must not own the run for ever — the runner behind it is dead.
+  const absurd = run({
+    runId: 'absurd', state: 'RECOVERING',
+    recoveryLease: {
+      attemptId: 'a', token: 't', lastRenewedAt: EPOCH - 10,
+      expiresAt: EPOCH + 400 * 86_400, pid: 4242, startedAt: 1,
+    },
+    lastHeartbeatAt: EPOCH - 99_999, nextExpectedTickAt: null,
+  });
+  // The probe says the runner is gone, and nothing but an unbelievable expiry says
+  // otherwise. It is free.
+  assert.equal(runnability(absurd, stateWith(absurd), config, EPOCH, {}).runnable, true);
 });
 
 test('a claim stamped in the future is held, and the repair bounds the hold', () => {

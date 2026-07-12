@@ -109,6 +109,16 @@ export function finalizeAttempt(state, runId, token, result, now, config) {
 export function finalizeActivation(state, token, result, now) {
   if (!state.activation.inProgress || state.activation.token !== token) return state;
   const next = structuredClone(state);
+  // The activation runner reports whether its Claude outlived the kill — `runActivation`
+  // delegates to the same `runClaude` — and this threw the answer away. The recovery
+  // path keeps its claim when a child survives; the activation path released one and
+  // left a live Claude nobody was tracking. The signal was plumbed to one of its two
+  // consumers, which is how an asymmetry becomes a bug.
+  if (result?.childExited === false) {
+    next.activation.lastResult = result.kind === 'quota'
+      ? 'result:activation-quota-rejected' : 'error:activation-failed';
+    return next;
+  }
   next.activation.inProgress = false;
   next.activation.attemptId = null;
   next.activation.token = null;
@@ -152,8 +162,12 @@ async function recordChild(deps, pid, locate) {
   await deps.store.update((current) => {
     const claim = locate(current);
     if (!claim) return current;
+    // The third writer of an identity, and the one that was missed when the other two
+    // were hardened: `undefined` means the probe could not ask, and writing it as
+    // `null` makes a live child unverifiable — after which the claim it was meant to
+    // hold frees itself on the `unknown` bound while the child is still running.
     claim.childPid = pid;
-    claim.childStartedAt = Number.isFinite(startedAt) ? startedAt : null;
+    if (Number.isFinite(startedAt)) claim.childStartedAt = startedAt;
     return current;
   }).catch(() => {});
 }

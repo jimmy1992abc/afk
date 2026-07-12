@@ -123,6 +123,28 @@ export async function runnerLiveness(lease, deps = {}) {
   return runner === 'unknown' || child === 'unknown' ? 'unknown' : 'dead';
 }
 
+// A claim kept because its Claude child outlived the kill is safe — nothing will
+// double-drive it — but it is kept by a runner that has already exited, so nothing
+// renews it and nothing kills the child either. Held for ever is not a bound. So the
+// supervisor reaps the orphan itself: when the runner is gone and only the child is
+// left, and the claim is older than any runner may live, that child is stopped for
+// real, and the run goes back to being recoverable.
+export async function killProcess(pid, deps = {}) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  const run = deps.execFile ?? execFileAsync;
+  const platform = deps.platform ?? process.platform;
+  try {
+    if (platform === 'win32') {
+      await run('taskkill.exe', ['/pid', String(pid), '/t', '/f'], { windowsHide: true, timeout: PROBE_TIMEOUT_MS });
+      return true;
+    }
+    process.kill(pid, 'SIGKILL');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function xmlEscape(value) {
   return String(value)
     .replaceAll('&', '&amp;')

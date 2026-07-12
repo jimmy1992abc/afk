@@ -235,8 +235,17 @@ async function triggerNow(args, deps) {
   // session and start a second one on top of it. The runner's own action timeout
   // bounds how long it can hold the run.
   const probed = target.recoveryLease;
-  if (await claimLiveness(probed, deps.runnerLiveness) === 'alive') {
-    return emit(deps, 'skip:runner-alive', 1);
+  const liveness = await claimLiveness(probed, deps.runnerLiveness);
+  if (liveness === 'alive') return emit(deps, 'skip:runner-alive', 1);
+
+  // And without --force, the ONE predicate decides — this command used to ask only
+  // "can I see that it is alive?" and release everything else, including an unexpired
+  // claim and a claim it could not verify, both of which that predicate calls
+  // occupied. On a host where the probe cannot run at all — a locked-down box, a
+  // PATH problem — every claim is unverifiable, so every trigger-now orphaned
+  // whatever runner was live and started a second Claude on the session.
+  if (!args.force && claimOccupied(probed, deps.currentConfig, deps.now(), liveness)) {
+    return emit(deps, 'skip:runner-active', 1);
   }
 
   let outcome = null;

@@ -222,6 +222,26 @@ test('the runner never writes an identity it does not have', async () => {
   assert.equal(seen.pid, 4242);
 });
 
+test('an activation whose Claude outlived the kill keeps its claim too', () => {
+  // `runActivation` delegates to the same `runClaude`, so it reports `childExited` —
+  // and this threw the answer away. The recovery path keeps its claim when a child
+  // survives; the activation path released one and left a live Claude nobody tracked.
+  // The signal was plumbed to one of its two consumers, which is how an asymmetry
+  // becomes a bug.
+  const current = state();
+  current.activation = {
+    ...current.activation, inProgress: true, attemptId: 'activation-1', token: 'activation-token',
+    resetAt: now - 90, pid: 5555, startedAt: 1, childPid: 501, childStartedAt: 2,
+  };
+
+  const survived = finalizeActivation(current, 'activation-token', { kind: 'quota', childExited: false }, now);
+  assert.equal(survived.activation.inProgress, true, 'a live child must keep the claim');
+  assert.equal(survived.activation.childPid, 501);
+
+  const gone = finalizeActivation(current, 'activation-token', { kind: 'quota', childExited: true }, now);
+  assert.equal(gone.activation.inProgress, false);
+});
+
 test('stale lease token cannot finalize a newer attempt', () => {
   const current = state();
   assert.equal(finalizeAttempt(current, 'run-1', 'old-token', { kind: 'success' }, now, defaultConfig()), current);
@@ -335,4 +355,34 @@ test('successful activation records a new estimated anchor', () => {
   // would only ever count the activations that survived to finalize, so a cap
   // counted at finalize never trips for the ones that crash.
   assert.deepEqual(next.activation.activationAttempts, [now - 5]);
+});
+
+test('the child identity is never written from a probe that could not ask', async () => {
+  // The third writer of an identity, and the one missed when the other two were
+  // hardened. `undefined` means "could not ask"; written as `null` it makes a live
+  // child unverifiable — and the claim that was kept precisely to track that child
+  // then frees itself on the unknown bound while the child is still running.
+  const root = await mkdtemp(join(tmpdir(), 'afk-supervisor-runner-'));
+  const store = new StateStore(root);
+  await store.update(() => state());
+  await store.update((current) => {
+    current.runs['run-1'].recoveryLease.childStartedAt = 1_700_000_005_000;
+    return current;
+  });
+
+  let seen = null;
+  await runAttempt('attempt-1', {
+    store, config: defaultConfig(), now: () => now,
+    identity: { pid: 4242, startedAt: 1_700_000_000_000 },
+    processStartedAt: async () => undefined,          // the probe could not ask
+    runClaude: async (attempt, hooks) => {
+      await hooks.onChildStarted(9001);
+      seen = (await store.read()).runs['run-1'].recoveryLease;
+      return { kind: 'success', startedAt: now };
+    },
+    setInterval: () => ({}), clearInterval: () => {},
+    notify: async () => {},
+  });
+  assert.equal(seen.childPid, 9001);
+  assert.equal(seen.childStartedAt, 1_700_000_005_000, 'a probe that could not ask must not erase what we know');
 });
