@@ -311,21 +311,33 @@ distinguish held from free from failed. `mkdir` is atomic and exclusive on every
 supported system and holds no file handle, so there is no such state to misread.
 The holder's record lives inside the directory.
 
-Two rules follow, and both are load-bearing:
+Four rules follow, and all four are load-bearing. Every one of them exists because
+its absence lets two callers into the critical section, where both pass the
+revision compare-and-set and the loser's write vanishes **with no error at all**:
 
 - **A failed probe never means the lock is free.** An unreadable record, an
-  unstattable directory, or a contended `mkdir` all count as held. Reading any of
-  them as free admits a second caller to the critical section, which silently
-  drops a state update — no error is raised and the write simply vanishes.
+  unstattable directory, or a contended `mkdir` all count as held.
 - **Contention is not failure.** `EPERM`, `EACCES`, and `EBUSY` mean *wait and
-  retry*, not *abort*. Raising them fails a state transaction that would
-  otherwise have committed.
+  retry*, not *abort*. Raising them fails a transaction that would have committed.
+- **Reclaiming is an atomic rename, never a delete.** `reclaimable()` is a read,
+  so two contenders can both judge the same expired lock reclaimable; if one
+  reclaims and becomes the live holder, a delete by the other destroys that live
+  lock. Only one contender can *move* a directory, and the winner then re-checks
+  what it actually moved: a lock that turns out to be live goes straight back.
+  Deletion only ever touches a directory this process exclusively owns.
+- **A holder confirms the lock still names it before committing.** Even an atomic
+  steal leaves a hair-thin window. This turns a silent lost write into a retry.
 
 A lock is reclaimed only when its record is readable and expired, or when the
 directory has outlived a whole lock lifetime, so a crashed holder cannot wedge
-the supervisor and a live one cannot be robbed. Replacing `state.json` retries on
-the same contended codes, because Windows refuses to replace a file that a
-concurrent reader still has open.
+the supervisor. Replacing `state.json` retries on the same contended codes,
+because Windows refuses to replace a file a concurrent reader still has open.
+
+A plain read is public and **unlocked**, so it never repairs corrupt state — a
+reader that rewrote `state.json` while a writer held the lock would let both
+commit a default state over every registered run. Repair happens only under the
+lock, and it copies the corrupt file aside *before* replacing it: renaming it
+away first leaves no `state.json` at all if the process dies in between.
 
 Writes use a same-directory temporary file, fsync where supported, atomic
 rename, and parent-directory sync where supported. Readers validate the entire
@@ -543,6 +555,20 @@ locked writes while the child is alive. Finalization only updates an attempt
 whose token still matches, so a stale process cannot overwrite a later result.
 The invocation is spawned without a shell.
 
+**An expired lease is not an abandoned one.** A suspended machine stops the
+renewal timer while the runner and its Claude child stay alive, so re-issuing a
+lease on expiry alone starts a second `claude --resume` against the same session.
+The runner records its pid on every renewal and the reconciler refuses to
+re-issue a lease whose runner is still alive (`skip:runner-alive`). An
+empty-window activation counts against the same invocation limit, because its
+Claude child lives just as long as any recovery.
+
+The lease re-check before an invocation is given **the same inputs the selection
+saw**. Narrowing the heartbeat map to the selected run makes every other run fall
+back to its persisted heartbeat, so the re-check can disagree with the selection
+even though the state never changed — and the pass then skips for ever while the
+genuinely due run is never resumed.
+
 Lease expiry and action timeout are independent. Missing three default renewals
 makes a lease stale after three minutes; the four-hour action timeout separately
 bounds a healthy runner and its Claude child. The runner sends a graceful
@@ -748,6 +774,9 @@ skip:quota-backoff
 skip:reset-already-handled
 skip:recovery-lease-held
 skip:concurrency-exhausted
+skip:runner-alive
+skip:state-changed
+skip:stale-attempt
 skip:seven-day-limit
 skip:run-terminal
 skip:retry-backoff
@@ -780,9 +809,10 @@ Claude runner. Normal tests never make Claude requests or modify the real user
 scheduler or settings.
 
 A test that only asserts a field starts null and stays null cannot observe the
-invariant it names. Each estimate rule below is covered by a test that fails when
-the rule is removed, and the window-anchor path is covered positively — a fresh
-anchor being consumed — not only by its negative cases.
+invariant it names, and a green suite is not evidence: an earlier version of this
+suite passed with the entire window-anchor path deleted from the source. **Every
+guard below is mutation-tested — reverting it must fail the test that names it.**
+A guard whose skip code no test ever asserts is a guard nothing protects.
 
 Coverage includes:
 
@@ -804,7 +834,23 @@ Coverage includes:
 - the scheduler pins the data root it installed into;
 - a setup that cannot register a scheduler restores the previous status line;
 - a Windows notification is detached and never awaited;
-- a held lock is never observable as a partially written record;
+- a reclaim that finds a live lock puts it straight back, and a genuinely expired
+  one is removed;
+- a holder can tell whether the lock still names it;
+- a lease is never re-issued while its runner is still alive;
+- a superseded attempt reports itself stale and changes nothing;
+- the lease is renewed while the child is alive, and only for its own attempt;
+- the lease re-check sees the same heartbeats the selection did;
+- a healthy run never starves the other due runs behind it;
+- a heartbeat from the future is a clock artefact, not progress;
+- a running activation occupies the one invocation slot;
+- a run whose state the code does not know is never selected;
+- a back-dated reset never schedules a resume in the past;
+- a payload with no five-hour reset cannot relabel the stored one as exact;
+- a new exact reset starts a fresh attempt series for an exhausted run;
+- an unlocked read fails closed without rewriting corrupt state;
+- observations are committed only after the import that used them is durable;
+- a stop failure that is not a rate limit never parks the run;
 - headless rate-limit classification and changed-schema fallback;
 - active child termination after a validated quota frame;
 - successful-run window anchoring and exact status-line replacement;
