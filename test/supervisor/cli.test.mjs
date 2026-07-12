@@ -65,6 +65,14 @@ test('internal register transition and lease commands update one run', async () 
   assert.equal(h.state.runs.one.state, 'COMPLETED');
 });
 
+test('register resolves a recent SessionStart observation for the cwd', async () => {
+  const h = harness();
+  h.state.sessions['C:\\repo'] = { sessionId: '00000000-0000-4000-8000-000000000001', observedAt: 19_999 };
+  const result = await runCli(['register', '--run-id', 'one', '--cwd', 'C:\\repo', '--ledger', 'C:\\repo\\.afk\\afk-ledger.md'], h.deps);
+  assert.equal(result.code, 0);
+  assert.equal(h.state.runs.one.sessionId, '00000000-0000-4000-8000-000000000001');
+});
+
 test('unknown commands and missing runs emit distinct errors', async () => {
   const h = harness();
   assert.equal((await runCli(['unknown'], h.deps)).code, 2);

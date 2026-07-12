@@ -17,6 +17,7 @@ gitignored `.afk/` directory.
 |-------|---------|
 | `afk` | Runs the full autonomous waterfall for an operator-provided scope. |
 | `afk-init` | Bootstraps `.afk/` for a repository — auto-run when it is missing; detects commands and records the plugin root. |
+| `afk-supervisor` | Installs and manages cross-platform recovery for registered AFK runs. |
 | `afk-spec-planner` | Turns an issue into a reviewable implementation plan. |
 | `afk-implementation-pilot` | Implements an approved plan and self-reviews it. |
 | `afk-internal-review` | Performs the internal production-readiness review. |
@@ -44,6 +45,41 @@ scope
 `afk` only runs against an explicit operator-provided scope. It does not browse a
 tracker and choose work by itself.
 
+## AFK Supervisor
+
+The optional AFK Supervisor adds a second lifecycle layer without replacing the
+approximately 15-minute in-session tick. A per-user launchd job on macOS or Task
+Scheduler task on Windows runs a short reconciler every 60 seconds and at login.
+It can recover registered unfinished sessions after a frontend exit, sleep,
+login, or reboot by using the standalone `claude` CLI.
+
+The status-line bridge is the only exact reset-time source. At 90% five-hour
+usage it schedules every recoverable run for the exact reset plus stable
+60–180-second jitter. A successful headless recovery provides an estimated
+window anchor; a rate-limit observation provides a conservative per-run upper
+bound. Estimated values never arm the proactive 90% queue and are replaced by a
+later exact status-line snapshot.
+
+VS Code graphical status-line execution is unconfirmed. The SessionStart and
+StopFailure hooks still register and classify runs, and the standalone CLI still
+recovers them, but reset confidence may remain estimated until an interactive
+surface emits documented status-line data.
+
+Setup is explicit and idempotent. It preserves and chains the current user
+status-line command and keeps mutable state outside repositories and plugin
+caches. Manage it through:
+
+```text
+/afk-supervisor setup
+/afk-supervisor status --json
+/afk-supervisor configure
+/afk-supervisor repair
+/afk-supervisor uninstall
+```
+
+Automatic unfinished-run recovery defaults on. Empty-window activation defaults
+to notification and requires explicit opt-in for automatic requests.
+
 ## Installation
 
 Install this repository through the host agent's plugin flow — it works with
@@ -64,6 +100,7 @@ up explicitly or re-detect commands, run:
 
 ```text
 /afk-init
+/afk-supervisor status --json
 ```
 
 It never overwrites developer-authored values.

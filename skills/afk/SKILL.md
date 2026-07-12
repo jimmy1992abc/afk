@@ -27,7 +27,27 @@ self-contained spec.
    `merge-to-unblock` / `merge-when-green`) and any constraints (branches not to
    touch, naming, safe-direction-only, deploy is the operator's job, summary
    language, explicit gate choice).
-5. **Restate the scope** in one line, then start.
+5. **Restate the scope** in one line.
+6. **Register recovery metadata.** Resolve the plugin root through
+   `${CLAUDE_PLUGIN_ROOT}`, then `pluginRoot` in `.afk/config.md`, then this
+   skill's directory. Create a stable run ID and maintain this machine-readable
+   block in `.afk/afk-ledger.md`:
+
+   ```text
+   <!-- afk-supervisor
+   {"schemaVersion":1,"runId":"<run-id>","sessionId":"<session-id>","state":"RUNNING","heartbeatAt":<utc-epoch-seconds>,"nextExpectedTickAt":<utc-epoch-seconds>,"unfinished":true}
+   -->
+   ```
+
+   The SessionStart hook supplies the current session observation. Run the
+   `afk-supervisor register` operation after writing the block:
+
+   ```text
+   node "<plugin-root>/scripts/supervisor/cli.mjs" register --run-id "<run-id>" --cwd "<repo>" --ledger "<repo>/.afk/afk-ledger.md"
+   ```
+
+   A loud registration failure does not replace the existing ledger/tick safety
+   layer. Record the failure and continue the scoped run.
 
 ## Per issue — the full waterfall (one at a time)
 
@@ -92,6 +112,18 @@ another session's branch; never deploy (merge ≠ deploy).
 The run's ledger lives at `.afk/afk-ledger.md` (gitignored), updated in place; if
 missing, reconstruct it from the state checks below.
 
+The OS-level AFK Supervisor complements, and never replaces, the existing
+approximately 15-minute in-session tick. Before each resumable step and every
+tick, refresh the metadata heartbeat and use `afk-supervisor lease` to acquire
+or renew the shared guard:
+
+```text
+node "<plugin-root>/scripts/supervisor/cli.mjs" lease --run-id "<run-id>"
+```
+
+`skip:recovery-lease-held` means another lifecycle layer owns recovery; exit the
+tick without counting it as no progress.
+
 - **If the host supports scheduled re-invocation** (a cron or wake-up), set up a
   recurring tick that re-invokes you; the tick prompt is static (scope, order,
   merge policy, constraints, ledger path) — never embed the ledger itself.
@@ -109,6 +141,19 @@ missing, reconstruct it from the state checks below.
   Two consecutive working ticks with none → stop the tick loop, post a status
   report (blocking + remaining), and stop. Queue complete → stop with a final
   report. Always tear down any scheduled tick on stop — never leave one running.
+
+Before tearing down the run-specific tick, use `afk-supervisor transition` to
+update the metadata block and global registry with exactly one terminal state:
+
+```text
+node "<plugin-root>/scripts/supervisor/cli.mjs" transition --run-id "<run-id>" --state COMPLETED
+node "<plugin-root>/scripts/supervisor/cli.mjs" transition --run-id "<run-id>" --state BLOCKED
+node "<plugin-root>/scripts/supervisor/cli.mjs" transition --run-id "<run-id>" --state AUTO_PAUSED
+```
+
+Use only the command matching the actual outcome. Terminal transitions cancel
+automatic recovery while preserving account usage-window state and the installed
+OS supervisor.
 
 ## End-of-run report
 

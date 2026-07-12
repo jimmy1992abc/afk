@@ -47,6 +47,10 @@ function newRun(metadata, event, ledgerPath) {
 
 async function sessionStart(event, deps) {
   if (typeof event.cwd !== 'string' || !isAbsolute(event.cwd)) return { code: 'skip:cwd-invalid' };
+  await deps.store.update((state) => {
+    state.sessions[event.cwd] = { sessionId: event.session_id, observedAt: deps.now() };
+    return state;
+  });
   const ledgerPath = join(event.cwd, '.afk', 'afk-ledger.md');
   if (!containedPath(event.cwd, ledgerPath)) return { code: 'skip:ledger-path-invalid' };
   let text;

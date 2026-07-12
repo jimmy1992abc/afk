@@ -33,6 +33,7 @@ export function defaultState() {
     schemaVersion: SCHEMA_VERSION,
     revision: 0,
     usage: defaultUsage(),
+    sessions: {},
     runs: {},
     activation: {
       handledResetAt: null,
@@ -58,6 +59,7 @@ export function migrateState(value) {
     schemaVersion: SCHEMA_VERSION,
     revision: Number.isInteger(value.revision) && value.revision >= 0 ? value.revision : 0,
     usage: { ...base.usage, ...(plainObject(value.usage) ? value.usage : {}) },
+    sessions: plainObject(value.sessions) ? value.sessions : {},
     runs: plainObject(value.runs) ? value.runs : {},
     activation: {
       ...base.activation,
@@ -73,7 +75,7 @@ export function validateState(value) {
   if (!plainObject(value)) throw new TypeError('state must be an object');
   if (value.schemaVersion !== SCHEMA_VERSION) throw new TypeError('unsupported state schema');
   if (!Number.isInteger(value.revision) || value.revision < 0) throw new TypeError('invalid state revision');
-  if (!plainObject(value.usage) || !plainObject(value.runs) || !plainObject(value.activation)) {
+  if (!plainObject(value.usage) || !plainObject(value.sessions) || !plainObject(value.runs) || !plainObject(value.activation)) {
     throw new TypeError('invalid state sections');
   }
   return value;

@@ -64,14 +64,22 @@ async function configure(args, deps) {
 }
 
 async function register(args, deps) {
-  if (!RUN_ID.test(args.runId ?? '') || !SESSION_ID.test(args.sessionId ?? '') || !args.cwd || !args.ledger) {
+  let sessionId = args.sessionId;
+  if (!sessionId && args.cwd) {
+    const state = await deps.stateStore.read();
+    const observed = state.sessions?.[args.cwd];
+    if (observed && deps.now() - observed.observedAt <= deps.currentConfig.registrationRecoveryMaxAgeSeconds) {
+      sessionId = observed.sessionId;
+    }
+  }
+  if (!RUN_ID.test(args.runId ?? '') || !SESSION_ID.test(sessionId ?? '') || !args.cwd || !args.ledger) {
     return emit(deps, 'error:registration-invalid', 2);
   }
   await deps.stateStore.update((state) => {
     const existing = state.runs[args.runId];
     state.runs[args.runId] = {
       ...existing,
-      runId: args.runId, sessionId: args.sessionId, cwd: args.cwd, ledgerPath: args.ledger,
+      runId: args.runId, sessionId, cwd: args.cwd, ledgerPath: args.ledger,
       state: existing?.state ?? 'RUNNING', lastHeartbeatAt: deps.now(), nextExpectedTickAt: deps.now() + 900,
       firstRateLimitedAt: null, rateLimitedUntil: null, resetConfidence: 'unknown',
       scheduledResumeAt: null, scheduledResetAt: null, scheduleState: null, scheduleConfidence: null,
