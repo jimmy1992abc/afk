@@ -130,6 +130,53 @@ test('runAttempt renews then finalizes the matching lease', async () => {
   assert.equal((await store.read()).runs['run-1'].lease.attemptId, null);
 });
 
+test('a superseded attempt reports itself stale and changes nothing', async () => {
+  // finalizeAttempt no-ops on a token mismatch and hands back the state
+  // unchanged, so the saved record still carries the winner's result. Without a
+  // flag the loser would report the winner's success as its own — which is
+  // exactly what would mask a double invocation in the logs.
+  const root = await mkdtemp(join(tmpdir(), 'afk-supervisor-runner-'));
+  const store = new StateStore(root);
+  await store.update(() => state());
+  const result = await runAttempt('attempt-1', {
+    store, config: defaultConfig(), now: () => now,
+    runClaude: async () => {
+      await store.update((current) => {
+        current.runs['run-1'].lease = { attemptId: 'attempt-2', token: 'token-2', expiresAt: now + 180, pid: null };
+        return current;
+      });
+      return { kind: 'success', startedAt: now };
+    },
+    setInterval: () => ({}), clearInterval: () => {}, notify: async () => {},
+  });
+  assert.equal(result.code, 'skip:stale-attempt');
+  const saved = await store.read();
+  assert.equal(saved.runs['run-1'].lease.attemptId, 'attempt-2');
+  assert.equal(saved.usage.windowAnchorAt, null, 'a superseded attempt must not anchor the window');
+});
+
+test('the lease is renewed while the child is alive, and only for its own attempt', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'afk-supervisor-runner-'));
+  const store = new StateStore(root);
+  const config = defaultConfig();
+  await store.update(() => state());
+  let renew;
+  let renewed;
+  await runAttempt('attempt-1', {
+    store, config, now: () => now,
+    runClaude: async () => {
+      await renew();
+      renewed = (await store.read()).runs['run-1'].lease;
+      return { kind: 'success', startedAt: now };
+    },
+    setInterval: (fn) => { renew = fn; return {}; },
+    clearInterval: () => {}, notify: async () => {},
+  });
+  assert.equal(renewed.lastRenewedAt, now);
+  assert.equal(renewed.expiresAt, now + config.leaseRenewalSeconds * config.leaseMissedRenewals);
+  assert.equal(renewed.pid, process.pid, 'the reconciler checks this pid before re-issuing the lease');
+});
+
 test('runAttempt notifies when consecutive quota rejection escalates', async () => {
   const root = await mkdtemp(join(tmpdir(), 'afk-supervisor-runner-'));
   const store = new StateStore(root);
@@ -145,11 +192,17 @@ test('runAttempt notifies when consecutive quota rejection escalates', async () 
   assert.equal(notified[0].runId, 'run-1');
 });
 
-test('successful activation records one attempt and a new estimated anchor', () => {
+test('successful activation records a new estimated anchor', () => {
   const current = state();
-  current.activation = { ...current.activation, inProgress: true, attemptId: 'activation-1', token: 'activation-token', resetAt: now - 90 };
+  current.activation = {
+    ...current.activation, inProgress: true, attemptId: 'activation-1',
+    token: 'activation-token', resetAt: now - 90, activationAttempts: [now - 5],
+  };
   const next = finalizeActivation(current, 'activation-token', { kind: 'success' }, now);
   assert.equal(next.activation.handledResetAt, now - 90);
-  assert.deepEqual(next.activation.activationAttempts, [now]);
   assert.equal(next.usage.windowAnchorAt, now);
+  // The attempt was counted when the lease was taken. Counting it again here
+  // would only ever count the activations that survived to finalize, so a cap
+  // counted at finalize never trips for the ones that crash.
+  assert.deepEqual(next.activation.activationAttempts, [now - 5]);
 });

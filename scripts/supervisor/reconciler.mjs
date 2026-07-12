@@ -53,6 +53,10 @@ export async function reconcileOnce(deps) {
         lastRenewedAt: now,
         expiresAt: now + deps.config.leaseRenewalSeconds * deps.config.leaseMissedRenewals,
         lastResult: 'action:activation-leased',
+        // The attempt counts from the moment it is leased, not from the moment it
+        // finishes. An activation whose runner crashes never finalizes, so a cap
+        // counted at finalize never trips and activations run without bound.
+        activationAttempts: [...current.activation.activationAttempts, now],
       };
       attempt = { id: attemptId, token, kind: 'activation', resetAt: decision.resetAt };
       return current;

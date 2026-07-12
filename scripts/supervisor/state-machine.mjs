@@ -52,12 +52,22 @@ export function selectCandidate(state, inputs, config, now) {
   if (Number.isFinite(state.usage.sevenDaySuppressedUntil) && state.usage.sevenDaySuppressedUntil > now) {
     return { kind: 'skip', code: 'skip:seven-day-limit' };
   }
-  const liveLeases = Object.values(state.runs)
+  // An empty-window activation is a Claude invocation too, and its child lives
+  // for as long as any recovery. Counting only run leases lets a run be leased
+  // while an activation is still running, so two Claudes run at once despite a
+  // limit of one.
+  const activationLive = state.activation.inProgress
+    && Number.isFinite(state.activation.expiresAt) && state.activation.expiresAt > now ? 1 : 0;
+  const liveLeases = activationLive + Object.values(state.runs)
     .filter((run) => Number.isFinite(run.lease?.expiresAt) && run.lease.expiresAt > now).length;
   if (liveLeases >= config.maxConcurrentInvocations) {
     return { kind: 'skip', code: 'skip:concurrency-exhausted' };
   }
-  const recoverable = orderedRuns(state).filter((run) => !TERMINAL.has(run.state));
+  // A run whose state the code does not know cannot be reasoned about. Selecting
+  // it would reach transitionRun, which throws, and the exception escapes the
+  // store update and kills every reconcile pass from then on.
+  const recoverable = orderedRuns(state)
+    .filter((run) => !TERMINAL.has(run.state) && Boolean(TRANSITIONS[run.state]));
   if (recoverable.length === 0) {
     const resetAt = state.usage.confidence === 'exact' ? state.usage.fiveHourResetAt : null;
     if (!Number.isFinite(resetAt) || now < resetAt + config.graceSeconds

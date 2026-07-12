@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { ConfigStore } from './config.mjs';
-import { commitObservationBatch, readObservationBatch } from './observation-inbox.mjs';
+import { commitObservationBatch, readObservationBatch, sweepObservations } from './observation-inbox.mjs';
 import { readLedgerHeartbeatFile } from './ledger.mjs';
 import { reconcileOnce } from './reconciler.mjs';
 import { StateStore } from './state-store.mjs';
@@ -51,9 +51,13 @@ export async function main(argv = process.argv.slice(2)) {
       detached: true, stdio: 'ignore', env: { ...process.env, AFK_SUPERVISOR_DATA_DIR: data },
     }),
   });
+  // Outside the lock and after the pass: an inbox file the reconciler will never
+  // import is never committed either, so it would be re-read on every pass for
+  // ever. Sweeping must never fail a pass that has already done its work.
+  await sweepObservations(data).catch(() => {});
   await appendBoundedLog(join(data, 'logs', 'supervisor.log'), {
     at: new Date().toISOString(), code: result.code, attemptId: result.attemptId ?? null,
-  });
+  }).catch(() => {});
   process.stdout.write(`${result.code}\n`);
   return result;
 }

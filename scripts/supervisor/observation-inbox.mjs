@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, open, readFile, readdir, rename, unlink } from 'node:fs/promises';
+import { mkdir, open, readFile, readdir, rename, stat, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 
 const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -52,15 +52,47 @@ export async function publishObservation(root, observation, options = {}) {
   return { code: 'published', path: eventPath };
 }
 
-export async function readObservationBatch(root) {
+export const OBSERVATION_RETENTION_SECONDS = 3_600;
+
+// Anything the reconciler will not import is never committed, so without this it
+// stays in the inbox for ever and is re-read and re-parsed on every single pass.
+// That includes files that fail validation, and the temp files an interrupted
+// publish leaves behind — which do not even end in `.json`.
+export async function sweepObservations(root, options = {}) {
+  const now = options.now ?? (() => Math.floor(Date.now() / 1000));
+  const retention = options.retentionSeconds ?? OBSERVATION_RETENTION_SECONDS;
+  const inbox = join(root, 'observations');
+  let names;
+  try { names = await readdir(inbox); } catch (error) {
+    if (error.code === 'ENOENT') return 0;
+    throw error;
+  }
+  let removed = 0;
+  for (const name of names) {
+    const path = join(inbox, name);
+    try {
+      const info = await stat(path);
+      if (now() - Math.floor(info.mtimeMs / 1000) <= retention) continue;
+      await unlink(path);
+      removed += 1;
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+  }
+  return removed;
+}
+
+export async function readObservationBatch(root, options = {}) {
   const inbox = join(root, 'observations');
   let names;
   try { names = await readdir(inbox); } catch (error) {
     if (error.code === 'ENOENT') return [];
     throw error;
   }
+  const limit = options.maxFiles ?? 512;
   const batch = [];
   for (const name of names.filter((item) => item.endsWith('.json'))) {
+    if (batch.length >= limit) break;
     const path = join(inbox, name);
     try {
       const observation = JSON.parse(await readFile(path, 'utf8'));

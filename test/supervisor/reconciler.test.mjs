@@ -22,6 +22,7 @@ async function harness(run, overrides = {}) {
       store, config: defaultConfig(), now: () => now,
       readObservationBatch: async () => [], commitObservationBatch: async () => {},
       readHeartbeats: async () => ({}), readLedgerHeartbeat: async () => null,
+      isRunnerAlive: async () => false,
       spawnRunner: (attempt) => { spawnCalls.push(attempt); return { unref() {} }; },
       notifyWindow: async () => {},
       randomUUID: () => 'attempt-1',
@@ -41,6 +42,85 @@ function run(overrides = {}) {
     ...overrides,
   };
 }
+
+const OBSERVATION = {
+  sessionId: '00000000-0000-4000-8000-000000000001', observedAt: 1_000,
+  fiveHourResetAt: 30_000, fiveHourUsedPercentage: 95,
+  sevenDayResetAt: null, sevenDayUsedPercentage: null,
+  source: 'statusline', confidence: 'exact',
+};
+
+test('a pass that lost the race never leases a run a second time', async () => {
+  const h = await harness(run({ lastHeartbeatAt: now - 99_999, nextExpectedTickAt: null }));
+  h.deps.readLedgerHeartbeat = async () => {
+    // Another pass leased this run while we were reading its ledger.
+    await h.store.update((state) => {
+      state.runs['run-1'].state = 'RECOVERING';
+      state.runs['run-1'].lease = { attemptId: 'other', token: 'other-token', expiresAt: now + 180, pid: null };
+      return state;
+    });
+    return null;
+  };
+  const result = await reconcileOnce(h.deps);
+  assert.equal(result.code, 'skip:state-changed');
+  assert.equal(h.spawnCalls.length, 0);
+  assert.equal((await h.store.read()).runs['run-1'].lease.attemptId, 'other');
+});
+
+test('a lease is never re-issued while its runner is still alive', async () => {
+  // A suspended machine stops the renewal timer while the runner and its Claude
+  // child stay alive. Expiry alone would spawn a second resume of one session.
+  const h = await harness(run({
+    state: 'RECOVERING', lastHeartbeatAt: now - 99_999, nextExpectedTickAt: null,
+    lease: { attemptId: 'a', token: 't', expiresAt: now - 1, pid: 4242 },
+  }), { isRunnerAlive: async (pid) => pid === 4242 });
+  const result = await reconcileOnce(h.deps);
+  assert.equal(result.code, 'skip:runner-alive');
+  assert.equal(h.spawnCalls.length, 0);
+});
+
+test('observations are committed only after the import that used them is durable', async () => {
+  const committed = [];
+  const h = await harness(run(), {
+    readObservationBatch: async () => [{ path: 'obs-1.json', observation: OBSERVATION }],
+  });
+  h.deps.commitObservationBatch = async (batch) => {
+    committed.push(batch.length);
+    // Committing first would destroy the observations if the state write threw.
+    assert.equal((await h.store.read()).usage.fiveHourResetAt, 30_000,
+      'the import must already be durable when its files are deleted');
+  };
+  await reconcileOnce(h.deps);
+  assert.deepEqual(committed, [1], 'an imported batch must be committed exactly once');
+});
+
+test('the lease re-check sees the same heartbeats the selection did', async () => {
+  // The re-check used to be handed a heartbeat map narrowed to the selected run,
+  // so every other run fell back to its persisted heartbeat. A run that the
+  // ledger shows is healthy then looked stale to the re-check, the re-check
+  // picked it instead, the decisions disagreed, and the pass skipped — for ever,
+  // while the genuinely due run was never resumed.
+  const busy = run({
+    runId: 'a-busy', scheduledResumeAt: 100, scheduledResetAt: now - 5, scheduleState: 'pending',
+    lastHeartbeatAt: now - 99_999, nextExpectedTickAt: null,
+  });
+  const h = await harness(busy, {
+    readHeartbeats: async () => ({ 'a-busy': now - 10 }),
+    readLedgerHeartbeat: async () => null,
+  });
+  await h.store.update((state) => {
+    state.runs['b-due'] = run({
+      runId: 'b-due', sessionId: '00000000-0000-4000-8000-000000000002',
+      state: 'RATE_LIMITED', rateLimitedUntil: now - 1_000, resetConfidence: 'exact',
+      lastHeartbeatAt: now - 99_999, nextExpectedTickAt: null,
+    });
+    return state;
+  });
+
+  const result = await reconcileOnce(h.deps);
+  assert.equal(result.code, 'action:runner-started');
+  assert.equal(h.spawnCalls[0].runId, 'b-due');
+});
 
 test('reconciler leases and detached-spawns one stale run', async () => {
   const h = await harness(run());
@@ -75,6 +155,9 @@ test('empty reset auto mode detached-spawns activation runner', async () => {
   const result = await reconcileOnce(h.deps);
   assert.equal(result.code, 'action:activation-runner-started');
   assert.equal(h.spawnCalls[0].kind, 'activation');
+  // Counted at lease time: an activation whose runner crashes never finalizes,
+  // so a cap counted at finalize would never trip and activations run unbounded.
+  assert.deepEqual((await h.store.read()).activation.activationAttempts, [now]);
 });
 
 test('fresh heartbeat after provisional selection prevents spawn', async () => {

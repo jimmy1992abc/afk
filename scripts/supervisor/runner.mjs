@@ -98,7 +98,8 @@ export function finalizeActivation(state, token, result, now) {
   next.activation.token = null;
   next.activation.lastRenewedAt = null;
   next.activation.expiresAt = null;
-  next.activation.activationAttempts.push(now);
+  // The attempt was already counted when the lease was taken; counting it again
+  // here would only count the activations that survived to finalize.
   if (result.kind === 'success') {
     next.activation.handledResetAt = next.activation.resetAt;
     next.activation.lastResult = 'result:activation-success';

@@ -111,6 +111,29 @@ test('one quota event is not counted twice toward escalation', async () => {
     'the runner owns the probe-rejection counter; the hook must not also increment it');
 });
 
+test('a stop failure that is not a rate limit never parks the run', async () => {
+  const active = await harness();
+  await handleHook(sessionStart(active.cwd), active.deps);
+  const result = await handleHook({
+    hook_event_name: 'StopFailure', session_id: sessionId, cwd: active.cwd, error: 'server_error',
+  }, active.deps);
+  assert.equal(result.code, 'skip:hook-event-ignored');
+  assert.equal((await active.store.read()).runs['run-1'].state, 'RUNNING',
+    'a crash or an overload must not park the run rate-limited for five hours');
+});
+
+test('SessionStart refuses a working directory that is not absolute', async () => {
+  const active = await harness();
+  const result = await handleHook({ hook_event_name: 'SessionStart', session_id: sessionId, cwd: 'relative/path' }, active.deps);
+  assert.equal(result.code, 'skip:cwd-invalid');
+});
+
+test('a session never adopts another session ledger', async () => {
+  const other = await harness({ sessionId: '00000000-0000-4000-8000-00000000000f' });
+  assert.equal((await handleHook(sessionStart(other.cwd), other.deps)).code, 'skip:ledger-not-recoverable');
+  assert.equal((await other.store.read()).runs['run-1'], undefined);
+});
+
 test('unrelated hook event and unregistered failure have distinct skips', async () => {
   const active = await harness();
   assert.equal((await handleHook({ hook_event_name: 'Stop' }, active.deps)).code, 'skip:hook-event-ignored');

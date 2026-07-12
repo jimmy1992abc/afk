@@ -81,6 +81,22 @@ test('a heartbeat from the future is a clock artefact, not progress', () => {
   assert.equal(decision.kind, 'invoke', 'a future heartbeat must not mark the run fresh for ever');
 });
 
+test('a running activation occupies the one invocation slot', () => {
+  // Its Claude child lives as long as any recovery. Counting only run leases
+  // would let a run be leased alongside it, so two Claudes run at once.
+  const state = stateWith(run({ lastHeartbeatAt: now - config.heartbeatStaleSeconds - 1, nextExpectedTickAt: null }));
+  state.activation = { ...state.activation, inProgress: true, expiresAt: now + 180 };
+  assert.equal(selectCandidate(state, {}, config, now).code, 'skip:concurrency-exhausted');
+});
+
+test('a run whose state the code does not know is never selected', () => {
+  // Selecting it reaches transitionRun, which throws, and the exception escapes
+  // the store update and kills every reconcile pass from then on.
+  const item = run({ state: 'NONSENSE', lastHeartbeatAt: now - 99_999, nextExpectedTickAt: null });
+  assert.doesNotThrow(() => selectCandidate(stateWith(item), {}, config, now));
+  assert.notEqual(selectCandidate(stateWith(item), {}, config, now).kind, 'invoke');
+});
+
 test('a failed run waits out its retry backoff', () => {
   const item = run({ state: 'FAILED', retry: { attempts: 1, nextAttemptAt: now + 300 } });
   const decision = selectCandidate(stateWith(item), {}, config, now);
