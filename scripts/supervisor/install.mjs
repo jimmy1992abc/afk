@@ -1,6 +1,6 @@
 import { execFile as execFileCallback } from 'node:child_process';
 import { access, cp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
+import { homedir, userInfo } from 'node:os';
 import { basename, dirname, isAbsolute, join } from 'node:path';
 import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
@@ -83,11 +83,22 @@ export async function installSupervisor(deps) {
   const record = existingRecord ?? { previousStatusLine: patched.previous, marker: STATUSLINE_MARKER };
   await deps.writeInstallRecord(record);
   if (patched.changed) await deps.writeSettings(patched.settings);
-  await deps.installScheduler();
-  // The scheduler is the whole supervisor. A setup that patched the settings but
-  // registered no task must not look like a success.
-  const scheduler = await deps.schedulerStatus();
-  if (scheduler?.registered !== true) throw new Error('scheduler did not register');
+  try {
+    await deps.installScheduler();
+    // The scheduler is the whole supervisor. A setup that patched the settings
+    // but registered no task must not look like a success.
+    const scheduler = await deps.schedulerStatus();
+    if (scheduler?.registered !== true) throw new Error('scheduler did not register');
+  } catch (error) {
+    // Otherwise the status line stays hijacked by a supervisor that will never
+    // run, and the next setup would see its own marker and record no previous
+    // command — losing the user's original status line for good.
+    if (!existingRecord) {
+      if (patched.changed) await deps.writeSettings(settings);
+      await deps.removeInstallRecord();
+    }
+    throw error;
+  }
   return { code: existingRecord ? 'action:supervisor-repaired' : 'action:supervisor-installed' };
 }
 
@@ -147,6 +158,15 @@ function quote(value) {
   return `"${String(value).replaceAll('"', '\\"')}"`;
 }
 
+// The task is registered for one user, so the trigger and the principal need a
+// name Task Scheduler can resolve. USERDOMAIN is absent on a workgroup machine,
+// where the bare account name resolves.
+function windowsUserId() {
+  const name = process.env.USERNAME ?? userInfo().username;
+  const domain = process.env.USERDOMAIN;
+  return domain ? `${domain}\\${name}` : name;
+}
+
 export function createInstallDeps(options) {
   const dataRoot = options.dataRoot;
   const stableRoot = join(dataRoot, 'worker');
@@ -171,12 +191,16 @@ export function createInstallDeps(options) {
   const workerPath = join(stableRoot, 'supervisor.mjs');
   const schedulerValues = platform === 'darwin'
     ? {
-      nodePath, workerPath,
+      nodePath, workerPath, dataRoot,
       plistPath: join(homedir(), 'Library', 'LaunchAgents', 'com.afk.supervisor.plist'),
       stdoutPath: '/dev/null',
       stderrPath: '/dev/null',
     }
-    : { nodePath, workerPath, taskXmlPath: join(dataRoot, 'afk-supervisor-task.xml') };
+    : {
+      nodePath, workerPath, dataRoot,
+      userId: options.userId ?? windowsUserId(),
+      taskXmlPath: join(dataRoot, 'afk-supervisor-task.xml'),
+    };
   const wrapperCommand = `${quote(nodePath)} ${quote(join(stableRoot, 'statusline-wrapper.mjs'))} --root ${quote(dataRoot)}`;
 
   return {

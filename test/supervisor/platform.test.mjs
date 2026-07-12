@@ -20,6 +20,27 @@ test('Windows task quotes paths with spaces and ignores overlapping instances', 
   assert.match(xml, /<LogonTrigger>/);
 });
 
+test('the scheduler pins the data root it installed into', () => {
+  // The worker otherwise re-derives its root from its own environment, which the
+  // scheduler does not share. Setup and the running supervisor would then use
+  // two different state directories and the supervisor would never see a run.
+  const values = { nodePath: 'node.exe', workerPath: 'C:\\data\\worker\\supervisor.mjs', userId: 'OMEN\\jimmy', dataRoot: 'C:\\data' };
+  assert.match(renderWindowsTask(values), /--root &quot;C:\\data&quot;/);
+  assert.match(
+    renderLaunchAgent({ ...values, workerPath: '/data/worker/supervisor.mjs', dataRoot: '/data', stdoutPath: '/dev/null', stderrPath: '/dev/null' }),
+    /<string>--root<\/string>\s*<string>\/data<\/string>/,
+  );
+});
+
+test('the Windows logon trigger is scoped to the installing user', () => {
+  // A LogonTrigger with no UserId means "at log on of ANY user", which Task
+  // Scheduler only lets an administrator register. Windows setup fails outright
+  // with "Access is denied" for every ordinary user without this.
+  const xml = renderWindowsTask({ nodePath: 'node.exe', workerPath: 'supervisor.mjs', userId: 'OMEN\\jimmy' });
+  assert.match(xml, /<LogonTrigger>[^<]*<Enabled>true<\/Enabled><UserId>OMEN\\jimmy<\/UserId>/);
+  assert.match(xml, /<Principal id="Author"><UserId>OMEN\\jimmy<\/UserId>/);
+});
+
 test('the Windows task keeps running on battery power', () => {
   const xml = renderWindowsTask({ nodePath: 'node.exe', workerPath: 'supervisor.mjs' });
   assert.match(xml, /<DisallowStartIfOnBatteries>false<\/DisallowStartIfOnBatteries>/);

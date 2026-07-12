@@ -653,6 +653,11 @@ command for good if the process died in between, because a second setup then
 recognizes its own marker, records no previous command, and uninstall would
 delete the status line outright.
 
+A setup that cannot register a scheduler rolls the settings back. Leaving the
+wrapper installed would hijack the user's status line for a supervisor that is
+never going to run, and the next setup would recognise its own marker, record no
+previous command, and lose the original for good.
+
 The wrapper runs the previous command first. Its stdout and exit code remain the
 visible status line; AFK emits no stdout, and an AFK-side failure — an unwritable
 data directory, a corrupt inbox — is swallowed rather than allowed to blank the
@@ -682,14 +687,26 @@ Setup copies the worker into `%LOCALAPPDATA%` and installs per-user Task
 Scheduler entries for a 60-second recurring trigger and user-logon catch-up.
 Task settings use `IgnoreNew` for overlapping reconciler instances.
 
-Three Task Scheduler defaults would silently disable the supervisor and are set
-explicitly. The task document is written as UTF-16 **with a byte-order mark**,
-which `schtasks /create /xml` requires and which Node does not emit on its own.
-`DisallowStartIfOnBatteries` and `StopIfGoingOnBatteries` both default to true,
-which would stop the supervisor the moment a laptop is unplugged — the AFK case
-exactly — so both are set to false. `ExecutionTimeLimit` leaves headroom above a
-pass rather than matching the poll interval, so a slow pass is not killed
-mid-reconcile.
+Four Task Scheduler behaviours would otherwise stop the supervisor from ever
+installing or running, and all four were found only by installing it for real:
+
+- **The logon trigger is scoped to the installing user.** A `LogonTrigger`
+  without a `UserId` means *at log on of any user*, which only an administrator
+  may register — so an unscoped trigger makes `setup` fail with
+  `ERROR: Access is denied` for every ordinary user. The principal carries the
+  same `UserId`. The task stays per-user and unprivileged.
+- **The document is UTF-16 with a byte-order mark**, which `schtasks /create
+  /xml` requires and which Node does not emit on its own.
+- **`DisallowStartIfOnBatteries` and `StopIfGoingOnBatteries` both default to
+  true**, which would stop the supervisor the moment a laptop is unplugged — the
+  AFK case exactly — so both are set to false.
+- **`ExecutionTimeLimit` leaves headroom above a pass** rather than matching the
+  poll interval, so a slow pass is not killed mid-reconcile.
+
+The scheduler also **pins the data root** it installed into, on both platforms.
+The worker would otherwise re-derive a root from an environment the scheduler
+does not share, so setup and the running supervisor could read two different
+state directories and the supervisor would never see a registered run.
 
 The adapter uses the resolved absolute Node executable and a stable wrapper, with
 paths passed as argument arrays or correctly XML-escaped values. It does not use
@@ -783,6 +800,9 @@ Coverage includes:
   AFK-side failure;
 - the previous status line is recorded before the settings are overwritten;
 - the Windows task carries a byte-order mark and runs on battery;
+- the Windows logon trigger is scoped to the installing user;
+- the scheduler pins the data root it installed into;
+- a setup that cannot register a scheduler restores the previous status line;
 - a Windows notification is detached and never awaited;
 - a held lock is never observable as a partially written record;
 - headless rate-limit classification and changed-schema fallback;
@@ -851,6 +871,13 @@ first-line in-session mechanism, while the supervisor handles lost process
 lifecycle.
 
 ## Open Questions and Manual Validation
+
+Windows setup, task registration, execution, and uninstall were validated on a
+real unprivileged machine on 2026-07-12: `setup` registers the task, the task
+runs the reconciler (`skip:no-active-run`, exit 0) against the pinned data root,
+`status` reports the task the operating system actually holds, and `uninstall`
+removes the task and restores `settings.json` byte for byte. macOS remains
+unvalidated on real hardware.
 
 - Canary whether the current VS Code graphical extension executes user
   status-line commands; absence keeps exact usage capability `unobserved`.

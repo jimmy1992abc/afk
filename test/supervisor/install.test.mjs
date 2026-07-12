@@ -35,6 +35,16 @@ test('setup fails loudly when the scheduler does not actually register', async (
   await assert.rejects(() => installSupervisor(deps), /scheduler/i);
 });
 
+test('a setup that cannot register a scheduler does not keep the status line', async () => {
+  // A failed setup used to leave the wrapper installed, so the user's status
+  // line was hijacked by a supervisor that was never going to run.
+  const deps = installDeps({ installScheduler: async () => {} });
+  const { state } = deps;
+  await assert.rejects(() => installSupervisor(deps), /scheduler/i);
+  assert.equal(state.settings.statusLine.command, 'user-status');
+  assert.equal(state.record, null);
+});
+
 test('status reports not-installed when the record survives but the task is gone', async () => {
   const deps = installDeps();
   await installSupervisor(deps);

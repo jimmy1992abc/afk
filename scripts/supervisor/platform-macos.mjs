@@ -11,6 +11,8 @@ export function renderLaunchAgent(values) {
     <string>${xmlEscape(values.nodePath)}</string>
     <string>${xmlEscape(values.workerPath)}</string>
     <string>--once</string>
+    <string>--root</string>
+    <string>${xmlEscape(values.dataRoot)}</string>
   </array>
   <key>RunAtLoad</key><true/>
   <key>StartInterval</key><integer>60</integer>

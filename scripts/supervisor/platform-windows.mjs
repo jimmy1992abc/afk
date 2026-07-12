@@ -4,18 +4,23 @@ import { defaultSpawnDetached, xmlEscape } from './platform.mjs';
 export const TASK_XML_BOM = '﻿';
 
 export function renderWindowsTask(values) {
-  const argumentsValue = `&quot;${xmlEscape(values.workerPath)}&quot; --once`;
+  const argumentsValue = `&quot;${xmlEscape(values.workerPath)}&quot; --once --root &quot;${xmlEscape(values.dataRoot)}&quot;`;
+  // A LogonTrigger with no UserId means "at log on of any user", which only an
+  // administrator may register — so an unscoped trigger makes setup fail with
+  // "Access is denied" for every ordinary user. Scoping both the trigger and the
+  // principal to the installing user keeps the task per-user and unprivileged.
+  const userId = xmlEscape(values.userId);
   return `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <Triggers>
-    <LogonTrigger><Enabled>true</Enabled></LogonTrigger>
+    <LogonTrigger><Enabled>true</Enabled><UserId>${userId}</UserId></LogonTrigger>
     <CalendarTrigger>
       <Repetition><Interval>PT1M</Interval><StopAtDurationEnd>false</StopAtDurationEnd></Repetition>
       <StartBoundary>2000-01-01T00:00:00</StartBoundary><Enabled>true</Enabled>
       <ScheduleByDay><DaysInterval>1</DaysInterval></ScheduleByDay>
     </CalendarTrigger>
   </Triggers>
-  <Principals><Principal id="Author"><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
+  <Principals><Principal id="Author"><UserId>${userId}</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
   <Settings>
     <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
     <StartWhenAvailable>true</StartWhenAvailable>

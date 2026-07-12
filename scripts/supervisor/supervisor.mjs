@@ -12,7 +12,12 @@ import { StateStore } from './state-store.mjs';
 import { createWindowNotifier } from './notifier.mjs';
 import { appendBoundedLog } from './logger.mjs';
 
-function root() {
+// The scheduler pins the root it installed into. Without it the worker would
+// re-derive a root from an environment the scheduler does not share, and setup
+// and the running supervisor could read two different state directories.
+function root(argv) {
+  const pinned = argv.indexOf('--root');
+  if (pinned >= 0 && argv[pinned + 1]) return argv[pinned + 1];
   if (process.env.AFK_SUPERVISOR_DATA_DIR) return process.env.AFK_SUPERVISOR_DATA_DIR;
   if (process.platform === 'darwin') return join(homedir(), 'Library', 'Application Support', 'afk-supervisor');
   if (process.platform === 'win32' && process.env.LOCALAPPDATA) return join(process.env.LOCALAPPDATA, 'afk-supervisor');
@@ -20,7 +25,7 @@ function root() {
 }
 
 export async function main(argv = process.argv.slice(2)) {
-  const data = root();
+  const data = root(argv);
   const config = await new ConfigStore(data).read();
   const store = new StateStore(data);
   const runner = new URL('./runner.mjs', import.meta.url);
