@@ -90,27 +90,35 @@ test('repeated setup and uninstall are idempotent through injected platform oper
   assert.ok(calls.includes('uninstall-scheduler'));
 });
 
+// validateClaudeStatus resolves the located path with the host's path rules, so
+// the fixture has to speak the host's dialect for the test to mean anything.
+const HOST = process.platform === 'win32'
+  ? { platform: 'win32', locator: 'where.exe', claudePath: 'C:\\Tools\\claude.exe' }
+  : { platform: 'linux', locator: 'which', claudePath: '/opt/claude' };
+
+function locate(stdout) {
+  return async (file) => (file === HOST.locator
+    ? { stdout: `${HOST.claudePath}\n` }
+    : { stdout });
+}
+
 test('a missing Claude CLI reports the documented repairable reason', async () => {
-  const notFound = async () => { throw Object.assign(new Error('Command failed: where.exe claude.exe'), { code: 1 }); };
-  await assert.rejects(() => preflightClaude('win32', { execFile: notFound }), /claude-cli-missing/);
+  const notFound = async () => { throw Object.assign(new Error('Command failed'), { code: 1 }); };
+  await assert.rejects(() => preflightClaude(HOST.platform, { execFile: notFound }), /claude-cli-missing/);
 
   const foundNothing = async () => ({ stdout: '\r\n' });
-  await assert.rejects(() => preflightClaude('win32', { execFile: foundNothing }), /claude-cli-missing/);
+  await assert.rejects(() => preflightClaude(HOST.platform, { execFile: foundNothing }), /claude-cli-missing/);
 });
 
 test('an unauthenticated Claude CLI reports the documented repairable reason', async () => {
-  const execFile = async (file) => (file === 'where.exe'
-    ? { stdout: 'C:\\Tools\\claude.exe\r\n' }
-    : { stdout: JSON.stringify({ loggedIn: false }) });
-  await assert.rejects(() => preflightClaude('win32', { execFile }), /claude-auth-missing/);
+  const execFile = locate(JSON.stringify({ loggedIn: false }));
+  await assert.rejects(() => preflightClaude(HOST.platform, { execFile }), /claude-auth-missing/);
 });
 
 test('preflight returns the located CLI when it is present and authenticated', async () => {
-  const execFile = async (file) => (file === 'where.exe'
-    ? { stdout: 'C:\\Tools\\claude.exe\r\n' }
-    : { stdout: JSON.stringify({ loggedIn: true, subscriptionType: 'max' }) });
-  assert.deepEqual(await preflightClaude('win32', { execFile }), {
-    claudePath: 'C:\\Tools\\claude.exe', authenticated: true,
+  const execFile = locate(JSON.stringify({ loggedIn: true, subscriptionType: 'max' }));
+  assert.deepEqual(await preflightClaude(HOST.platform, { execFile }), {
+    claudePath: HOST.claudePath, authenticated: true,
   });
 });
 
