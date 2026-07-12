@@ -1,0 +1,16 @@
+{
+  "description": "AFK window activation: record when a rate limit actually happened",
+  "hooks": {
+    "StopFailure": [
+      {
+        "matcher": "rate_limit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/supervisor/hook-handler.mjs\""
+          }
+        ]
+      }
+    ]
+  }
+}

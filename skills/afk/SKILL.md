@@ -97,6 +97,15 @@ missing, reconstruct it from the state checks below.
   merge policy, constraints, ledger path) — never embed the ledger itself.
   Otherwise run to completion in-session, checkpointing the ledger before any
   yield so a later session resumes the same issue at its next step.
+- **Rate-limited tick → aim the next one at the reset.** When a tick fails on a
+  rate limit, ask the window-activation supervisor for the observed reset:
+  `node "<plugin-root>/scripts/supervisor/cli.mjs" next-reset`. If it reports
+  one, schedule the next tick for shortly after `resetAt` (plus ~2 minutes)
+  instead of the fixed interval, keeping the recurring cron as the fallback —
+  a failed invocation must never unschedule the loop. The supervisor opens the
+  new five-hour window at the reset; your aimed tick then resumes work
+  immediately instead of up to one interval late. If `next-reset` reports
+  nothing or the supervisor is not installed, just keep the normal cadence.
 - **Overlap guard — first action each tick:** refresh a UTC heartbeat in the
   ledger at each step and during long waits. A tick that finds a heartbeat
   fresher than ~20 min exits immediately (another tick is working); such exits

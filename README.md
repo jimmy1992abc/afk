@@ -124,6 +124,31 @@ gitignored `.env`.
 /afk-glm-review
 ```
 
+## Window Activation (optional)
+
+An AFK run that hits the five-hour rate limit resumes by itself: the recurring
+tick simply succeeds again once the window resets. What nothing does by default
+is *open* the next window while you are away — quota only starts regenerating
+at the first request after the reset. The bundled window-activation supervisor
+closes that gap:
+
+- a status-line wrapper records the exact reset time (`resets_at`) and a
+  `StopFailure` hook records that a limit actually happened;
+- a per-user scheduled task (Task Scheduler / launchd) fires **one minimal
+  request** just after the observed reset, so the new window opens immediately;
+- a rate-limited AFK tick asks `next-reset` and aims its next tick just past
+  the reset instead of waiting out the fixed interval.
+
+It never touches your sessions — the only thing it ever starts is a throwaway
+`--no-session-persistence --max-turns 1` request, so the worst possible
+malfunction is one wasted minimal request.
+
+```text
+node scripts/supervisor/cli.mjs setup        # verify claude, wrap status line, register the task
+node scripts/supervisor/cli.mjs status       # config, state, scheduler, next reset
+node scripts/supervisor/cli.mjs uninstall    # unregister and restore settings.json
+```
+
 ## Merge Policies
 
 Configured in `.afk/config.md`:
@@ -160,6 +185,8 @@ manifests. Host install caches use the version as the update key.
 ```text
 skills/       Source skills shipped by the plugin.
 scripts/      Manifest sync, lint, link, provenance, and version checks.
+scripts/supervisor/  The window-activation supervisor and its CLI.
+hooks/        Plugin hooks (StopFailure rate-limit observer).
 templates/    Starter `.afk/` files for consuming repositories.
 docs/         Design and operating notes.
 ```
