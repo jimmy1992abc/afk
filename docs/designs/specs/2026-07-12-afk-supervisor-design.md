@@ -131,12 +131,22 @@ once per minute and once at login/load. Each pass:
 2. re-reads and validates state;
 3. imports fresh ledger heartbeats for registered sessions;
 4. evaluates all sessions in stable order;
-5. performs at most one Claude invocation globally;
-6. records the outcome atomically; and
-7. exits with a distinct action, skip, or error reason.
+5. records an action-specific lease and releases the global lock;
+6. performs at most one Claude invocation while renewing that lease;
+7. reacquires the global lock and commits the result only if the lease token
+   still matches; and
+8. exits with a distinct action, skip, or error reason.
 
 Limiting each pass to one Claude invocation prevents bursts. Due sessions remain
-queued and are handled on later scheduler passes.
+queued and are handled on later scheduler passes. The short global lock protects
+state transactions only; it is never held while Claude, a notification adapter,
+or an existing status-line command runs.
+
+The recurring scheduler is a catch-up mechanism. When a new earliest due time
+is committed, the platform adapter also installs or updates one per-user
+one-shot wake-up for that time. The worker replaces or removes that wake-up
+after each pass. This avoids adding one native task per run while providing a
+closer start time than interval polling alone.
 
 ## Repository Layout
 
@@ -209,7 +219,9 @@ prompts, transcript contents, or repository contents.
 
 `runs` is keyed by validated run ID. Each record contains the session ID, cwd,
 ledger path, run state, heartbeat, expected tick, rate-limit reset, recovery
-lease, retry state, and optional threshold recovery schedule.
+lease token and expiry, retry state, and optional threshold recovery schedule.
+Each threshold schedule records its reset timestamp, due time, state
+(`pending`, `leased`, `handled`, `cancelled`, or `failed`), and outcome.
 
 Writes use a same-directory temporary file, fsync where supported, atomic
 rename, and parent-directory sync where supported. Readers validate the entire
@@ -235,6 +247,7 @@ Global configuration is separate from repository `.afk/config.md`:
   "overdueAutoActivationSeconds": 7200,
   "maxWindowActivationsPerDay": 4,
   "maxRecoveryAttempts": 3,
+  "recoveryAttemptTimeoutSeconds": 14400,
   "pollIntervalSeconds": 60
 }
 ```
@@ -260,11 +273,25 @@ timestamp mapped uniformly into the inclusive range. It is random-looking but
 stable across repeated snapshots, process restarts, and reboot. No duplicate
 tasks are created for the same run and reset.
 
+`scheduledResumeAt` is the target start time. Under normal awake operation, the
+one-shot wake-up starts reconciliation at or shortly after that target. Native
+scheduler granularity, process startup, another leased action, sleep, or power
+loss can delay the actual invocation. The supervisor records this lateness and
+never claims a strict 180-second guarantee that the operating system cannot
+provide. It does not start early to compensate.
+
 Runs registered after the threshold event but before reset inherit a schedule
 for the current reset. Completed, blocked, and auto-paused runs retain audit
 fields but become ineligible. A newer exact reset replaces only schedules that
 have not started. Missing or estimated reset data never invents a threshold
 schedule.
+
+At or after a schedule's due time, a heartbeat newer than the associated reset
+proves that the session already made progress in the new window. The supervisor
+marks that schedule `handled` without invoking Claude. A fresh heartbeat from
+before the reset only postpones selection through the normal tick grace; it
+does not satisfy or discard the post-reset schedule. This distinction prevents
+both duplicate resumes and delayed resumes of work that already continued.
 
 ## Run Lifecycle
 
@@ -291,7 +318,7 @@ UNKNOWN | ACTIVE_EXACT | ACTIVE_ESTIMATED | RESET_DUE | ACTIVATING | FAILED
 
 ## Reconciliation Order
 
-Under the global lock, the worker evaluates:
+During the locked selection transaction, the worker evaluates:
 
 1. disabled configuration;
 2. corrupt or unsupported state;
@@ -304,10 +331,30 @@ Under the global lock, the worker evaluates:
 9. empty-window reset policy; and
 10. retry backoff and daily caps.
 
-Before any invocation it re-reads the selected run's ledger and state. A fresh
-heartbeat cancels the attempt. A per-run recovery lease plus the global lock
-prevents the supervisor and in-session tick from launching overlapping work.
-The invocation is spawned without a shell.
+Before leasing an invocation it re-reads the selected run's ledger and state. A
+post-reset heartbeat satisfies a threshold schedule; another fresh heartbeat
+defers ordinary stale recovery. The in-session tick calls the same lease helper
+before beginning resumable work, so both lifecycle layers share the authoritative
+guard in addition to checking the ledger heartbeat.
+
+The lease transaction stores a random attempt token and expiry before releasing
+the global lock. The action runner renews the lease through short locked writes
+while the child is alive. Finalization only updates an attempt whose token still
+matches, so a stale process cannot overwrite a later result. The invocation is
+spawned without a shell.
+
+The lease expiry is longer than the configured action timeout. The runner sends
+a graceful termination and then a forced termination when that timeout is
+exceeded, using a platform process group so descendants do not remain detached.
+After an unclean worker exit, a later pass waits for both lease expiry and retry
+backoff, then re-reads the ledger before retrying. Process detection is only a
+secondary conservative signal; a matching live process postpones recovery but
+never proves progress.
+
+New AFK ticks use the shared lease helper. An older installed tick that does not
+yet know the helper is still protected by the pre-invocation ledger heartbeat
+check. Setup reports this reduced overlap protection and repair refreshes the
+stable worker and skill installation.
 
 ## Claude Invocation
 
@@ -366,7 +413,9 @@ network access.
 
 Setup copies the worker into the stable data directory and installs a per-user
 LaunchAgent under `~/Library/LaunchAgents/`. It runs at load and every 60 seconds
-without administrator access. Logs rotate by size and retained-file count.
+without administrator access. A second LaunchAgent entry provides the replaceable
+one-shot wake-up. Launchd's single-job semantics prevent concurrent copies of
+the same worker. Logs rotate by size and retained-file count.
 Notifications use `osascript`; actionable behavior is capability-tested and
 falls back to an informational notification.
 
@@ -374,9 +423,11 @@ falls back to an informational notification.
 
 Setup copies the worker into `%LOCALAPPDATA%` and installs per-user Task
 Scheduler entries for a one-minute recurring trigger and user-logon catch-up.
-It uses the resolved absolute Node executable and a stable wrapper, with paths
-passed as argument arrays or correctly XML-escaped values. It does not use a VS
-Code extension binary or require WSL. Notifications use a PowerShell-compatible
+An additional replaceable one-shot trigger targets the earliest queued resume.
+Task settings use `IgnoreNew` for overlapping instances. The adapter uses the
+resolved absolute Node executable and a stable wrapper, with paths passed as
+argument arrays or correctly XML-escaped values. It does not use a VS Code
+extension binary or require WSL. Notifications use a PowerShell-compatible
 interactive-user adapter and fall back to an informational dialog when actions
 are unavailable.
 
@@ -452,6 +503,8 @@ Coverage includes:
 - exact-reset and stale-heartbeat recovery;
 - fresh heartbeat and tick-grace no-op;
 - tick/supervisor race and stale-lock cleanup;
+- worker crash after lease acquisition and action timeout cleanup;
+- one-shot wake-up replacement and scheduler overlap suppression;
 - login, reboot, and sleep-style catch-up;
 - empty-window notify and opt-in auto modes;
 - daily activation cap and bounded retries;
