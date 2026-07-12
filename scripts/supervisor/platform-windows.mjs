@@ -31,12 +31,20 @@ export function renderWindowsTask(values) {
 
 export function createWindowsAdapter(deps = {}) {
   const spawnDetached = deps.spawnDetached ?? defaultSpawnDetached;
+  const name = 'windows';
+  const intervalSeconds = 60;
   return {
-    name: 'windows',
-    intervalSeconds: 60,
+    name,
+    intervalSeconds,
     async installScheduler(values) {
       await deps.writeFile(values.taskXmlPath, `${TASK_XML_BOM}${renderWindowsTask(values)}`, 'utf16le');
       await deps.execFile('schtasks.exe', ['/create', '/tn', 'AFK Supervisor', '/xml', values.taskXmlPath, '/f']);
+    },
+    // Status must ask the operating system. Reporting the configured interval back
+    // to the caller would call a supervisor healthy that has no task at all.
+    async queryScheduler() {
+      const result = await deps.execFile('schtasks.exe', ['/query', '/tn', 'AFK Supervisor'], { allowFailure: true });
+      return { platform: name, intervalSeconds, registered: !result?.error };
     },
     async uninstallScheduler(values) {
       await deps.execFile('schtasks.exe', ['/delete', '/tn', 'AFK Supervisor', '/f'], { allowFailure: true });

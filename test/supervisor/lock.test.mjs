@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -11,6 +11,13 @@ async function tempRoot() {
   return mkdtemp(join(tmpdir(), 'afk-supervisor-lock-'));
 }
 
+async function heldBy(root, owner) {
+  const dir = join(root, 'state.lock');
+  await mkdir(dir, { recursive: true });
+  if (owner) await writeFile(join(dir, 'owner.json'), JSON.stringify(owner));
+  return dir;
+}
+
 test('withFileLock releases the lock after success', async () => {
   const root = await tempRoot();
   assert.equal(await withFileLock({ root }, async () => 'ok'), 'ok');
@@ -19,26 +26,37 @@ test('withFileLock releases the lock after success', async () => {
 
 test('live lock is retained and reports its distinct reason', async () => {
   const root = await tempRoot();
-  await writeFile(join(root, 'state.lock'), JSON.stringify({ token: 'live', expiresAt: Date.now() + 60_000 }));
+  await heldBy(root, { token: 'live', expiresAt: Date.now() + 60_000 });
   await assert.rejects(() => withFileLock({ root }, async () => 'no'), LockHeldError);
 });
 
 test('stale lock is replaced', async () => {
   const root = await tempRoot();
-  await writeFile(join(root, 'state.lock'), JSON.stringify({ token: 'old', expiresAt: 999 }));
-  const value = await withFileLock({ root, now: () => 1_000 }, async () => 'ok');
-  assert.equal(value, 'ok');
+  await heldBy(root, { token: 'old', expiresAt: 999 });
+  assert.equal(await withFileLock({ root, now: () => 1_000 }, async () => 'ok'), 'ok');
 });
 
-test('a held lock is never observable as a partially written record', async () => {
+test('a lock with no readable record counts as held rather than abandoned', async () => {
   const root = await tempRoot();
-  // The old lock created the file and wrote the record afterwards, so a
-  // concurrent acquirer could read it empty, judge it corrupt, and steal a live
-  // lock. The record must be complete the moment the lock path exists.
+  // What a holder looks like between taking the lock and writing its record.
+  // Reading that as a free lock lets a second caller into the critical section.
+  await heldBy(root, null);
+  await assert.rejects(() => withFileLock({ root }, async () => 'no'), LockHeldError);
+});
+
+test('a lock with no readable record is still reclaimed once it outlives a lock lifetime', async () => {
+  const root = await tempRoot();
+  await heldBy(root, null);
+  const later = Date.now() + 60_000;
+  assert.equal(await withFileLock({ root, now: () => later }, async () => 'ok'), 'ok');
+});
+
+test('a held lock names its holder', async () => {
+  const root = await tempRoot();
   await withFileLock({ root }, async () => {
-    const record = JSON.parse(await readFile(join(root, 'state.lock'), 'utf8'));
-    assert.equal(typeof record.token, 'string');
-    assert.ok(Number.isFinite(record.expiresAt));
+    const owner = JSON.parse(await readFile(join(root, 'state.lock', 'owner.json'), 'utf8'));
+    assert.equal(typeof owner.token, 'string');
+    assert.ok(Number.isFinite(owner.expiresAt));
   });
 });
 

@@ -69,6 +69,7 @@ test('the previous status line is recorded before settings are overwritten', asy
     writeSettings: async (next) => { order.push('settings'); settings = next; },
     writeInstallRecord: async (next) => { order.push('record'); record = next; },
     installScheduler: async () => { order.push('scheduler'); },
+    schedulerStatus: async () => ({ registered: true }),
   });
   assert.deepEqual(order, ['record', 'settings', 'scheduler']);
   assert.equal(record.previousStatusLine.command, 'ccusage');

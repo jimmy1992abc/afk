@@ -65,6 +65,10 @@ export async function installSupervisor(deps) {
   await deps.writeInstallRecord(record);
   if (patched.changed) await deps.writeSettings(patched.settings);
   await deps.installScheduler();
+  // The scheduler is the whole supervisor. A setup that patched the settings but
+  // registered no task must not look like a success.
+  const scheduler = await deps.schedulerStatus();
+  if (scheduler?.registered !== true) throw new Error('scheduler did not register');
   return { code: existingRecord ? 'action:supervisor-repaired' : 'action:supervisor-installed' };
 }
 
@@ -85,7 +89,8 @@ export async function repairSupervisor(deps) {
 
 export async function statusSupervisor(deps) {
   const record = await deps.readInstallRecord();
-  return { installed: Boolean(record), scheduler: await deps.schedulerStatus(), record };
+  const scheduler = await deps.schedulerStatus();
+  return { installed: Boolean(record) && scheduler?.registered === true, scheduler, record };
 }
 
 async function readJson(path, fallback = null) {
@@ -161,7 +166,7 @@ export function createInstallDeps(options) {
     verifyStable: async (root) => Promise.all([access(join(root, 'supervisor.mjs')), access(join(root, 'runner.mjs'))]),
     installScheduler: () => adapter.installScheduler(schedulerValues),
     uninstallScheduler: () => adapter.uninstallScheduler(schedulerValues),
-    schedulerStatus: async () => ({ platform: adapter.name, intervalSeconds: adapter.intervalSeconds }),
+    schedulerStatus: () => adapter.queryScheduler(schedulerValues),
     readSettings: () => readJson(settingsPath, {}),
     writeSettings: (settings) => atomicJson(settingsPath, settings),
     readInstallRecord: () => readJson(recordPath, null),

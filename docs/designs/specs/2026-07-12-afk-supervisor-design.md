@@ -304,10 +304,28 @@ Each threshold schedule records its reset timestamp, due time, state
 session-scoped. Exact usage snapshots are account-level and replace compatible
 per-run estimates during reconciliation.
 
-The lock record is published by linking a fully written private file into place,
-so the lock path never exists in a partially written state. Creating the lock and
-then writing its record would let a concurrent acquirer read it empty, judge it
-corrupt, and steal a lock that is alive.
+The global lock is a **directory**, not a file. Windows keeps a just-removed file
+in a delete-pending state and reports an attempt to touch it as `EPERM` rather
+than `EEXIST` or `ENOENT`, so a lock built on creating and deleting a file cannot
+distinguish held from free from failed. `mkdir` is atomic and exclusive on every
+supported system and holds no file handle, so there is no such state to misread.
+The holder's record lives inside the directory.
+
+Two rules follow, and both are load-bearing:
+
+- **A failed probe never means the lock is free.** An unreadable record, an
+  unstattable directory, or a contended `mkdir` all count as held. Reading any of
+  them as free admits a second caller to the critical section, which silently
+  drops a state update — no error is raised and the write simply vanishes.
+- **Contention is not failure.** `EPERM`, `EACCES`, and `EBUSY` mean *wait and
+  retry*, not *abort*. Raising them fails a state transaction that would
+  otherwise have committed.
+
+A lock is reclaimed only when its record is readable and expired, or when the
+directory has outlived a whole lock lifetime, so a crashed holder cannot wedge
+the supervisor and a live one cannot be robbed. Replacing `state.json` retries on
+the same contended codes, because Windows refuses to replace a file that a
+concurrent reader still has open.
 
 Writes use a same-directory temporary file, fsync where supported, atomic
 rename, and parent-directory sync where supported. Readers validate the entire

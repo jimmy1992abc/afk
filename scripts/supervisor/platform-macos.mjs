@@ -23,14 +23,22 @@ export function renderLaunchAgent(values) {
 }
 
 export function createMacAdapter(deps = {}) {
+  const name = 'macos';
+  const intervalSeconds = 60;
   return {
-    name: 'macos',
-    intervalSeconds: 60,
+    name,
+    intervalSeconds,
     async installScheduler(values) {
       const plist = renderLaunchAgent(values);
       await deps.writeFile(values.plistPath, plist, 'utf8');
       await deps.execFile('launchctl', ['unload', values.plistPath], { allowFailure: true });
       await deps.execFile('launchctl', ['load', values.plistPath]);
+    },
+    // Status must ask launchd. Reporting the configured interval back to the
+    // caller would call a supervisor healthy that has no agent loaded.
+    async queryScheduler() {
+      const result = await deps.execFile('launchctl', ['list', 'com.afk.supervisor'], { allowFailure: true });
+      return { platform: name, intervalSeconds, registered: !result?.error };
     },
     async uninstallScheduler(values) {
       await deps.execFile('launchctl', ['unload', values.plistPath], { allowFailure: true });

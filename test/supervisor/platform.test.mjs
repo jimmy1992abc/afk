@@ -48,6 +48,19 @@ test('a Windows notification is detached and never awaited by the caller', async
   assert.ok(spawned[0].args.includes('notify.ps1'));
 });
 
+test('scheduler status asks the operating system whether the task exists', async () => {
+  const queries = [];
+  const failing = createWindowsAdapter({
+    execFile: async (file, args) => { queries.push([file, ...args]); return { error: new Error('not found') }; },
+  });
+  const missing = await failing.queryScheduler({ taskXmlPath: 'task.xml' });
+  assert.deepEqual(queries[0], ['schtasks.exe', '/query', '/tn', 'AFK Supervisor']);
+  assert.equal(missing.registered, false);
+
+  const present = createWindowsAdapter({ execFile: async () => ({ stdout: 'AFK Supervisor' }) });
+  assert.equal((await present.queryScheduler({})).registered, true);
+});
+
 test('platformAdapter rejects unsupported systems', () => {
   assert.equal(platformAdapter('darwin', {}).name, 'macos');
   assert.equal(platformAdapter('win32', {}).name, 'windows');

@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 import { SCHEMA_VERSION, STATE_FILE } from './constants.mjs';
-import { LockHeldError, withFileLock } from './lock.mjs';
+import { CONTENDED, LockHeldError, withFileLock } from './lock.mjs';
 
 export class StateConflictError extends Error {
   constructor(message = 'state revision changed') {
@@ -84,6 +84,22 @@ export function validateState(value) {
   return value;
 }
 
+// Windows refuses to replace a file that another reader still has open, and
+// reports it as EPERM. Readers here are short, so a bounded retry turns a
+// transient sharing conflict into a completed write instead of a failed
+// transaction.
+async function replace(temp, path) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await rename(temp, path);
+      return;
+    } catch (error) {
+      if (!CONTENDED.has(error.code) || attempt >= 20) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 5 + attempt * 5));
+    }
+  }
+}
+
 async function atomicWriteJson(path, value) {
   const temp = `${path}.tmp-${randomUUID()}`;
   const handle = await open(temp, 'wx', 0o600);
@@ -93,19 +109,28 @@ async function atomicWriteJson(path, value) {
   } finally {
     await handle.close();
   }
-  await rename(temp, path);
+  await replace(temp, path);
 }
 
+const LOCK_WAIT_MS = 5_000;
+
+// Every state transaction fsyncs, so a fixed short retry budget starves a writer
+// whenever several passes, lease renewals, or ticks contend at once. A starved
+// lease renewal is swallowed by its caller, and three missed renewals expire the
+// lease, so waiting is bounded by a deadline with backoff rather than by a
+// fixed number of quick attempts.
 async function withStateLock(root, callback) {
-  for (let attempt = 0; attempt < 50; attempt += 1) {
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  let delay = 5;
+  for (;;) {
     try {
       return await withFileLock({ root }, callback);
     } catch (error) {
-      if (!(error instanceof LockHeldError) || attempt === 49) throw error;
-      await new Promise((resolve) => setTimeout(resolve, 5));
+      if (!(error instanceof LockHeldError) || Date.now() >= deadline) throw error;
+      await new Promise((resolve) => setTimeout(resolve, delay + Math.floor(Math.random() * delay)));
+      delay = Math.min(delay * 2, 50);
     }
   }
-  throw new LockHeldError();
 }
 
 export class StateStore {
