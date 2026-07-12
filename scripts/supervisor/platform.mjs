@@ -98,16 +98,29 @@ export async function processStartedAt(pid, deps = {}) {
 // 'alive' — the pid exists and the process is the one we started.
 // 'dead'  — the pid is gone, or it is a different process wearing its number.
 // 'unknown' — we could not tell. Never treated as either.
-export async function runnerLiveness(lease, deps = {}) {
-  const pid = lease?.pid;
+async function pidLiveness(pid, expectedStartedAt, deps) {
   if (!Number.isInteger(pid)) return 'dead';
   const startedAt = await processStartedAt(pid, deps);
   if (startedAt === undefined) return 'unknown';
   if (startedAt === null) return 'dead';
-  if (!Number.isFinite(lease.startedAt)) return 'unknown';
+  if (!Number.isFinite(expectedStartedAt)) return 'unknown';
   // Clocks and rounding differ between the two readings; a second of slack is
   // far tighter than any plausible pid-reuse interval.
-  return Math.abs(startedAt - lease.startedAt) <= 1_000 ? 'alive' : 'dead';
+  return Math.abs(startedAt - expectedStartedAt) <= 1_000 ? 'alive' : 'dead';
+}
+
+// Two processes can be driving this run: the runner, and the `claude --resume` child
+// it spawned. The child OUTLIVES its runner — Windows does not kill a child when its
+// parent dies, and on POSIX the child has its own process group — so a runner killed
+// outright leaves a live Claude still writing to the session. Tracking only the
+// runner read that as `dead` and put a second Claude on top of it. The run is
+// occupied while EITHER is alive.
+export async function runnerLiveness(lease, deps = {}) {
+  const runner = await pidLiveness(lease?.pid, lease?.startedAt, deps);
+  if (runner === 'alive') return 'alive';
+  const child = await pidLiveness(lease?.childPid, lease?.childStartedAt, deps);
+  if (child === 'alive') return 'alive';
+  return runner === 'unknown' || child === 'unknown' ? 'unknown' : 'dead';
 }
 
 export function xmlEscape(value) {

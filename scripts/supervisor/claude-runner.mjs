@@ -110,7 +110,7 @@ export function startClaudeProcess(attempt, options = {}) {
     child.once('error', (error) => resolve({ code: null, error }));
     child.once('close', (code, signal) => resolve({ code, signal }));
   });
-  return { lines, completion, kill: () => killTree(child) };
+  return { lines, completion, pid: child.pid, kill: () => killTree(child) };
 }
 
 export function startActivationProcess(attempt, options = {}) {
@@ -124,13 +124,16 @@ export function startActivationProcess(attempt, options = {}) {
     child.once('error', (error) => resolve({ code: null, error }));
     child.once('close', (code, signal) => resolve({ code, signal }));
   });
-  return { lines, completion, kill: () => killTree(child) };
+  return { lines, completion, pid: child.pid, kill: () => killTree(child) };
 }
 
 export async function runClaude(attempt, deps = {}) {
   const now = deps.now ?? (() => Math.floor(Date.now() / 1000));
   const startedAt = now();
   const processHandle = (deps.startClaude ?? startClaudeProcess)(attempt);
+  // The child outlives its runner, so the claim has to know its identity too —
+  // otherwise a runner killed outright leaves a live Claude that reads as dead.
+  await deps.onChildStarted?.(processHandle.pid);
   const consume = async () => {
     let sawSuccess = false;
     for await (const line of processHandle.lines) {

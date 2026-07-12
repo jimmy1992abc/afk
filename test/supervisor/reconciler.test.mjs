@@ -74,18 +74,18 @@ test('the reconciler never downgrades the identity the runner verified', async (
   // when it comes back `undefined` ("could not ask"), writing that as `null` DOWNGRADED
   // a live, verified claim to an unverifiable one, which then reads as `unknown`.
   const h = await harness(run());
-  h.deps.spawnRunner = (attempt) => {
-    h.spawnCalls.push(attempt);
-    // The runner beats us to it, with a verified identity.
-    h.store.update((state) => {
+  h.deps.spawnRunner = (attempt) => { h.spawnCalls.push(attempt); return { pid: 4242, unref() {} }; };
+  h.deps.processStartedAt = async () => {
+    // The runner stamps its own verified identity from inside itself, and gets there
+    // first — while our slower shell-out is still running.
+    await h.store.update((state) => {
       const lease = state.runs['run-1'].recoveryLease;
       lease.pid = 4242;
       lease.startedAt = 1_700_000_000_000;
       return state;
     });
-    return { pid: 4242, unref() {} };
+    return undefined;   // ...and then our probe comes back "could not ask"
   };
-  h.deps.processStartedAt = async () => undefined;   // the probe could not ask
 
   await reconcileOnce(h.deps);
   const lease = (await h.store.read()).runs['run-1'].recoveryLease;

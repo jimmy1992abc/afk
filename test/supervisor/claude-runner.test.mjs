@@ -126,6 +126,24 @@ test('the resumed session is told which recovery attempt it belongs to', () => {
     'the child still needs the environment it was going to get');
 });
 
+test('runClaude reports the child it started, while it is still running', async () => {
+  // The claim has to learn the child's pid *during* the run, not after it: the whole
+  // point is to identify a Claude that outlives its runner. Reported after the fact,
+  // a runner killed mid-run would never have recorded it at all.
+  const seen = [];
+  const result = await runClaude({ run }, {
+    startClaude: () => ({
+      pid: 9001,
+      lines: lines([{ type: 'result', subtype: 'success' }]),
+      completion: Promise.resolve({ code: 0 }),
+      kill: async () => {},
+    }),
+    onChildStarted: (pid) => { seen.push(pid); },
+  });
+  assert.equal(result.kind, 'success');
+  assert.deepEqual(seen, [9001]);
+});
+
 test('a Claude child is never detached on Windows', () => {
   // detached exists for one reason: POSIX needs a process group so killTree can
   // signal the whole tree. Windows kills by pid with taskkill /t and needs no

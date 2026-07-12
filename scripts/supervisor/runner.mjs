@@ -132,6 +132,24 @@ export function finalizeActivation(state, token, result, now) {
   return next;
 }
 
+// The `claude --resume` child outlives its runner: Windows does not kill a child
+// when its parent dies, and on POSIX the child has its own process group. A runner
+// killed outright therefore leaves a live Claude still writing to the session — and
+// a claim that tracked only the runner read that as dead, and the supervisor put a
+// second Claude on top of it. `locate` picks this attempt's claim out of the state,
+// or nothing if a later attempt has replaced it.
+async function recordChild(deps, pid, locate) {
+  if (!Number.isInteger(pid)) return;
+  const startedAt = await (deps.processStartedAt ?? processStartedAt)(pid);
+  await deps.store.update((current) => {
+    const claim = locate(current);
+    if (!claim) return current;
+    claim.childPid = pid;
+    claim.childStartedAt = Number.isFinite(startedAt) ? startedAt : null;
+    return current;
+  }).catch(() => {});
+}
+
 // A pid alone is not an identity — the OS reuses it. Recording the process start
 // time alongside it is what lets the reconciler tell "our runner, still working
 // through a suspend" from "a stranger who inherited its number".
@@ -166,7 +184,13 @@ export async function runAttempt(attemptId, deps) {
     await renewActivation();
     const interval = deps.setInterval(renewActivation, deps.config.leaseRenewalSeconds * 1000);
     let result;
-    try { result = await deps.runActivation({ id: attemptId, timeoutSeconds: deps.config.recoveryAttemptTimeoutSeconds }); }
+    try {
+      result = await deps.runActivation({ id: attemptId, timeoutSeconds: deps.config.recoveryAttemptTimeoutSeconds }, {
+        onChildStarted: (pid) => recordChild(deps, pid, (current) => (
+          current.activation?.token === state.activation.token ? current.activation : null
+        )),
+      });
+    }
     catch (error) { result = { kind: 'failure', reason: error?.code ?? 'runner-exception' }; }
     finally { deps.clearInterval(interval); }
     let finalized;
@@ -194,7 +218,12 @@ export async function runAttempt(attemptId, deps) {
   let result;
   try {
     try {
-      result = await deps.runClaude({ id: attemptId, run, timeoutSeconds: deps.config.recoveryAttemptTimeoutSeconds });
+      result = await deps.runClaude({ id: attemptId, run, timeoutSeconds: deps.config.recoveryAttemptTimeoutSeconds }, {
+        onChildStarted: (pid) => recordChild(deps, pid, (state) => {
+          const lease = state.runs[runId]?.recoveryLease;
+          return lease?.token === run.recoveryLease.token ? lease : null;
+        }),
+      });
     } catch (error) {
       result = { kind: 'failure', reason: error?.code ?? 'runner-exception' };
     }
@@ -248,13 +277,15 @@ async function main() {
   const identity = { pid: process.pid, startedAt: await processStartedAt(process.pid) };
   const result = await runAttempt(attemptId, {
     store: new StateStore(root), config, now, identity,
-    runClaude: (attempt) => executeClaude(attempt, {
+    runClaude: (attempt, hooks) => executeClaude(attempt, {
       now,
       startClaude: (value) => startClaudeProcess(value, { executable: config.claudePath }),
+      ...hooks,
     }),
-    runActivation: (attempt) => executeActivation(attempt, {
+    runActivation: (attempt, hooks) => executeActivation(attempt, {
       now,
       startActivation: (value) => startActivationProcess(value, { executable: config.claudePath, cwd: activationCwd }),
+      ...hooks,
     }),
     setInterval, clearInterval, notify: createNotifier({ root }),
   });

@@ -145,6 +145,34 @@ test('exhaustion and quota escalation tell the operator different things', async
     'a run that ran out of retries is not quota-limited and has no next probe');
 });
 
+test('the claim records the Claude child, which outlives its runner', async () => {
+  // The claim recorded only the RUNNER's pid. The process that actually drives the
+  // session is the `claude --resume` child, and it survives its runner — Windows does
+  // not kill a child when its parent dies, and on POSIX the child has its own process
+  // group. A runner killed outright (an OOM kill, a failed killTree) therefore left a
+  // live Claude writing to the session while the claim read `dead`, and the next pass
+  // started a SECOND Claude on top of it.
+  const root = await mkdtemp(join(tmpdir(), 'afk-supervisor-runner-'));
+  const store = new StateStore(root);
+  await store.update(() => state());
+  let seen = null;
+  await runAttempt('attempt-1', {
+    store, config: defaultConfig(), now: () => now,
+    identity: { pid: 4242, startedAt: 1_700_000_000_000 },
+    processStartedAt: async () => 1_700_000_005_000,
+    runClaude: async (attempt, hooks) => {
+      await hooks.onChildStarted(9001);
+      seen = (await store.read()).runs['run-1'].recoveryLease;
+      return { kind: 'success', startedAt: now };
+    },
+    setInterval: () => ({}), clearInterval: () => {},
+    notify: async () => {},
+  });
+  assert.equal(seen.childPid, 9001, 'the child must be recorded while it is running');
+  assert.equal(seen.childStartedAt, 1_700_000_005_000);
+  assert.equal(seen.pid, 4242, 'and the runner is still recorded too');
+});
+
 test('stale lease token cannot finalize a newer attempt', () => {
   const current = state();
   assert.equal(finalizeAttempt(current, 'run-1', 'old-token', { kind: 'success' }, now, defaultConfig()), current);

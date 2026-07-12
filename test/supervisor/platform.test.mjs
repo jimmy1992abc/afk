@@ -110,6 +110,33 @@ test('a recycled pid is not our runner', async () => {
   assert.equal(await runnerLiveness({ pid: 4242, startedAt: started }, absent), 'dead');
 });
 
+test('an orphaned Claude keeps the run occupied even when its runner is gone', async () => {
+  // The claim recorded the RUNNER's identity. But the thing that actually drives the
+  // session is the `claude --resume` child, and it outlives its runner: Windows does
+  // not kill a child when its parent dies, and on POSIX the child has its own process
+  // group. A runner killed by the OOM killer, or a killTree that failed, therefore
+  // left a live Claude writing to the session while the claim read `dead` — and the
+  // supervisor started a SECOND Claude on top of it. The run is occupied while either
+  // process is alive.
+  const runnerStarted = 1_700_000_000_000;
+  const childStarted = 1_700_000_005_000;
+  const probe = (pid) => (pid === 9001 ? childStarted : null);   // the runner is gone; the child is not
+  const deps = {
+    platform: 'darwin',
+    execFile: async (file, args) => {
+      const pid = Number(args[1]);
+      const started = probe(pid);
+      if (started === null) throw Object.assign(new Error('no such process'), { code: 1 });
+      return { stdout: new Date(started).toUTCString() };
+    },
+  };
+  const claim = {
+    pid: 4242, startedAt: runnerStarted,
+    childPid: 9001, childStartedAt: Date.parse(new Date(childStarted).toUTCString()),
+  };
+  assert.equal(await runnerLiveness(claim, deps), 'alive');
+});
+
 test('a probe that could not run is unknown, never dead', async () => {
   // This test used to assert the opposite, and so certified the defect: ANY throw
   // from the probe was read as "the process is gone". On a host where the probe

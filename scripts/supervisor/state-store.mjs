@@ -58,7 +58,12 @@ function plainObject(value) {
 }
 
 export function emptyRecoveryLease() {
-  return { attemptId: null, token: null, lastRenewedAt: null, expiresAt: null, pid: null, startedAt: null, stuckNotifiedAt: null };
+  // Two processes can be driving a run: the runner, and the `claude --resume` child
+  // it spawned. The child outlives its runner, so the claim tracks both.
+  return {
+    attemptId: null, token: null, lastRenewedAt: null, expiresAt: null,
+    pid: null, startedAt: null, childPid: null, childStartedAt: null, stuckNotifiedAt: null,
+  };
 }
 
 // The old shape had one `lease` field carrying two different claims. Which one it
