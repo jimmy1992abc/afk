@@ -11,8 +11,10 @@ operating-system supervisor persists usage-window observations and a registry of
 active AFK sessions. When an exact five-hour usage snapshot first reaches 90%,
 the supervisor queues every recoverable AFK session for a resume attempt at the
 known reset time plus a per-session delay between 60 and 180 seconds. The same
-worker also recovers stale sessions after an unexpected frontend exit, login,
-reboot, or sleep.
+worker also classifies headless quota retries, maintains a non-drifting estimate
+from the first successful supervisor response in each window, and recovers stale
+sessions after an unexpected frontend exit, login, reboot, or sleep. Exact reset
+times still come only from documented status-line data.
 
 The supervisor invokes the separately installed `claude` CLI. It never depends
 on VS Code, a terminal, or an interactive Claude Code process remaining open.
@@ -43,7 +45,7 @@ checks, ledger-driven continuation, overlap prevention, and run shutdown.
 - Claiming that the VS Code graphical UI executes status-line commands.
 - Automatically anchoring an empty usage window unless the user opts in.
 
-## Confirmed Claude Code Interfaces
+## Claude Code Interfaces
 
 The design uses only behavior documented by Anthropic and confirmed against the
 installed CLI where applicable.
@@ -226,6 +228,7 @@ contents.
 ```json
 {
   "schemaVersion": 1,
+  "revision": 0,
   "usage": {
     "fiveHourResetAt": null,
     "fiveHourUsedPercentage": null,
@@ -260,6 +263,12 @@ contents.
       "retry": {
         "attempts": 0,
         "nextAttemptAt": null
+      },
+      "quotaRejections": {
+        "consecutive": 0,
+        "backoffLevel": 0,
+        "nextProbeAt": null,
+        "lastNotifiedAt": null
       }
     }
   },
@@ -285,9 +294,11 @@ per-run estimates during reconciliation.
 
 Writes use a same-directory temporary file, fsync where supported, atomic
 rename, and parent-directory sync where supported. Readers validate the entire
-shape. Unknown fields are preserved during compatible migrations. Corrupt state
-is moved to a timestamped quarantine file only after a valid replacement is
-written; recovery defaults to no invocation.
+shape. Every committed state replacement increments `revision`; compare-and-set
+transactions reject a stale revision and restart selection. Unknown fields are
+preserved during compatible migrations. Corrupt state is moved to a timestamped
+quarantine file only after a valid replacement is written; recovery defaults to
+no invocation.
 
 Each successful reconciliation removes terminal runs older than seven days,
 expired observation files, and activation attempts older than 24 hours. The
@@ -312,6 +323,9 @@ Global configuration is separate from repository `.afk/config.md`:
   "overdueAutoActivationSeconds": 7200,
   "maxWindowActivationsPer24Hours": 4,
   "maxRecoveryAttempts": 3,
+  "maxConsecutiveQuotaRejections": 3,
+  "quotaEscalationBaseSeconds": 86400,
+  "quotaEscalationMaxSeconds": 604800,
   "recoveryAttemptTimeoutSeconds": 14400,
   "leaseRenewalSeconds": 60,
   "leaseMissedRenewals": 3,
@@ -334,11 +348,15 @@ The state store uses these reset sources in order:
    interactive surface emits status-line data, it also enables proactive 90%
    scheduling and can avoid a quota failure.
 2. **Supervisor window anchor:** after a runner receives a successful response
-   at time `T`, it records `windowAnchorAt = T` and estimates the next reset at
-   `T + 5 hours`. A quota-classified response does not create an anchor. This is
-   expected to be tight when the supervisor made the first successful request
-   in the window. If a human used the account earlier, the estimate is late, but
-   a compatible status-line observation replaces it immediately when available.
+   at time `T`, it may record `windowAnchorAt = T` and estimate the next reset at
+   `T + 5 hours`. A quota-classified response does not create an anchor. The
+   anchor is write-once within a window: later successes before its estimated
+   boundary never move it forward. After that boundary, or after an exact reset
+   proves the prior window ended, the first subsequent success may establish the
+   next anchor. This is expected to be tight when the supervisor made the first
+   successful request in the window. If a human used the account earlier, the
+   estimate is late, but a compatible status-line observation replaces it
+   immediately when available.
 3. **Rate-limit upper bound:** when no exact reset or successful supervisor
    anchor exists, the first observed rate limit estimates an upper bound at
    `firstRateLimitedAt + 5 hours`.
@@ -355,10 +373,12 @@ observation resolves the conflict.
 ### Estimated reset fallbacks
 
 A successful supervisor response records an account-level `windowAnchorAt` and
-estimates the next five-hour reset from that anchor. A rate-limit observation
-without an exact reset or valid anchor records per-run `firstRateLimitedAt` and
-a conservative upper bound of `firstRateLimitedAt + 5 hours`. A later exact
-observation replaces either estimate immediately.
+estimates the next five-hour reset from that anchor without scheduling any run.
+Only a run that actually becomes `RATE_LIMITED` may consume an anchor estimate,
+and it schedules only itself. An anchor is usable for that purpose only before
+its estimated boundary plus grace; a stale anchor falls back to the per-run
+`firstRateLimitedAt + 5 hours` upper bound. A later exact observation replaces
+either estimate immediately.
 
 Estimated resets never arm the 90% queue and are never presented as exact. They
 only make otherwise stranded recoverable runs eligible for bounded recovery,
@@ -457,8 +477,9 @@ short locked transaction it re-reads state, merges those inputs, and evaluates:
 7. scheduled 90% resume times;
 8. exact rate-limit reset plus grace;
 9. estimated rate-limit recovery probes;
-10. stale non-rate-limited recovery; and
-11. empty-window reset policy.
+10. escalated quota backoff;
+11. stale non-rate-limited recovery; and
+12. empty-window reset policy.
 
 For each candidate, it applies retry backoff and rolling activation caps. It
 then releases the lock, re-reads only the selected ledger, reacquires the lock,
@@ -518,11 +539,11 @@ exact status-line reset, then a window-anchor estimate, then the
 `firstRateLimitedAt + 5 hours` upper bound. An ambiguous quota cannot create a
 seven-day suppression boundary.
 
-On a successful runner response at time `T`, finalization records the estimated
-window anchor and schedules every recoverable run for `T + 5 hours` with stable
-per-run jitter. A later exact status-line snapshot replaces that estimate and
-its pending schedules. Repeated success or quota frames for the same attempt are
-idempotent.
+On a successful runner response at time `T`, finalization sets a window anchor
+only when the write-once rules allow it and clears that run's consecutive quota
+counter. Success does not schedule any run. A later exact status-line snapshot
+replaces the account estimate and any pending per-run schedules that consumed
+it. Repeated success or quota frames for the same attempt are idempotent.
 
 Because the retry-frame contract is undocumented, the parser accepts only a
 version-tested event envelope, enumerated rate-limit error, numeric status, and
@@ -555,9 +576,21 @@ Failures never retry every minute. Each run has at most three non-quota failures
 for a reset event, with delays of 5, 20, and 60 minutes. A validated quota result
 updates or estimates the reset and reschedules the run without incrementing
 `retry.attempts`; classifying a quota rejection is expected control flow, not a
-failed recovery. A successful heartbeat or a terminal transition clears retry
-state. Exhaustion marks the attempt failed and notifies the user. A new exact
-reset or explicit `trigger-now` starts a new bounded attempt series.
+failed recovery.
+
+Quota outcomes have an independent consecutive counter. A successful runner
+response clears it. Before the configured threshold, a quota result uses an
+exact reset, a valid window anchor, or the per-run upper bound. At three
+consecutive quota rejections without success, the supervisor notifies the user,
+marks the run as a possible long-window limit without claiming an exact
+seven-day boundary, and switches to 24-hour exponential probe delays capped at
+seven days. Later quota rejections advance that backoff and remain visible in
+status. An exact status-line snapshot or explicit `trigger-now` replaces the
+inference; success clears it.
+
+A successful heartbeat or a terminal transition clears ordinary retry state.
+Exhaustion marks the attempt failed and notifies the user. A new exact reset or
+explicit `trigger-now` starts a new bounded non-quota attempt series.
 
 ## Hooks and Status-line Installation
 
@@ -630,6 +663,7 @@ skip:heartbeat-fresh
 skip:tick-grace
 skip:reset-not-due
 skip:estimate-not-due
+skip:quota-backoff
 skip:reset-already-handled
 skip:recovery-lease-held
 skip:concurrency-exhausted
@@ -639,6 +673,8 @@ skip:retry-backoff
 skip:rolling-activation-cap
 action:resume-afk
 action:activate-window
+result:quota-rescheduled
+result:quota-backoff-escalated
 error:state-corrupt
 error:claude-cli-missing
 error:claude-auth-missing
@@ -668,7 +704,10 @@ Coverage includes:
 - headless rate-limit classification and changed-schema fallback;
 - active child termination after a validated quota frame;
 - successful-run window anchoring and exact status-line replacement;
+- repeated success within one window does not move its anchor;
+- successful anchoring does not schedule non-rate-limited runs;
 - ambiguous quota fallback without false seven-day suppression;
+- consecutive quota rejection escalation, notification, and success reset;
 - preservation and replacement of snapshots;
 - status-line write throttling and account-level import ordering;
 - 90% crossing for every active run;
