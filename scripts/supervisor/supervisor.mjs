@@ -53,13 +53,22 @@ export async function main(argv = process.argv.slice(2)) {
     spawnRunner: (attempt) => spawn(process.execPath, [fileURLToPath(runner), '--attempt', attempt.id], {
       detached: true, stdio: 'ignore', env: { ...process.env, AFK_SUPERVISOR_DATA_DIR: data },
     }),
-  }).catch((error) => ({ code: `error:${error?.code === 'LOCK_HELD' ? 'state-lock-held' : 'pass-failed'}` }));
+  }).catch((error) => {
+    // Losing a lock race is an expected outcome and exits clean. Anything else is
+    // a real fault: collapsing it to a bare code with exit 0 leaves the scheduler
+    // reporting success for ever while the supervisor does nothing.
+    if (error?.code === 'LOCK_HELD') return { code: 'skip:state-lock-held' };
+    process.exitCode = 1;
+    return { code: 'error:pass-failed', message: String(error?.message ?? error), stack: error?.stack };
+  });
   // Outside the lock and after the pass: an inbox file the reconciler will never
   // import is never committed either, so it would be re-read on every pass for
   // ever. Sweeping must never fail a pass that has already done its work.
   await sweepObservations(data).catch(() => {});
   await appendBoundedLog(join(data, 'logs', 'supervisor.log'), {
     at: new Date().toISOString(), code: result.code, attemptId: result.attemptId ?? null,
+    ...(result.message ? { message: result.message } : {}),
+    ...(result.stack ? { stack: result.stack } : {}),
   }).catch(() => {});
   process.stdout.write(`${result.code}\n`);
   return result;

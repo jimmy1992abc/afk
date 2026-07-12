@@ -21,19 +21,26 @@ function heartbeatDecision(run, rawHeartbeat, config, now) {
   return null;
 }
 
-// A lease that expired while its machine slept still has a live runner behind it.
-// A pid alone is not proof for ever, though: Windows recycles pids, so once a
-// lease is older than a whole action timeout the pid is no longer believed —
-// otherwise one recycled pid would wedge that run permanently.
+// A lease that expired while its machine slept still has a live runner behind it,
+// so a live pid always means occupied — with no time bound. Bounding it by the
+// action timeout would be self-defeating: that timeout is a timer, and suspend
+// stops timers while the wall clock keeps running, so the bound would expire in
+// exactly the scenario the check exists for and a second Claude would resume the
+// same session.
+//
+// The residual risk is pid reuse: a recycled pid keeps a run occupied for ever.
+// That is a wedged run, not a corrupted one, and the operator has `trigger-now`
+// to clear the lease by hand. The supervisor says so rather than guessing.
 async function aliveRunIds(state, deps, now) {
   const alive = new Set();
   for (const [runId, run] of Object.entries(state.runs)) {
     const lease = run.lease;
     if (!Number.isFinite(lease?.pid)) continue;
-    const abandoned = Number.isFinite(lease.expiresAt)
+    if (!await deps.isRunnerAlive(lease.pid)) continue;
+    alive.add(runId);
+    const overdue = Number.isFinite(lease.expiresAt)
       && now - lease.expiresAt > deps.config.recoveryAttemptTimeoutSeconds;
-    if (abandoned) continue;
-    if (await deps.isRunnerAlive(lease.pid)) alive.add(runId);
+    if (overdue) await deps.notifyStuck?.(run).catch?.(() => {});
   }
   return alive;
 }

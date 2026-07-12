@@ -74,11 +74,16 @@ export const OBSERVATION_RETENTION_SECONDS = 3_600;
 export async function sweepObservations(root, options = {}) {
   const now = options.now ?? (() => Math.floor(Date.now() / 1000));
   const retention = options.retentionSeconds ?? OBSERVATION_RETENTION_SECONDS;
+  // A quarantine is the only surviving copy of a state file the supervisor just
+  // blanked to defaults. Sweeping it on the inbox's one-hour clock would destroy
+  // the evidence of a corruption nobody has looked at yet.
+  const quarantineRetention = options.quarantineRetentionSeconds ?? 604_800;
   let removed = 0;
-  for (const [dir, match] of [
-    [join(root, 'observations'), () => true],
-    [join(root, 'observation-markers'), () => true],
-    [root, (name) => name.includes('.tmp-') || name.startsWith('state.corrupt-') || name.includes('.stale-')],
+  for (const [dir, match, keepFor] of [
+    [join(root, 'observations'), () => true, retention],
+    [join(root, 'observation-markers'), () => true, retention],
+    [root, (name) => name.includes('.tmp-') || name.includes('.stale-'), retention],
+    [root, (name) => name.startsWith('state.corrupt-'), quarantineRetention],
   ]) {
     let names;
     try { names = await readdir(dir); } catch (error) {
@@ -89,7 +94,7 @@ export async function sweepObservations(root, options = {}) {
       const path = join(dir, name);
       try {
         const info = await stat(path);
-        if (now() - Math.floor(info.mtimeMs / 1000) <= retention) continue;
+        if (now() - Math.floor(info.mtimeMs / 1000) <= keepFor) continue;
         await rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 10 });
         removed += 1;
       } catch (error) {

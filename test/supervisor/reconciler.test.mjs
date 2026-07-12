@@ -126,14 +126,64 @@ test('a ledger heartbeat from the future never satisfies a reset', async () => {
     'a future heartbeat must never be persisted');
 });
 
-test('a recycled pid cannot wedge a run for ever', async () => {
-  // Windows recycles pids aggressively, and isRunnerAlive says "alive" for a pid
-  // owned by another user. Past a whole action timeout the pid is no longer
-  // believed, or one recycled number would strand the run permanently.
+test('a live runner occupies its slot however long the machine slept', async () => {
+  // The lease expiry is a wall-clock value but the runner's own action timeout is
+  // a timer, and suspend stops timers while the clock keeps running. Bounding the
+  // pid check by that timeout would therefore give up in exactly the case it
+  // exists for — a lid closed for hours — and start a second resume of the same
+  // session. A live pid occupies, with no time bound.
+  const h = await harness(run({
+    state: 'RECOVERING', lastHeartbeatAt: now - 99_999, nextExpectedTickAt: null,
+    lease: { attemptId: 'a', token: 't', expiresAt: now - 5 * defaultConfig().recoveryAttemptTimeoutSeconds, pid: 4242 },
+  }), { isRunnerAlive: async () => true, notifyStuck: async () => {} });
+  const result = await reconcileOnce(h.deps);
+  assert.equal(result.code, 'skip:concurrency-exhausted');
+  assert.equal(h.spawnCalls.length, 0);
+});
+
+test('a lease held past its timeout by a live pid tells the operator', async () => {
+  // The residual risk of trusting a pid for ever is pid reuse, which wedges the
+  // run. The supervisor says so rather than guessing the runner is dead.
+  const stuck = [];
   const h = await harness(run({
     state: 'RECOVERING', lastHeartbeatAt: now - 99_999, nextExpectedTickAt: null,
     lease: { attemptId: 'a', token: 't', expiresAt: now - defaultConfig().recoveryAttemptTimeoutSeconds - 1, pid: 4242 },
-  }), { isRunnerAlive: async () => true });
+  }), { isRunnerAlive: async () => true, notifyStuck: async (r) => { stuck.push(r.runId); } });
+  await reconcileOnce(h.deps);
+  assert.deepEqual(stuck, ['run-1']);
+});
+
+test('an in-session AFK lease never consumes the supervisor invocation slot', async () => {
+  // The in-session tick leases its own run for 25 minutes and refreshes it every
+  // tick. Counting that as a supervisor invocation would let one interactively
+  // running repo disable recovery for every other repo, continuously.
+  const insession = run({
+    runId: 'a-interactive', state: 'RUNNING',
+    lease: { attemptId: 'in-session-00000000-0000-4000-8000-000000000001', token: 't', expiresAt: now + 1_500, pid: null },
+    lastHeartbeatAt: now - 10, nextExpectedTickAt: now + 900,
+  });
+  const h = await harness(insession, { isRunnerAlive: async () => false });
+  await h.store.update((state) => {
+    state.runs['b-due'] = run({
+      runId: 'b-due', sessionId: '00000000-0000-4000-8000-000000000002',
+      state: 'RATE_LIMITED', rateLimitedUntil: now - 1_000, resetConfidence: 'exact',
+      lastHeartbeatAt: now - 99_999, nextExpectedTickAt: null,
+    });
+    return state;
+  });
+
+  const result = await reconcileOnce(h.deps);
+  assert.equal(result.code, 'action:runner-started');
+  assert.equal(h.spawnCalls[0].runId, 'b-due');
+});
+
+test('a lease expiry from a stepped clock does not occupy its slot for ever', async () => {
+  // A forward clock step during a renewal persists an expiry years out. Nothing
+  // reaps run leases, so an unclamped one holds the only invocation slot for good.
+  const h = await harness(run({
+    state: 'RECOVERING', lastHeartbeatAt: now - 99_999, nextExpectedTickAt: null,
+    lease: { attemptId: 'a', token: 't', expiresAt: now + 400 * 86_400, pid: null },
+  }));
   const result = await reconcileOnce(h.deps);
   assert.equal(result.code, 'action:runner-started');
 });

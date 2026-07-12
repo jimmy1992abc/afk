@@ -159,7 +159,14 @@ async function triggerNow(args, deps) {
     const run = state.runs[args.runId];
     if (!run) return state;
     found = true;
+    // The operator's only manual escape hatch, and the runs they reach for it
+    // with are exactly the ones the selector refuses: a run in retry backoff, a
+    // run that exhausted its attempts, a run wedged behind a lease whose runner
+    // is gone. Arming a schedule alone changes none of those — the selector
+    // short-circuits long before it looks at the schedule.
     run.quotaRejections = { consecutive: 0, backoffLevel: 0, nextProbeAt: null, lastNotifiedAt: null };
+    run.retry = { attempts: 0, nextAttemptAt: null };
+    run.lease = { attemptId: null, token: null, lastRenewedAt: null, expiresAt: null, pid: null };
     run.scheduledResumeAt = deps.now();
     run.scheduledResetAt ??= deps.now();
     run.scheduleState = 'pending';

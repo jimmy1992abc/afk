@@ -84,7 +84,10 @@ export function finalizeAttempt(state, runId, token, result, now, config) {
   next.runs[runId] = {
     ...current,
     state: 'FAILED', lease: clearLease(),
-    retry: { attempts, nextAttemptAt: attempts <= config.maxRecoveryAttempts ? now + delays[Math.min(attempts - 1, delays.length - 1)] : null },
+    // `attempts` already counts this failure, so scheduling while `attempts <=
+    // max` schedules one more invocation than the configured maximum: three
+    // permitted failures produced a fourth `claude --resume`.
+    retry: { attempts, nextAttemptAt: attempts < config.maxRecoveryAttempts ? now + delays[Math.min(attempts - 1, delays.length - 1)] : null },
     lastResult: 'error:resume-failed', updatedAt: now,
   };
   return next;
@@ -192,7 +195,8 @@ export async function runAttempt(attemptId, deps) {
     && !Number.isFinite(saved.retry?.nextAttemptAt);
   // The spec says exhaustion notifies the operator. It only ever notified on a
   // quota escalation, so a run that simply ran out of retries died in silence.
-  if (saved?.lastResult === 'result:quota-backoff-escalated' || exhausted) await deps.notify(saved);
+  if (saved?.lastResult === 'result:quota-backoff-escalated') await deps.notify(saved, 'quota-escalated');
+  else if (exhausted) await deps.notify(saved, 'exhausted');
   return { code: result.kind === 'success' ? 'result:success' : saved?.lastResult ?? 'error:resume-failed' };
 }
 

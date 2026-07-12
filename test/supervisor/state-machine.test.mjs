@@ -72,6 +72,33 @@ test('a healthy run never starves the other due runs behind it', () => {
   assert.equal(decision.runId, 'stranded');
 });
 
+test('a schedule with no reset is never satisfied by an arbitrary heartbeat', () => {
+  // `heartbeat > null` is `heartbeat > 0` — always true. Without the finite check
+  // any heartbeat at all satisfies a schedule that carries no reset, and the
+  // pending resume is silently discarded.
+  const item = run({
+    scheduleState: 'pending', scheduledResumeAt: now - 10, scheduledResetAt: null,
+    lastHeartbeatAt: now - config.heartbeatStaleSeconds - 1,
+  });
+  const decision = selectCandidate(stateWith(item), {}, config, now);
+  assert.notEqual(decision.kind, 'handle');
+  assert.equal(decision.kind, 'invoke');
+});
+
+test('an in-session lease is honoured, not judged bogus by the supervisor ceiling', () => {
+  // The in-session tick leases for heartbeatStaleSeconds, far longer than any
+  // supervisor lease. A ceiling drawn from the supervisor's own renewal settings
+  // would call that lease a clock artefact and let the supervisor resume a run
+  // the tick is actively working on.
+  const item = run({
+    state: 'RUNNING', lastHeartbeatAt: now - config.heartbeatStaleSeconds - 1, nextExpectedTickAt: null,
+    lease: { attemptId: 'in-session-x', token: 't', expiresAt: now + config.heartbeatStaleSeconds, pid: null },
+  });
+  const decision = selectCandidate(stateWith(item), {}, config, now);
+  assert.notEqual(decision.kind, 'invoke');
+  assert.equal(decision.code, 'skip:runner-alive');
+});
+
 test('a heartbeat from the future is a clock artefact, not progress', () => {
   const item = run({
     lastHeartbeatAt: now + 10_000,

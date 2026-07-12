@@ -118,6 +118,35 @@ test('a run registered after the threshold crossing inherits the current schedul
   assert.equal(item.scheduleState, 'pending');
 });
 
+test('trigger-now revives exactly the runs the selector refuses', async () => {
+  // The operator reaches for trigger-now for a run in retry backoff, a run that
+  // exhausted its attempts, or a run wedged behind a lease whose runner is gone.
+  // The selector short-circuits on all three long before it looks at a schedule,
+  // so arming a schedule alone made the only manual escape hatch a no-op that
+  // still printed a success code.
+  const h = harness();
+  const state = defaultState();
+  state.runs.stuck = {
+    runId: 'stuck', state: 'FAILED',
+    retry: { attempts: 4, nextAttemptAt: null },
+    quotaRejections: { consecutive: 3, backoffLevel: 2, nextProbeAt: 999_999, lastNotifiedAt: 1 },
+    lease: { attemptId: 'dead-runner', token: 'x', expiresAt: 999_999, pid: 4242 },
+    scheduledResumeAt: 999_999, scheduleState: 'pending',
+  };
+  h.state = state;
+
+  await runCli(['trigger-now', '--run-id', 'stuck'], h.deps);
+
+  const run = h.state.runs.stuck;
+  assert.deepEqual(run.retry, { attempts: 0, nextAttemptAt: null });
+  assert.equal(run.quotaRejections.consecutive, 0);
+  assert.equal(run.quotaRejections.nextProbeAt, null);
+  assert.equal(run.lease.attemptId, null, 'a lease whose runner is gone must be cleared');
+  assert.equal(run.lease.pid, null);
+  assert.equal(run.scheduledResumeAt, 20_000);
+  assert.ok(h.calls.includes('reconcile'));
+});
+
 test('unknown commands and missing runs emit distinct errors', async () => {
   const h = harness();
   assert.equal((await runCli(['unknown'], h.deps)).code, 2);

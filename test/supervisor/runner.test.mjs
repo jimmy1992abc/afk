@@ -112,6 +112,39 @@ test('third consecutive quota rejection escalates to daily backoff and notificat
   assert.equal(next.runs['run-1'].lastResult, 'result:quota-backoff-escalated');
 });
 
+test('maxRecoveryAttempts is a count of invocations, not of retries after them', () => {
+  // `attempts` already counts this failure, so scheduling while attempts <= max
+  // schedules one more invocation than configured: three permitted failures gave
+  // a fourth `claude --resume`.
+  const config = defaultConfig();
+  let current = state();
+  const seen = [];
+  for (let i = 0; i < 5; i += 1) {
+    current.runs['run-1'].lease = { attemptId: 'a', token: 'token-1', expiresAt: now + 120 };
+    current.runs['run-1'].state = 'RECOVERING';
+    current = finalizeAttempt(current, 'run-1', 'token-1', { kind: 'failure' }, now, config);
+    seen.push(current.runs['run-1'].retry.nextAttemptAt);
+  }
+  assert.deepEqual(seen.map(Boolean), [true, true, false, false, false],
+    `${config.maxRecoveryAttempts} attempts means two retries after the first failure`);
+});
+
+test('exhaustion and quota escalation tell the operator different things', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'afk-supervisor-runner-'));
+  const store = new StateStore(root);
+  await store.update(() => state(run({ retry: { attempts: 2, nextAttemptAt: null } })));
+  const notified = [];
+  const result = await runAttempt('attempt-1', {
+    store, config: defaultConfig(), now: () => now,
+    runClaude: async () => ({ kind: 'failure', reason: 'process-exit' }),
+    setInterval: () => ({}), clearInterval: () => {},
+    notify: async (run, reason) => notified.push(reason),
+  });
+  assert.equal(result.code, 'error:resume-failed');
+  assert.deepEqual(notified, ['exhausted'],
+    'a run that ran out of retries is not quota-limited and has no next probe');
+});
+
 test('stale lease token cannot finalize a newer attempt', () => {
   const current = state();
   assert.equal(finalizeAttempt(current, 'run-1', 'old-token', { kind: 'success' }, now, defaultConfig()), current);

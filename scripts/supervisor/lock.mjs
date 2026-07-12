@@ -63,13 +63,24 @@ export async function steal(dir, now, ttlMs) {
     throw new LockHeldError();
   }
   if (!await reclaimable(tombstone, now, ttlMs)) {
-    try {
-      await rename(tombstone, dir);
-    } catch {
-      // A third party took the vacant path while we were putting this back. The
-      // tombstone is ours alone now and is not a lock, so it must not be left
-      // behind: nothing else ever sweeps it.
-      await discard(tombstone).catch(() => {});
+    // We moved a live holder's lock. Put it back — and keep trying, because on
+    // Windows this rename fails transiently for exactly the contended reasons
+    // this file already waits out elsewhere. Giving up and deleting would destroy
+    // a lock that is alive.
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        await rename(tombstone, dir);
+        break;
+      } catch (error) {
+        if (!CONTENDED.has(error.code) && error.code !== 'EEXIST') throw error;
+        if (attempt >= 10) {
+          // A third party took the vacant path. The tombstone is ours alone now
+          // and is not a lock, so it must not be left behind: nothing sweeps it.
+          if (error.code === 'EEXIST') await discard(tombstone).catch(() => {});
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 5 + attempt * 5));
+      }
     }
     throw new LockHeldError();
   }

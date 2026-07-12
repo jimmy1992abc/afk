@@ -202,6 +202,28 @@ test('a new exact reset starts a fresh attempt series for an exhausted run', () 
     'without this the run is skipped for ever and never pruned, because FAILED is not terminal');
 });
 
+test('an ordinary window boundary does not disprove a long-window limit', () => {
+  // An escalated backoff is the inference "this account is against a *weekly*
+  // limit". A five-hour reset happens every five hours and disproves nothing, so
+  // clearing on it would make the escalation ladder unreachable for ever. Only
+  // headroom in the weekly window disproves it.
+  const state = withRuns(['1']);
+  state.runs['1'] = {
+    ...state.runs['1'], state: 'RATE_LIMITED',
+    quotaRejections: { consecutive: 3, backoffLevel: 2, nextProbeAt: 900_000, lastNotifiedAt: 1 },
+    scheduledResumeAt: 900_000, scheduleState: 'pending', scheduleConfidence: 'estimated',
+  };
+  const weeklyFull = { ...exact(5, 30_000, 2_000), sevenDayUsedPercentage: 99.9, sevenDayResetAt: 900_000 };
+  const after = applyUsageObservation(state, weeklyFull, config);
+  assert.equal(after.runs['1'].quotaRejections.backoffLevel, 2, 'the escalation survives a five-hour reset');
+
+  const weeklyFree = { ...exact(5, 48_000, 3_000), sevenDayUsedPercentage: 10, sevenDayResetAt: 900_000 };
+  const freed = applyUsageObservation(after, weeklyFree, config);
+  assert.equal(freed.runs['1'].quotaRejections.backoffLevel, 0);
+  assert.equal(freed.runs['1'].scheduledResumeAt, null,
+    'clearing the counter is useless if the run stays parked on its 24-hour probe');
+});
+
 test('re-observing the same reset does not clear backoff', () => {
   // The bridge republishes an exact observation whenever the integer usage bucket
   // moves, and at least once a minute. Clearing backoff on every import would

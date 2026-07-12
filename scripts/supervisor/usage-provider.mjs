@@ -136,16 +136,32 @@ export function applyUsageObservation(state, observation, config) {
         : scheduled;
     }
   }
-  // A *new* exact reset starts a new bounded attempt series. Not any exact
-  // observation: the bridge republishes one whenever the integer usage bucket
-  // moves, and at least once a minute, so clearing backoff on every import would
-  // make failures retry every minute and put the escalation to a 24-hour probe
-  // permanently out of reach.
-  if (exact && Number.isFinite(resetAt) && resetAt !== previousReset) {
-    for (const run of Object.values(next.runs)) {
-      if (!RECOVERABLE.has(run.state)) continue;
-      run.quotaRejections = { consecutive: 0, backoffLevel: 0, nextProbeAt: null, lastNotifiedAt: null };
-      run.retry = { attempts: 0, nextAttemptAt: null };
+  // A *new* exact reset is a new five-hour window, so it starts a new bounded
+  // non-quota attempt series. Not any exact observation: the bridge republishes
+  // one whenever the integer usage bucket moves, and at least once a minute, so
+  // clearing on every import would make failures retry every minute.
+  const newWindow = exact && Number.isFinite(resetAt) && resetAt !== previousReset;
+
+  // An escalated quota backoff is an inference that the account is up against a
+  // *long-window* limit. An ordinary five-hour reset does not disprove that — it
+  // happens every five hours — so clearing on it would make the escalation
+  // unreachable. Only headroom in the weekly window disproves it.
+  const weeklyHeadroom = exact
+    && Number.isFinite(observation.sevenDayUsedPercentage)
+    && observation.sevenDayUsedPercentage < config.sevenDaySuppressionPercentage;
+
+  for (const run of Object.values(next.runs)) {
+    if (!RECOVERABLE.has(run.state)) continue;
+    if (newWindow) run.retry = { attempts: 0, nextAttemptAt: null };
+    if (!(newWindow && weeklyHeadroom)) continue;
+    run.quotaRejections = { consecutive: 0, backoffLevel: 0, nextProbeAt: null, lastNotifiedAt: null };
+    // Clearing the counter is not enough: the escalation also parked the run on a
+    // 24-hour scheduledResumeAt, which would still hold it out.
+    if (run.scheduleConfidence === 'estimated') {
+      run.scheduledResumeAt = null;
+      run.scheduledResetAt = null;
+      run.scheduleState = null;
+      run.scheduleConfidence = null;
     }
   }
   // used_percentage is a float derived from a utilization ratio, so an exhausted

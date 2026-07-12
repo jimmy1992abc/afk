@@ -52,17 +52,34 @@ export function selectCandidate(state, inputs, config, now) {
   if (Number.isFinite(state.usage.sevenDaySuppressedUntil) && state.usage.sevenDaySuppressedUntil > now) {
     return { kind: 'skip', code: 'skip:seven-day-limit' };
   }
-  // A run is occupied while its lease is live *or* while its runner is still
-  // alive — a suspended machine expires the lease without killing anything. The
-  // caller resolves liveness, because this function may not touch processes.
-  // Counting only unexpired leases would leave a running Claude uncounted, which
-  // is exactly the double invocation this cap exists to prevent.
-  const occupied = (run) => Number.isFinite(run.lease?.expiresAt) && run.lease.expiresAt > now
-    ? true
-    : Boolean(inputs.aliveRuns?.has(run.runId));
+  // A lease expiry is written from the same clock as a heartbeat, so it needs the
+  // same distrust: a forward clock step during a renewal persists an expiry years
+  // out, and an unclamped lease would then occupy its slot for ever with nothing
+  // to reap it.
+  // The ceiling has to admit the longest lease anyone legitimately takes. The
+  // in-session tick's lease runs for heartbeatStaleSeconds, far longer than a
+  // supervisor lease, and treating it as bogus would leave the supervisor free to
+  // resume a run the tick is actively working on.
+  const longestLease = Math.max(
+    config.leaseRenewalSeconds * config.leaseMissedRenewals,
+    config.heartbeatStaleSeconds,
+  );
+  const ceiling = now + longestLease + config.graceSeconds;
+  const leaseLive = (run) => Number.isFinite(run.lease?.expiresAt)
+    && run.lease.expiresAt > now && run.lease.expiresAt <= ceiling;
+
+  // A run is occupied while its lease is live *or* while its runner is alive — a
+  // suspended machine expires the lease without killing anything. The caller
+  // resolves liveness, because this function may not touch processes.
+  const occupied = (run) => leaseLive(run) || Boolean(inputs.aliveRuns?.has(run.runId));
+
+  // ...but only a *supervisor* invocation counts against the invocation cap. The
+  // in-session AFK tick takes a lease on its own run too, and counting it would
+  // let one interactively-running repo disable recovery for every other repo.
+  const invocation = (run) => occupied(run) && !String(run.lease?.attemptId ?? '').startsWith('in-session-');
   const activationLive = state.activation.inProgress
     && Number.isFinite(state.activation.expiresAt) && state.activation.expiresAt > now ? 1 : 0;
-  const liveLeases = activationLive + Object.values(state.runs).filter(occupied).length;
+  const liveLeases = activationLive + Object.values(state.runs).filter(invocation).length;
   if (liveLeases >= config.maxConcurrentInvocations) {
     return { kind: 'skip', code: 'skip:concurrency-exhausted' };
   }
@@ -92,6 +109,7 @@ export function selectCandidate(state, inputs, config, now) {
   }
 
   let nearest = null;
+  let handled = null;
   for (const run of recoverable) {
     // Already being worked on. This must skip the run, not end the pass: ending
     // it lets one occupied run starve every other due run behind it.
@@ -122,8 +140,17 @@ export function selectCandidate(state, inputs, config, now) {
         nearest ??= { kind: 'skip', code: run.scheduleConfidence === 'estimated' ? 'skip:estimate-not-due' : 'skip:reset-not-due', dueAt: run.scheduledResumeAt };
         continue;
       }
-      if (Number.isFinite(heartbeat) && heartbeat > run.scheduledResetAt) {
-        return { kind: 'handle', code: 'skip:heartbeat-satisfied-reset', runId: run.runId };
+      // `heartbeat > null` is `heartbeat > 0`, i.e. always true, so without the
+      // finite check any heartbeat at all would satisfy a schedule that has no
+      // reset and silently discard the pending resume. The reconciler's copy of
+      // this rule guards it; this one did not.
+      if (Number.isFinite(run.scheduledResetAt) && Number.isFinite(heartbeat)
+          && heartbeat > run.scheduledResetAt) {
+        // Recording that the reset is satisfied is real work, but it must not end
+        // the pass: a genuinely due run behind this one waits another 60 seconds
+        // for nothing.
+        handled ??= { kind: 'handle', code: 'skip:heartbeat-satisfied-reset', runId: run.runId };
+        continue;
       }
       if (Number.isFinite(heartbeat) && now - heartbeat < config.heartbeatStaleSeconds) {
         // This run is working; the others behind it in the ordering are not.
@@ -152,7 +179,8 @@ export function selectCandidate(state, inputs, config, now) {
     }
     return { kind: 'invoke', code: 'action:resume-afk', runId: run.runId, dueAt: now };
   }
-  return nearest ?? { kind: 'skip', code: 'skip:no-recovery-due' };
+  // An invoke wins; a pending handle is real work and beats an idle skip.
+  return handled ?? nearest ?? { kind: 'skip', code: 'skip:no-recovery-due' };
 }
 
 export function isTerminalState(state) {
@@ -167,8 +195,16 @@ export function pruneState(state, config, now) {
     const exhausted = run.state === 'FAILED'
       && (run.retry?.attempts ?? 0) >= config.maxRecoveryAttempts
       && !Number.isFinite(run.retry?.nextAttemptAt);
+    // A run nobody has touched for a whole retention period is abandoned,
+    // whatever its state says. Without this, a run that can never reach a
+    // terminal or exhausted state — because recovery is switched off, or because
+    // it is wedged mid-RECOVERING — survives every prune, and every pass then
+    // re-reads its ledger for ever.
     const spent = TERMINAL.has(run.state) || exhausted;
-    if (spent && Number.isFinite(run.updatedAt)
+    const idleSince = Math.max(run.updatedAt ?? 0, run.lastHeartbeatAt ?? 0);
+    const abandoned = Number.isFinite(idleSince) && idleSince > 0
+      && now - idleSince > config.terminalRunRetentionSeconds;
+    if ((spent || abandoned) && Number.isFinite(run.updatedAt)
         && now - run.updatedAt > config.terminalRunRetentionSeconds) delete state.runs[runId];
   }
   for (const [cwd, session] of Object.entries(state.sessions)) {
