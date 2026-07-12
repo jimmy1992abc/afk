@@ -62,9 +62,14 @@ export async function processStartedAt(pid, deps = {}) {
         '-NoProfile', '-NonInteractive', '-Command',
         `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue; if ($p) { $p.StartTime.ToUniversalTime().Ticks }`,
       ], options);
-      const ticks = Number(stdout.trim());
+      // An absent process is empty stdout and exit 0. Anything else that will not
+      // parse is a probe answering incoherently, which is not an answer at all —
+      // reading it as "gone" would fail open and put a second Claude on a live run.
+      const text = stdout.trim();
+      if (text.length === 0) return null;
+      const ticks = Number(text);
       // .NET ticks are 100ns since year 1; convert to epoch milliseconds.
-      return Number.isFinite(ticks) && ticks > 0 ? Math.round(ticks / 10_000 - 62_135_596_800_000) : null;
+      return Number.isFinite(ticks) && ticks > 0 ? Math.round(ticks / 10_000 - 62_135_596_800_000) : undefined;
     }
     if (platform === 'linux') {
       const stat = await readFile(`/proc/${pid}/stat`, 'utf8');

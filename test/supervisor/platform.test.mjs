@@ -124,6 +124,12 @@ test('a probe that could not run is unknown, never dead', async () => {
   const powershellBroke = { platform: 'win32', execFile: async () => { throw new Error('ExecutionPolicy'); } };
   assert.equal(await runnerLiveness({ pid: 4242, startedAt: started }, powershellBroke), 'unknown');
 
+  // An absent process is empty stdout and exit 0. Anything else that will not parse
+  // is a probe answering incoherently, and reading THAT as "gone" fails open — a
+  // second Claude on a live run.
+  const garbled = { platform: 'win32', execFile: async () => ({ stdout: 'Get-Process : Access is denied.' }) };
+  assert.equal(await runnerLiveness({ pid: 4242, startedAt: started }, garbled), 'unknown');
+
   const timedOut = { platform: 'darwin', execFile: async () => { throw Object.assign(new Error('timed out'), { killed: true, code: 1 }); } };
   assert.equal(await runnerLiveness({ pid: 4242, startedAt: started }, timedOut), 'unknown',
     'a probe we killed for hanging told us nothing about the process');

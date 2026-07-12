@@ -68,6 +68,30 @@ test('a lease records the runner it started, at the moment it starts it', async 
   assert.equal(lease.startedAt, 1_700_000_000_000);
 });
 
+test('the reconciler never downgrades the identity the runner verified', async () => {
+  // The runner stamps its own {pid, startedAt} from inside itself and usually wins
+  // the race. The reconciler's probe is a PowerShell shell-out and lands after — and
+  // when it comes back `undefined` ("could not ask"), writing that as `null` DOWNGRADED
+  // a live, verified claim to an unverifiable one, which then reads as `unknown`.
+  const h = await harness(run());
+  h.deps.spawnRunner = (attempt) => {
+    h.spawnCalls.push(attempt);
+    // The runner beats us to it, with a verified identity.
+    h.store.update((state) => {
+      const lease = state.runs['run-1'].recoveryLease;
+      lease.pid = 4242;
+      lease.startedAt = 1_700_000_000_000;
+      return state;
+    });
+    return { pid: 4242, unref() {} };
+  };
+  h.deps.processStartedAt = async () => undefined;   // the probe could not ask
+
+  await reconcileOnce(h.deps);
+  const lease = (await h.store.read()).runs['run-1'].recoveryLease;
+  assert.equal(lease.startedAt, 1_700_000_000_000, 'a probe that could not ask must not erase what we know');
+});
+
 test('an expired claim with no verifiable identity is occupied, not free', async () => {
   // An upgrade in the middle of a recovery leaves an old-shape lease with no pid at
   // all. It was skipped by the liveness pass entirely — so the live runner was
@@ -81,16 +105,79 @@ test('an expired claim with no verifiable identity is occupied, not free', async
   assert.equal(h.spawnCalls.length, 0, 'a claim we cannot verify must never be double-driven');
 });
 
-test('an operator force is spent once it has been acted on', async () => {
-  // The heartbeat is fresh and the next tick is not due, so nothing would normally
-  // run this — which is exactly the state an operator reaches for --force in. Left
-  // set afterwards, the override would re-fire on every pass until it expired, and
-  // the supervisor would keep resuming a run it was asked to resume once.
+test('an operator force actually resumes the run, and is spent once', async () => {
+  // This test used to pass while the feature did nothing at all, because it left the
+  // harness's ledger heartbeat at null — and the LEDGER heartbeat is the gate that
+  // killed the force. The selector honoured `forcedUntil`; `reconcileOnce` then read
+  // the ledger, found a fresh heartbeat, and returned skip:heartbeat-fresh. The one
+  // escape hatch from a wedged run did nothing, and printed success while doing it.
+  //
+  // So drive BOTH layers: a fresh heartbeat in the state AND a fresh one in the
+  // ledger. That is exactly the run an operator reaches for --force on.
+  const h = await harness(run({
+    forcedUntil: now + 900, lastHeartbeatAt: now - 1, nextExpectedTickAt: now + 900,
+  }), { readLedgerHeartbeat: async () => now });
+
+  assert.equal((await reconcileOnce(h.deps)).code, 'action:runner-started');
+  assert.equal(h.spawnCalls.length, 1, 'the force must actually start a runner');
+  assert.equal((await h.store.read()).runs['run-1'].forcedUntil, null, 'and be spent, not left to re-fire');
+});
+
+test('a force is spent even by a pass that could not claim the run', async () => {
+  // A supervisor pass claims the run in the gap between the heartbeat gate and the
+  // claim, so this pass cannot take it. The force must still be spent: left set, the
+  // run is re-selected on every pass — and selection stops at the first runnable run.
   const h = await harness(run({
     forcedUntil: now + 900, lastHeartbeatAt: now - 1, nextExpectedTickAt: now + 900,
   }));
+  const ttl = defaultConfig().leaseRenewalSeconds * defaultConfig().leaseMissedRenewals;
+  h.deps.readLedgerHeartbeat = async () => {
+    await h.store.update((state) => {
+      state.runs['run-1'].recoveryLease = {
+        attemptId: 'someone-else', token: 'tok', lastRenewedAt: now, expiresAt: now + ttl,
+        pid: 1111, startedAt: 1, stuckNotifiedAt: null,
+      };
+      return state;
+    });
+    return now;
+  };
+
+  assert.equal((await reconcileOnce(h.deps)).code, 'skip:state-changed');
+  assert.equal(h.spawnCalls.length, 0);
+  assert.equal((await h.store.read()).runs['run-1'].forcedUntil, null, 'the force is spent by the pass that acted on it');
+});
+
+test('a forced run does not starve the repository behind it', async () => {
+  // `forcedUntil` was cleared ONLY when the run was successfully claimed, and the
+  // ledger gate meant it never could be. Selection returns the FIRST runnable run
+  // and stops, so the forced run was re-selected on every pass and aborted the pass
+  // — every other repository starved until the force expired.
+  const h = await harness(run({
+    runId: 'a-forced', forcedUntil: now + 900, lastHeartbeatAt: now - 1, nextExpectedTickAt: now + 900,
+  }), {
+    // Only the forced run has a fresh ledger heartbeat — that is the gate that used
+    // to defeat the force. The run behind it is genuinely stale and genuinely due.
+    readLedgerHeartbeat: async (target) => (target.runId === 'a-forced' ? now : null),
+    // Two slots, so that what the second pass proves is the absence of starvation
+    // and not merely the concurrency cap doing its job.
+    config: { ...defaultConfig(), maxConcurrentInvocations: 2 },
+  });
+  await h.store.update((state) => {
+    state.runs['z-genuine'] = run({
+      runId: 'z-genuine', sessionId: '00000000-0000-4000-8000-000000000002',
+      state: 'RATE_LIMITED', rateLimitedUntil: now - 1_000, resetConfidence: 'exact',
+      lastHeartbeatAt: now - 99_999, nextExpectedTickAt: null,
+    });
+    return state;
+  });
+
   assert.equal((await reconcileOnce(h.deps)).code, 'action:runner-started');
-  assert.equal((await h.store.read()).runs['run-1'].forcedUntil, null);
+  assert.equal(h.spawnCalls.at(-1).runId, 'a-forced', 'the force is acted on first');
+
+  // Second pass: the force is spent, so the healthy run behind it gets its turn.
+  h.deps.runnerLiveness = async () => 'alive';
+  assert.equal((await reconcileOnce(h.deps)).code, 'action:runner-started');
+  assert.equal(h.spawnCalls.at(-1).runId, 'z-genuine');
 });
 
 test('an activation whose runner is still alive is never reclaimed', async () => {

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import { processStartedAt } from './platform.mjs';
 import { applyUsageObservation } from './usage-provider.mjs';
-import { pruneState, runnerOwns, selectCandidate, transitionRun, unrenewedFor, usableHeartbeat } from './state-machine.mjs';
+import { claimLiveness, claimOccupied, pruneState, runnerOwns, selectCandidate, transitionRun, usableHeartbeat } from './state-machine.mjs';
 
 function applyBatch(state, batch, config) {
   return batch.reduce((current, item) => applyUsageObservation(current, item.observation, config), state);
@@ -48,7 +48,7 @@ async function resolveLiveness(state, deps, now) {
     // A claim with no pid cannot be verified — an upgrade mid-recovery leaves
     // exactly that. Skipping it read it as free and started a second runner on top
     // of a live one. Unverifiable is `unknown`: occupied, and loudly so.
-    const liveness = Number.isInteger(lease.pid) ? await deps.runnerLiveness(lease) : 'unknown';
+    const liveness = await claimLiveness(lease, deps.runnerLiveness);
     if (liveness === 'alive') aliveRuns.add(runId);
     else if (liveness === 'unknown') unknownRuns.add(runId);
     else continue;
@@ -77,11 +77,9 @@ async function resolveLiveness(state, deps, now) {
 async function activationOccupied(state, deps, now) {
   const claim = state.activation;
   if (!claim?.inProgress) return false;
-  if (Number.isFinite(claim.expiresAt) && claim.expiresAt > now) return true;
-  const liveness = Number.isInteger(claim.pid) ? await deps.runnerLiveness(claim) : 'unknown';
-  if (liveness === 'alive') return true;
-  if (liveness === 'dead') return false;
-  return unrenewedFor(claim, deps.config, now) <= deps.config.recoveryAttemptTimeoutSeconds;
+  const liveness = await claimLiveness(claim, deps.runnerLiveness);
+  // `inProgress` IS the claim; the activation lease has no attemptId-less shape.
+  return claimOccupied({ ...claim, attemptId: claim.attemptId ?? 'activation' }, deps.config, now, liveness);
 }
 
 // The claim has to be written before the spawn, or two passes could both start a
@@ -98,10 +96,18 @@ async function recordRunnerIdentity(deps, runId, attempt, child) {
     // The runner may have renewed already, and a later attempt's claim is not ours
     // to stamp. Only the lease this attempt wrote carries this token.
     if (lease?.token !== attempt.token) return current;
-    lease.pid = pid;
-    lease.startedAt = Number.isFinite(startedAt) ? startedAt : null;
+    fillIdentity(lease, pid, startedAt);
     return current;
   });
+}
+
+// Fill what is missing; never overwrite what is there. The runner stamps the same
+// identity from inside itself and usually wins the race — and this probe can come
+// back `undefined` ("could not ask"), which written as `null` would DOWNGRADE a
+// verified, live claim to an unverifiable one.
+function fillIdentity(claim, pid, startedAt) {
+  if (!Number.isInteger(claim.pid)) claim.pid = pid;
+  if (Number.isFinite(startedAt) && !Number.isFinite(claim.startedAt)) claim.startedAt = startedAt;
 }
 
 async function recordActivationIdentity(deps, attempt, child) {
@@ -111,8 +117,7 @@ async function recordActivationIdentity(deps, attempt, child) {
   const startedAt = await probe(pid);
   await deps.store.update((current) => {
     if (current.activation?.token !== attempt.token) return current;
-    current.activation.pid = pid;
-    current.activation.startedAt = Number.isFinite(startedAt) ? startedAt : null;
+    fillIdentity(current.activation, pid, startedAt);
     return current;
   });
 }
@@ -194,8 +199,31 @@ export async function reconcileOnce(deps) {
   if (decision.kind !== 'invoke') return { code: decision.code };
   if (deps.dryRun) return { code: 'action:would-start-runner', runId: decision.runId };
 
+  // An operator force is spent by the pass that acts on it, whatever the outcome.
+  // It used to be cleared only when the run was successfully claimed — so a forced
+  // run that could not be claimed was re-selected on every pass, and because
+  // selection stops at the first runnable run, one such run starved every other
+  // repository until the force expired.
+  const target = state.runs[decision.runId];
+  const forced = Number.isFinite(target?.forcedUntil) && target.forcedUntil > now;
+  // Spent on the way out, not on the way in: the claim below re-derives the
+  // decision under the lock, and a force cleared beforehand makes the run stop
+  // being runnable in the middle of acting on it.
+  const spendForce = async () => {
+    if (!forced) return;
+    await deps.store.update((current) => {
+      const run = current.runs[decision.runId];
+      if (run) run.forcedUntil = null;
+      return current;
+    });
+  };
+
   const heartbeat = await deps.readLedgerHeartbeat(state.runs[decision.runId]);
-  const fresh = heartbeatDecision(state.runs[decision.runId], heartbeat, deps.config, now);
+  // ...and the force has to survive this gate too. The selector honoured it and
+  // this second, independent heartbeat check — reading the LEDGER, not the state —
+  // then rejected the run anyway. The one escape hatch from a wedged run did
+  // nothing at all, and reported success while doing it.
+  const fresh = forced ? null : heartbeatDecision(state.runs[decision.runId], heartbeat, deps.config, now);
   if (fresh) {
     if (fresh === 'skip:heartbeat-satisfied-reset') {
       await deps.store.update((current) => {
@@ -234,7 +262,10 @@ export async function reconcileOnce(deps) {
     attempt = { id: attemptId, token, runId: decision.runId, sessionId: run.sessionId, cwd: run.cwd, ledgerPath: run.ledgerPath };
     return current;
   });
-  if (!attempt) return { code: 'skip:state-changed' };
+  if (!attempt) {
+    await spendForce();
+    return { code: 'skip:state-changed' };
+  }
   const child = deps.spawnRunner(attempt);
   child.unref?.();
   await recordRunnerIdentity(deps, decision.runId, attempt, child);

@@ -9,7 +9,7 @@ import { ConfigStore, validateConfig } from './config.mjs';
 import { createInstallDeps, installSupervisor, preflightClaude, repairSupervisor, statusSupervisor, uninstallSupervisor } from './install.mjs';
 import { runnerLiveness } from './platform.mjs';
 import { main as reconcileMain } from './supervisor.mjs';
-import { transitionRun } from './state-machine.mjs';
+import { claimLiveness, claimOccupied, transitionRun } from './state-machine.mjs';
 import { StateStore, emptyRecoveryLease } from './state-store.mjs';
 import { scheduleRun } from './usage-provider.mjs';
 
@@ -166,19 +166,35 @@ async function lease(args, deps) {
   // driver from the caller? The session the supervisor resumed carries the attempt
   // id of the recovery that started it; refusing that session is what deadlocked
   // the supervisor. Refusing every *other* session is the whole point of the claim.
-  const claim = target.recoveryLease;
+  //
+  // The liveness probe shells out to PowerShell or ps and is bounded at ten
+  // seconds. A supervisor pass fits inside that gap easily, so its answer is only
+  // ever advisory: it is taken here, outside the lock, and then re-validated
+  // against the claim that is actually there when we commit. Deciding out here and
+  // writing in there is how the tick took the guard on a run a runner had claimed
+  // while the probe was still running — two Claudes on one session.
+  const probed = target.recoveryLease;
   const attempt = deps.callerAttemptId?.() ?? null;
-  if (claim?.attemptId && claim.attemptId !== attempt) {
-    const unexpired = Number.isFinite(claim.expiresAt) && claim.expiresAt > deps.now();
-    if (unexpired || await deps.runnerLiveness(claim) !== 'dead') {
-      return emit(deps, 'skip:runner-active', 1);
-    }
-  }
+  const foreign = probed?.attemptId && probed.attemptId !== attempt;
+  const liveness = foreign ? await claimLiveness(probed, deps.runnerLiveness) : 'dead';
 
   let result = 'skip:run-not-registered';
   await deps.stateStore.update((state) => {
     const run = state.runs[args.runId];
     if (!run) return state;
+
+    const claim = run.recoveryLease;
+    if (claim?.attemptId && claim.attemptId !== attempt) {
+      // The probe only speaks for the claim it was taken against. If a runner
+      // claimed the run while we were asking, this is a different claim and we know
+      // nothing about it — so it is occupied.
+      const sameClaim = claim.attemptId === probed?.attemptId && claim.token === probed?.token;
+      const known = sameClaim ? liveness : 'unknown';
+      if (claimOccupied(claim, deps.currentConfig, deps.now(), known)) {
+        result = 'skip:runner-active'; return state;
+      }
+    }
+
     const guard = run.tickGuard;
     if (guard && guard.sessionId !== holder && guard.expiresAt > deps.now()) {
       result = 'skip:tick-guard-held'; return state;

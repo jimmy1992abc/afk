@@ -193,6 +193,25 @@ test('an unverifiable claim holds its run, but not for ever', () => {
     'past the longest a runner can live, an unrenewed claim is not a runner');
 });
 
+test('a claim stamped in the future cannot buy itself an endless hold', () => {
+  // The bound clamped a future `lastRenewedAt` down to `now`, which made the claim
+  // look freshly renewed on EVERY pass — the exact indefinite hold the bound was
+  // written to prevent. A forward clock step or a corrupt state file therefore
+  // wedged the run for ever: never recovered, never pruned, an OS probe burned every
+  // pass. Only a stamp at or before `now` is evidence a runner was alive.
+  const item = run({
+    runId: 'skewed', state: 'RECOVERING',
+    recoveryLease: {
+      attemptId: 'a', token: 't', lastRenewedAt: EPOCH + 365 * 86_400,
+      expiresAt: EPOCH + 365 * 86_400, pid: 4242, startedAt: 1,
+    },
+    updatedAt: EPOCH - 99_999, lastHeartbeatAt: EPOCH - 99_999, nextExpectedTickAt: null,
+  });
+  const inputs = { unknownRuns: new Set(['skewed']) };
+  assert.equal(runnability(item, stateWith(item), config, EPOCH, inputs).runnable, true,
+    'a claim with no stamp we can believe is not a runner');
+});
+
 test('a hold beyond the retention horizon does not shield a run from the reaper', () => {
   // A status line reporting a reset years away parks the run for years, and the
   // hold then kept the pruner off it for exactly as long. Retention is the outer

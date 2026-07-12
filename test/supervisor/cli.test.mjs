@@ -132,6 +132,57 @@ test('the tick a supervisor runner is driving cannot be driven twice', async () 
   assert.equal(h.state.runs.one.tickGuard, null, 'and it must not have taken the guard on the way out');
 });
 
+test('a runner that claims the run mid-probe still refuses the tick', async () => {
+  // The guard checked the recovery lease in one transaction and took the tick guard
+  // in another, with a liveness probe in the gap — a shell-out to PowerShell or ps
+  // bounded at TEN SECONDS. A supervisor pass fits inside that window easily. The
+  // tick read "no claim", the supervisor claimed the run and started a runner, and
+  // the tick then wrote its guard anyway: two Claudes on one session, which is the
+  // exact corruption every other part of this machinery exists to prevent.
+  const h = harness();
+  await runCli(REGISTER, h.deps);
+
+  // The probe is where the pass lands. A real runner claims the run while we are
+  // still shelling out.
+  // Runner B's claim has just expired but B is alive and about to renew — so only a
+  // liveness answer can settle it, and the only liveness answer we hold is the one
+  // we took about the claim that is no longer there.
+  h.deps.runnerLiveness = async () => {
+    h.state.runs.one.recoveryLease = {
+      attemptId: 'attempt-B', token: 'tok-B', lastRenewedAt: 19_990, expiresAt: 19_999,
+      pid: 4242, startedAt: 1_700_000_000_000, stuckNotifiedAt: null,
+    };
+    return 'dead';
+  };
+  h.state.runs.one.recoveryLease = {
+    attemptId: 'attempt-A', token: 'tok-A', lastRenewedAt: 19_000, expiresAt: 19_500,
+    pid: 1111, startedAt: 1_600_000_000_000, stuckNotifiedAt: null,
+  };
+
+  const result = await runCli(['lease', '--run-id', 'one', '--session-id', SESSION], h.deps);
+  assert.equal(result.code, 1);
+  assert.match(h.deps.output.at(-1), /skip:runner-active/, 'the probe spoke for a claim that is no longer there');
+  assert.equal(h.state.runs.one.tickGuard, null);
+});
+
+test('the tick and the supervisor agree about a claim with no pid', async () => {
+  // They did not. The reconciler read an unverifiable claim as `unknown` — occupied,
+  // never double-driven. `lease` asked runnerLiveness() raw, which answers `dead`
+  // for a missing pid (the right answer to "is this process alive", the wrong answer
+  // to "is this run occupied"), and let the tick through. The supervisor refused to
+  // touch the run and the wedged session drove it anyway.
+  const h = harness();
+  await runCli(REGISTER, h.deps);
+  h.state.runs.one.recoveryLease = {
+    attemptId: 'attempt-B', token: 'tok-B', lastRenewedAt: 19_990, expiresAt: 19_999,
+    pid: null, startedAt: null, stuckNotifiedAt: null,
+  };
+
+  const result = await runCli(['lease', '--run-id', 'one', '--session-id', SESSION], h.deps);
+  assert.equal(result.code, 1);
+  assert.match(h.deps.output.at(-1), /skip:runner-active/);
+});
+
 test('another session ticking this run is refused', async () => {
   // `lease` wrote the guard with the RUN's session id and then compared the guard
   // to the RUN's session id — always equal. `skip:tick-guard-held` could never

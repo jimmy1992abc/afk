@@ -93,10 +93,38 @@ const held = (code, notBefore = null, extra = {}) => ({ runnable: false, code, n
 // make the answer negative, and so cannot buy a claim an indefinite hold.
 export function unrenewedFor(claim, config, now) {
   const ttl = config.leaseRenewalSeconds * config.leaseMissedRenewals;
-  const renewed = Number.isFinite(claim?.lastRenewedAt)
-    ? claim.lastRenewedAt
-    : (Number.isFinite(claim?.expiresAt) ? claim.expiresAt - ttl : 0);
-  return now - Math.min(renewed, now);
+  // Only a stamp at or before `now` is evidence that a runner was alive. Clamping a
+  // future stamp down to `now` instead — a forward clock step, or a corrupt file —
+  // made the claim look freshly renewed on every pass, for ever: the exact
+  // indefinite hold this bound exists to prevent. A claim with no usable stamp at
+  // all is not evidence of a runner either; it cannot be bounded, and holding it
+  // for ever is worse than releasing it.
+  // `lastRenewedAt` is the real evidence; an expiry stands in for it only when it is
+  // missing, because an expiry is one TTL after the renewal that wrote it.
+  const derived = Number.isFinite(claim?.expiresAt) ? claim.expiresAt - ttl : NaN;
+  for (const stamp of [claim?.lastRenewedAt, derived]) {
+    if (Number.isFinite(stamp) && stamp <= now) return now - stamp;
+  }
+  return Infinity;
+}
+
+// May this claim be taken from its holder? Both the supervisor and the in-session
+// tick have to answer it the same way — they used to disagree about a claim with no
+// pid, so the supervisor refused to touch a run that the tick then drove anyway.
+export function claimOccupied(claim, config, now, liveness) {
+  if (!claim?.attemptId) return false;
+  if (Number.isFinite(claim.expiresAt) && claim.expiresAt > now) return true;
+  if (liveness === 'alive') return true;
+  if (liveness === 'dead') return false;
+  return unrenewedFor(claim, config, now) <= config.recoveryAttemptTimeoutSeconds;
+}
+
+// A pid we never recorded cannot be probed, and an unprobed claim is `unknown` —
+// never `dead`. `runnerLiveness` alone answers `dead` for a missing pid, which is
+// the right answer to "is this process alive" and the wrong answer to "is this run
+// occupied".
+export async function claimLiveness(claim, probe) {
+  return Number.isInteger(claim?.pid) ? probe(claim) : 'unknown';
 }
 
 export function runnability(run, state, config, now, inputs = {}) {
