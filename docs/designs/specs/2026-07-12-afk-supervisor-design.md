@@ -706,8 +706,10 @@ Coverage includes:
 - successful-run window anchoring and exact status-line replacement;
 - repeated success within one window does not move its anchor;
 - successful anchoring does not schedule non-rate-limited runs;
+- stale anchors fall back to the per-run rate-limit upper bound;
 - ambiguous quota fallback without false seven-day suppression;
 - consecutive quota rejection escalation, notification, and success reset;
+- exact status-line and trigger-now clear escalated quota backoff;
 - preservation and replacement of snapshots;
 - status-line write throttling and account-level import ordering;
 - 90% crossing for every active run;
