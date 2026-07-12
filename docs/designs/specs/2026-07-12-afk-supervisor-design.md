@@ -22,8 +22,8 @@ checks, ledger-driven continuation, overlap prevention, and run shutdown.
 ## Goals
 
 - Preserve the existing AFK in-session tick unchanged in purpose.
-- Observe exact reset data opportunistically from headless quota frames and
-  proactively from documented Claude Code status-line JSON.
+- Observe exact reset data from documented Claude Code status-line JSON and use
+  headless quota frames to classify rate-limit outcomes.
 - Queue all recoverable AFK sessions when exact five-hour usage reaches 90%.
 - Give each queued session a target start time 60–180 seconds after the exact
   reset, then start it subject to the configured concurrency limit.
@@ -50,18 +50,18 @@ installed CLI where applicable.
 
 ### Headless stream data
 
-Claude Code supports `--print --output-format stream-json`. Inspection of the
-current installed CLI shows `system/api_error` frames, also represented as
-`api_retry` messages, whose quota-error payload may include
-`error.rate_limits.resets_at` and `error.rate_limits.rate_limit_type` alongside
-retry metadata. This can expose an exact reset directly to a headless runner.
+Claude Code supports `--print --output-format stream-json`; the installed CLI
+requires `--verbose` with that output mode. Inspection of the current CLI shows
+wire-visible `system/api_retry` frames containing an error category such as
+`rate_limit`, an HTTP status, and retry counters. The internal REPL has a richer
+`system/api_error` object, but its `rate_limits.resets_at` and
+`rate_limit_type` fields are not forwarded to the external stream.
 
-Anthropic's public CLI documentation does not currently specify this error-frame
-schema. The runner therefore treats it as a capability-gated provider, not an
-unconditional contract: it accepts only validated frames, records the observed
-CLI version, and falls back safely when the frame or fields are absent or change.
-Manual validation against a real quota response is required before setup reports
-this provider as confirmed.
+The runner therefore uses stream frames only to classify a quota outcome and
+terminate the CLI's built-in retry loop. They are not a reset-time provider.
+Anthropic's public CLI documentation does not specify the retry-frame schema, so
+parsing remains capability-gated and safely falls back to process exit and
+StopFailure observations when the shape changes.
 
 ### Status-line data
 
@@ -234,6 +234,7 @@ contents.
     "observedAt": null,
     "source": "unknown",
     "confidence": "unknown",
+    "windowAnchorAt": null,
     "thresholdResetAt": null,
     "lastImportedObservationAt": null,
     "sevenDaySuppressedUntil": null
@@ -327,23 +328,41 @@ and atomically replaced.
 
 ## Usage Provider Precedence
 
-The state store accepts normalized usage observations from three providers:
+The state store uses these reset sources in order:
 
-1. **Headless runner frame:** preferred for rate-limit recovery. A validated
-   quota `api_error` or `api_retry` frame supplies an exact reset and, when
-   present, distinguishes five-hour from seven-day limits. Because the frame
-   schema is not publicly documented, setup reports it as `confirmed` only after
-   a canary or real observation for the installed CLI version; otherwise the
-   parser remains opportunistic and fallback paths stay enabled.
-2. **Status-line snapshot:** preferred for proactive 90% scheduling while an
-   interactive surface emits status-line data. It can avoid one quota failure
-   but is not required for continued headless recovery.
-3. **Conservative estimate:** used only when neither exact provider has supplied
-   a reset. It never arms the 90% queue or claims exact timing.
+1. **Status-line snapshot:** the only confirmed exact reset source. While an
+   interactive surface emits status-line data, it also enables proactive 90%
+   scheduling and can avoid a quota failure.
+2. **Supervisor window anchor:** after a runner receives a successful response
+   at time `T`, it records `windowAnchorAt = T` and estimates the next reset at
+   `T + 5 hours`. A quota-classified response does not create an anchor. This is
+   expected to be tight when the supervisor made the first successful request
+   in the window. If a human used the account earlier, the estimate is late, but
+   a compatible status-line observation replaces it immediately when available.
+3. **Rate-limit upper bound:** when no exact reset or successful supervisor
+   anchor exists, the first observed rate limit estimates an upper bound at
+   `firstRateLimitedAt + 5 hours`.
+
+The headless retry frame is a classification signal for deciding whether a
+runner succeeded and may create an anchor, or hit a quota and must terminate. It
+is not a reset source. Both estimates use `confidence: "estimated"`, never arm
+the 90% queue, and never claim exact timing.
 
 An exact observation always replaces a compatible estimate. Conflicting exact
 observations fail toward no invocation and produce a diagnostic until a newer
 observation resolves the conflict.
+
+### Estimated reset fallbacks
+
+A successful supervisor response records an account-level `windowAnchorAt` and
+estimates the next five-hour reset from that anchor. A rate-limit observation
+without an exact reset or valid anchor records per-run `firstRateLimitedAt` and
+a conservative upper bound of `firstRateLimitedAt + 5 hours`. A later exact
+observation replaces either estimate immediately.
+
+Estimated resets never arm the 90% queue and are never presented as exact. They
+only make otherwise stranded recoverable runs eligible for bounded recovery,
+with the normal retry policy and user-visible confidence.
 
 ## Ninety-percent Scheduling
 
@@ -376,7 +395,7 @@ stable across repeated snapshots, process restarts, and reboot. No duplicate
 tasks are created for the same run and reset.
 
 `scheduledResumeAt` is the target start time. Under normal awake operation, the
-next 30-second interval pass observes it at or shortly after that target. Native
+next 60-second interval pass observes it at or shortly after that target. Native
 scheduler granularity, process startup, exhausted concurrency, sleep, or power
 loss can delay the actual invocation. The supervisor records this lateness and
 never claims a strict 180-second guarantee that the operating system cannot
@@ -387,14 +406,6 @@ for the current reset. Completed, blocked, and auto-paused runs retain audit
 fields but become ineligible. A newer exact reset replaces only schedules that
 have not started. Missing or estimated reset data never invents a threshold
 schedule.
-
-A rate-limit StopFailure without an exact reset records
-`firstRateLimitedAt` and a conservative estimated reset of
-`firstRateLimitedAt + 5 hours`. Estimated resets never arm the 90% queue and are
-never presented as exact. They only make an otherwise stranded `RATE_LIMITED`
-run eligible for one bounded recovery probe after the estimate, followed by the
-normal retry policy and a user notification. A later exact observation replaces
-the estimate immediately.
 
 When an exact seven-day snapshot reports 100% usage and a future seven-day reset,
 it suppresses five-hour recovery probes and empty-window activation until that
@@ -487,7 +498,7 @@ stable worker and skill installation.
 AFK recovery runs in the validated original cwd and uses the recorded session:
 
 ```text
-claude --resume <session-id> --print --output-format stream-json
+claude --resume <session-id> --print --verbose --output-format stream-json
   <static AFK resume prompt>
 ```
 
@@ -498,25 +509,26 @@ IDs must satisfy the documented UUID shape, cwd must be an existing directory,
 and the ledger must resolve within that cwd.
 
 The runner parses stdout incrementally as JSON Lines and treats normal assistant
-content as opaque. On a validated quota error frame with `resets_at`, it records
-an exact five-hour or seven-day reset according to `rate_limit_type`, terminates
-the Claude process group immediately, and finalizes the run as rescheduled. It
-does not wait for the CLI's built-in retry loop or the action timeout. Unknown,
-malformed, or changed frames are ignored safely and the documented StopFailure
-and estimate fallbacks remain active. Raw frames and rendered API errors are not
-logged.
+content as opaque. On a validated wire-visible retry frame with `error:
+"rate_limit"` and a quota-compatible status, it terminates the Claude process
+group immediately and finalizes the run as rate limited. It does not wait for
+the CLI's built-in retry loop or the action timeout. Because the wire frame has
+no reset or five-hour/seven-day discriminator, finalization uses a still-valid
+exact status-line reset, then a window-anchor estimate, then the
+`firstRateLimitedAt + 5 hours` upper bound. An ambiguous quota cannot create a
+seven-day suppression boundary.
 
-A five-hour quota frame is account-level evidence. During runner finalization,
-the locked state transaction schedules every recoverable run for that reset with
-its stable per-run jitter, not only the run that encountered the 429. A seven-day
-quota frame updates the global suppression boundary for every run. Repeated
-frames for the same reset are idempotent.
+On a successful runner response at time `T`, finalization records the estimated
+window anchor and schedules every recoverable run for `T + 5 hours` with stable
+per-run jitter. A later exact status-line snapshot replaces that estimate and
+its pending schedules. Repeated success or quota frames for the same attempt are
+idempotent.
 
-Because the frame contract is undocumented, the parser accepts only a
-version-tested event envelope, a plausible Unix-seconds reset, and a recognized
-rate-limit type. An unknown type may be retained as an unclassified diagnostic
-but cannot drive five-hour or seven-day transitions. It never guesses time units
-or derives fields from rendered error text.
+Because the retry-frame contract is undocumented, the parser accepts only a
+version-tested event envelope, enumerated rate-limit error, numeric status, and
+bounded retry counters. Unknown, malformed, or changed frames fall back to
+process exit and StopFailure observations. It never searches rendered error text
+for reset times. Raw frames and rendered API errors are not logged.
 
 Empty-window auto activation, when explicitly enabled, uses print mode,
 `--safe-mode`, `--no-session-persistence`, `--max-turns 1`, `--tools ""`,
@@ -542,7 +554,7 @@ and reports a repairable error.
 Failures never retry every minute. Each run has at most three non-quota failures
 for a reset event, with delays of 5, 20, and 60 minutes. A validated quota result
 updates or estimates the reset and reschedules the run without incrementing
-`retry.attempts`; learning a quota boundary is expected control flow, not a
+`retry.attempts`; classifying a quota rejection is expected control flow, not a
 failed recovery. A successful heartbeat or a terminal transition clears retry
 state. Exhaustion marks the attempt failed and notifies the user. A new exact
 reset or explicit `trigger-now` starts a new bounded attempt series.
@@ -653,8 +665,10 @@ scheduler or settings.
 Coverage includes:
 
 - exact and malformed status-line parsing;
-- headless quota-frame parsing, changed-schema fallback, and rate-limit type;
+- headless rate-limit classification and changed-schema fallback;
 - active child termination after a validated quota frame;
+- successful-run window anchoring and exact status-line replacement;
+- ambiguous quota fallback without false seven-day suppression;
 - preservation and replacement of snapshots;
 - status-line write throttling and account-level import ordering;
 - 90% crossing for every active run;
@@ -717,10 +731,13 @@ lifecycle.
   status-line commands; absence keeps exact usage capability `unobserved`.
 - Measure reconciler startup overhead and scheduler lateness on macOS and
   Windows before claiming operational timing.
+- With explicit approval, capture one successful first request in a fresh
+  five-hour window and compare `T + 5 hours` with the next exact status-line
+  reset before treating the window-anchor estimate as operationally tight.
 - With explicit approval, capture one real quota-limited
-  `--print --output-format stream-json` run and confirm the installed CLI emits
-  the expected `rate_limits.resets_at` and `rate_limit_type` fields before
-  reporting the headless provider as confirmed.
+  `--print --verbose --output-format stream-json` run and confirm the installed
+  CLI emits the expected rate-limit classification and retry counters, without
+  assuming it emits a reset timestamp.
 - Exercise subscription authentication, empty `--tools` behavior, and
   `--max-turns` with an explicitly approved minimal request; automated tests do
   not spend Claude usage.
