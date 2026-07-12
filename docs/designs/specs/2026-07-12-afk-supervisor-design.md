@@ -819,6 +819,7 @@ action:resume-afk
 action:activate-window
 result:quota-rescheduled
 result:quota-backoff-escalated
+error:registration-ambiguous
 error:state-corrupt
 error:claude-cli-missing
 error:claude-auth-missing

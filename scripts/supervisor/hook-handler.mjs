@@ -44,7 +44,21 @@ function newRun(metadata, event, ledgerPath) {
 async function sessionStart(event, deps) {
   if (typeof event.cwd !== 'string' || !isAbsolute(event.cwd)) return { code: 'skip:cwd-invalid' };
   await deps.store.update((state) => {
-    state.sessions[event.cwd] = { sessionId: event.session_id, observedAt: deps.now() };
+    // The observation is keyed by cwd, and a second Claude in the same repository
+    // simply overwrote the first — after which a registration that did not name its
+    // session was resolved to whichever session started last, and recovery would
+    // `claude --resume` a conversation that had nothing to do with the run. Two
+    // Claudes in one repository is an ordinary thing to do. Once the cwd can no
+    // longer identify ONE session, say so, and keep saying so while the other may
+    // still be there: registration then refuses to guess instead of guessing wrong.
+    const previous = state.sessions[event.cwd];
+    const recent = previous
+      && deps.now() - previous.observedAt <= deps.config.registrationRecoveryMaxAgeSeconds;
+    state.sessions[event.cwd] = {
+      sessionId: event.session_id,
+      observedAt: deps.now(),
+      ambiguous: Boolean(recent && (previous.ambiguous || previous.sessionId !== event.session_id)),
+    };
     return state;
   });
   const ledgerPath = join(event.cwd, '.afk', 'afk-ledger.md');

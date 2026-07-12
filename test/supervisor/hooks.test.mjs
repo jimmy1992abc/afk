@@ -63,6 +63,32 @@ test('SessionStart from supervisor resume updates metadata but never spawns', as
   assert.equal(active.spawnCalls.length, 0);
 });
 
+test('a second session in the same repository marks the observation ambiguous', async () => {
+  // The observation is keyed by cwd alone, so the second session simply overwrote the
+  // first. Registration then resolved the run to whichever session started last. Two
+  // Claudes in one repository is an ordinary thing to do, and it silently bound the
+  // run to the wrong conversation.
+  const active = await harness();
+  await handleHook(sessionStart(active.cwd), active.deps);
+  assert.equal((await active.store.read()).sessions[active.cwd].ambiguous, false);
+
+  const other = { ...sessionStart(active.cwd), session_id: '00000000-0000-4000-8000-0000000000ff' };
+  await handleHook(other, active.deps);
+  const observed = (await active.store.read()).sessions[active.cwd];
+  assert.equal(observed.ambiguous, true, 'two sessions in one repository cannot be told apart by cwd');
+
+  // ...and it stays ambiguous while the first session may still be there. Comparing
+  // only against the PREVIOUS observation forgets it the moment the same session
+  // ticks twice in a row — and the run is then quietly bound to it, with the other
+  // session still open in the same repository.
+  await handleHook(other, active.deps);
+  assert.equal((await active.store.read()).sessions[active.cwd].ambiguous, true,
+    'a repeated observation is not evidence that the other session went away');
+
+  await handleHook(sessionStart(active.cwd), active.deps);
+  assert.equal((await active.store.read()).sessions[active.cwd].ambiguous, true);
+});
+
 test('rate-limit StopFailure records upper bound without spawning', async () => {
   const active = await harness();
   await handleHook(sessionStart(active.cwd), active.deps);

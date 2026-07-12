@@ -43,8 +43,14 @@ self-contained spec.
    `afk-supervisor register` operation after writing the block:
 
    ```text
-   node "<plugin-root>/scripts/supervisor/cli.mjs" register --run-id "<run-id>" --cwd "<repo>" --ledger "<repo>/.afk/afk-ledger.md"
+   node "<plugin-root>/scripts/supervisor/cli.mjs" register --run-id "<run-id>" --session-id "<session-id>" --cwd "<repo>" --ledger "<repo>/.afk/afk-ledger.md"
    ```
+
+   Name your session. Without it the supervisor has only the working directory to go
+   on, and a repository with two Claude sessions open cannot say which one owns this
+   ledger — it would bind the run to whichever session started last, and recovery
+   would later resume the wrong conversation. It refuses to guess:
+   `error:registration-ambiguous`.
 
    A loud registration failure does not replace the existing ledger/tick safety
    layer. Record the failure and continue the scoped run.

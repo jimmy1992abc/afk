@@ -82,6 +82,29 @@ test('internal register transition and lease commands update one run', async () 
   assert.equal(h.state.runs.one.state, 'COMPLETED');
 });
 
+test('a repository with two sessions never guesses which one owns the run', async () => {
+  // SessionStart overwrites state.sessions[cwd], and the documented `register` call
+  // omits --session-id, so the run was bound to whichever session started LAST. Open
+  // a second Claude in the same repository and the supervisor would later run
+  // `claude --resume` against the wrong session entirely — resuming a conversation
+  // that has nothing to do with the run. Guessing is not available here; the caller
+  // must say which session owns the ledger.
+  const h = harness();
+  h.state.sessions[CWD] = {
+    sessionId: SESSION, observedAt: 19_999, ambiguous: true,
+  };
+
+  const guessed = await runCli(['register', '--run-id', 'one', '--cwd', CWD, '--ledger', LEDGER], h.deps);
+  assert.equal(guessed.code, 2);
+  assert.match(h.deps.output.at(-1), /error:registration-ambiguous/);
+  assert.deepEqual(h.state.runs, {}, 'and nothing is bound to a guess');
+
+  // Naming the session resolves it — which is what the skill now does.
+  const named = await runCli(['register', '--run-id', 'one', '--session-id', SESSION, '--cwd', CWD, '--ledger', LEDGER], h.deps);
+  assert.equal(named.code, 0);
+  assert.equal(h.state.runs.one.sessionId, SESSION);
+});
+
 test('register resolves a recent SessionStart observation for the cwd', async () => {
   const h = harness();
   h.state.sessions['C:\\repo'] = { sessionId: '00000000-0000-4000-8000-000000000001', observedAt: 19_999 };

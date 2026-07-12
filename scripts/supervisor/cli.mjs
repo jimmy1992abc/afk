@@ -71,6 +71,11 @@ async function register(args, deps) {
     const state = await deps.stateStore.read();
     const observed = state.sessions?.[args.cwd];
     if (observed && deps.now() - observed.observedAt <= deps.currentConfig.registrationRecoveryMaxAgeSeconds) {
+      // A cwd that has seen two sessions cannot say which one owns this ledger, and
+      // guessing binds the run to the wrong conversation — recovery would then
+      // `claude --resume` a session that has nothing to do with it. The caller knows
+      // its own session id; it has to say so.
+      if (observed.ambiguous) return emit(deps, 'error:registration-ambiguous', 2);
       sessionId = observed.sessionId;
     }
   }
