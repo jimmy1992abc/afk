@@ -118,13 +118,20 @@ tick, refresh the metadata heartbeat and use `afk-supervisor lease` to acquire
 or renew the shared guard:
 
 ```text
-node "<plugin-root>/scripts/supervisor/cli.mjs" lease --run-id "<run-id>"
+node "<plugin-root>/scripts/supervisor/cli.mjs" lease --run-id "<run-id>" --session-id "<session-id>"
 ```
 
+Pass your own session id: the guard has to know *who* is holding it, or it cannot
+tell an overlap from a renewal.
+
 `skip:tick-guard-held` means another *session* is already ticking this run; exit
-the tick without counting it as no progress. The OS supervisor's own recovery
-lease is a separate claim and never blocks you — if it has resumed you, it wants
-you to work.
+the tick without counting it as no progress.
+
+`skip:runner-active` means the OS supervisor is driving this run right now, in a
+Claude of its own; exit the tick the same way. You will not see this if the
+supervisor is the one that resumed *you* — a resumed session carries the id of the
+recovery attempt that started it, and its own recovery lease never blocks it. That
+is the whole point: if the supervisor resumed you, it wants you to work.
 
 - **If the host supports scheduled re-invocation** (a cron or wake-up), set up a
   recurring tick that re-invokes you; the tick prompt is static (scope, order,

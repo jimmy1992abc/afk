@@ -168,6 +168,47 @@ test('pruning never deletes a run it is deliberately holding', () => {
   assert.equal(dead.runs.gone, undefined, 'the prune must still actually prune');
 });
 
+test('an unverifiable claim holds its run, but not for ever', () => {
+  // `unknown` re-armed its notBefore on every pass, so it was always in the future
+  // and the run could never be pruned either. A recycled pid therefore wedged its
+  // run permanently: never recovered, never reaped, and burning an OS probe every
+  // pass until the end of time.
+  //
+  // A live runner renews its claim, and a renewed claim is unexpired — so it never
+  // reaches this branch at all. A claim that has gone longer without a renewal than
+  // a runner can even live has no runner behind it.
+  const claim = (lastRenewedAt) => run({
+    runId: 'held', state: 'RECOVERING',
+    recoveryLease: { attemptId: 'a', token: 't', lastRenewedAt, expiresAt: EPOCH - 1, pid: 4242, startedAt: 1 },
+    updatedAt: lastRenewedAt, lastHeartbeatAt: lastRenewedAt, nextExpectedTickAt: null,
+  });
+  const inputs = { unknownRuns: new Set(['held']) };
+
+  const recent = claim(EPOCH - 30);
+  assert.equal(runnability(recent, stateWith(recent), config, EPOCH, inputs).code, 'skip:runner-alive',
+    'a claim that could still have a runner behind it is never double-driven');
+
+  const ancient = claim(EPOCH - config.recoveryAttemptTimeoutSeconds - 1);
+  assert.equal(runnability(ancient, stateWith(ancient), config, EPOCH, inputs).runnable, true,
+    'past the longest a runner can live, an unrenewed claim is not a runner');
+});
+
+test('a hold beyond the retention horizon does not shield a run from the reaper', () => {
+  // A status line reporting a reset years away parks the run for years, and the
+  // hold then kept the pruner off it for exactly as long. Retention is the outer
+  // bound on how long any run may sit in the state file.
+  const stale = EPOCH - config.terminalRunRetentionSeconds - 1;
+  const absurd = run({
+    runId: 'absurd', state: 'RATE_LIMITED', scheduleState: 'pending',
+    scheduledResumeAt: EPOCH + 400 * 86_400, scheduledResetAt: EPOCH + 400 * 86_400,
+    scheduleConfidence: 'exact',
+    updatedAt: stale, lastHeartbeatAt: stale, nextExpectedTickAt: null,
+  });
+  const state = stateWith(absurd);
+  pruneState(state, config, EPOCH, {});
+  assert.equal(state.runs.absurd, undefined);
+});
+
 test('pruning never deletes a run whose runner is still alive', () => {
   const stale = EPOCH - config.terminalRunRetentionSeconds - 1;
   const item = run({

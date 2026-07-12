@@ -111,6 +111,75 @@ test('registration refuses the paths recovery would later refuse', async () => {
   }
 });
 
+const LIVE_LEASE = {
+  attemptId: 'attempt-7', token: 't', lastRenewedAt: 20_000, expiresAt: 20_600,
+  pid: 4242, startedAt: 1_700_000_000_000, stuckNotifiedAt: null,
+};
+
+test('the tick a supervisor runner is driving cannot be driven twice', async () => {
+  // The split gave the supervisor and the tick separate claims, and then wired only
+  // one direction of the mutex: `lease` never looked at the recovery lease at all.
+  // A session that wedged past its heartbeat, got resumed by the supervisor, and
+  // then came back to life would sail straight through and run a second
+  // `claude --resume` on the very session the runner was already driving.
+  const h = harness();
+  await runCli(REGISTER, h.deps);
+  h.state.runs.one.recoveryLease = { ...LIVE_LEASE };
+
+  const result = await runCli(['lease', '--run-id', 'one', '--session-id', SESSION], h.deps);
+  assert.equal(result.code, 1);
+  assert.match(h.deps.output.at(-1), /skip:runner-active/);
+  assert.equal(h.state.runs.one.tickGuard, null, 'and it must not have taken the guard on the way out');
+});
+
+test('another session ticking this run is refused', async () => {
+  // `lease` wrote the guard with the RUN's session id and then compared the guard
+  // to the RUN's session id — always equal. `skip:tick-guard-held` could never
+  // happen, and the guard could not detect the one overlap it exists for.
+  //
+  // The guard here is taken through the real path, not hand-written: the old test
+  // planted a state production could never produce, and passed on a guard that in
+  // production always said "mine".
+  const other = '00000000-0000-4000-8000-0000000000ff';
+  const h = harness();
+  await runCli(REGISTER, h.deps);
+  assert.equal((await runCli(['lease', '--run-id', 'one', '--session-id', SESSION], h.deps)).code, 0);
+
+  const result = await runCli(['lease', '--run-id', 'one', '--session-id', other], h.deps);
+  assert.equal(result.code, 1);
+  assert.match(h.deps.output.at(-1), /skip:tick-guard-held/);
+  assert.equal(h.state.runs.one.tickGuard.sessionId, SESSION, 'the holder keeps its guard');
+});
+
+test('a stale guard is taken over, not waited on', async () => {
+  const other = '00000000-0000-4000-8000-0000000000ff';
+  const h = harness();
+  await runCli(REGISTER, h.deps);
+  await runCli(['lease', '--run-id', 'one', '--session-id', other], h.deps);
+  h.state.runs.one.tickGuard.expiresAt = 19_999;
+
+  assert.equal((await runCli(['lease', '--run-id', 'one', '--session-id', SESSION], h.deps)).code, 0);
+  assert.equal(h.state.runs.one.tickGuard.sessionId, SESSION);
+});
+
+test('trigger-now --force releases the claims the notification says it releases', async () => {
+  // The stuck notification tells the operator that `trigger-now --force` releases
+  // the run. It released only the recovery lease: a live tick guard still returned
+  // skip:tick-owns-run and a fresh heartbeat still returned skip:heartbeat-fresh —
+  // *even with --force*. The one escape hatch from a wedged run did not open it.
+  const h = harness();
+  await runCli(REGISTER, h.deps);
+  h.state.runs.one.tickGuard = { sessionId: SESSION, expiresAt: 20_600 };
+  h.state.runs.one.lastHeartbeatAt = 20_000;
+  h.deps.reconcile = async () => ({ code: 'action:runner-started' });
+
+  const result = await runCli(['trigger-now', '--run-id', 'one', '--force'], h.deps);
+  assert.equal(result.code, 0);
+  const run = h.state.runs.one;
+  assert.equal(run.tickGuard, null, 'the operator has said no tick is really working');
+  assert.ok(run.forcedUntil > 20_000, 'and the run is due despite a heartbeat that looks fresh');
+});
+
 test('re-registering a run preserves its recovery state', async () => {
   const h = harness();
   await runCli(REGISTER, h.deps);
@@ -206,6 +275,11 @@ test('a session the supervisor resumed can acquire its own tick guard', async ()
     recoveryLease: { attemptId: 'supervisor-attempt', token: 'tok', expiresAt: 20_180, pid: 4242, startedAt: 1 },
   };
   h.state = state;
+  // The runner puts the attempt id in the child's environment, so the session it
+  // resumed — and only that session — can prove the live claim is its own. Without
+  // it this call is indistinguishable from the wedged original session coming back
+  // to life, and it is refused.
+  h.deps.callerAttemptId = () => 'supervisor-attempt';
 
   const result = await runCli(['lease', '--run-id', 'one'], h.deps);
 

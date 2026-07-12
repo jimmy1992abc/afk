@@ -1,13 +1,17 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { join } from 'node:path';
+import { PassThrough } from 'node:stream';
 
 import {
+  ACTIVATION_PROMPT,
   DETACHED,
   buildResumeArgs,
   buildActivationArgs,
   classifyStreamFrame,
   runClaude,
   spawnClaude,
+  startClaudeProcess,
   validateRecoveryRun,
 } from '../../scripts/supervisor/claude-runner.mjs';
 
@@ -27,6 +31,19 @@ test('activation is bounded and does not persist a session', () => {
   const args = buildActivationArgs();
   assert.deepEqual(args.slice(0, 7), ['--print', '--verbose', '--output-format', 'stream-json', '--no-session-persistence', '--max-turns', '1']);
   assert.ok(args.includes('--tools'));
+});
+
+test('a variadic flag cannot swallow the activation prompt', () => {
+  // `--tools <tools...>` is variadic — it eats every following argument until an
+  // end-of-options marker. With the prompt last, Claude parsed a tool list of
+  // ["", "Reply exactly: ok"] and received NO prompt, and every activation died on
+  // `Error: Input must be provided...`. Verified against the real CLI: exit 1, and
+  // exit 0 once the prompt is fenced off. The old assertion only checked that the
+  // flags were *present*, which is true of the broken order too.
+  const args = buildActivationArgs();
+  assert.equal(args.at(-2), '--', 'the prompt must be fenced off from the variadic flag');
+  assert.equal(args.at(-1), ACTIVATION_PROMPT);
+  assert.ok(args.indexOf('--tools') < args.indexOf('--'), 'and the fence must come after it');
 });
 
 test('recovery run rejects a ledger outside its working directory', () => {
@@ -90,6 +107,23 @@ test('wall-clock timeout kills a child whose stream never completes', async () =
   });
   assert.equal(result.reason, 'action-timeout');
   assert.equal(killed, 1);
+});
+
+test('the resumed session is told which recovery attempt it belongs to', () => {
+  // `claude --resume` keeps the SAME session id, so the wedged session and the one
+  // the supervisor spawns to replace it are indistinguishable by session identity.
+  // The attempt id is the only thing that tells them apart — and it is what lets
+  // the resumed session take its own tick guard while the recovery lease that
+  // started it is still held, without letting the *original* session through.
+  const calls = [];
+  const attempt = { id: 'attempt-7', run: { sessionId: run.sessionId, cwd: process.cwd(), ledgerPath: join(process.cwd(), '.afk', 'afk-ledger.md') } };
+  startClaudeProcess(attempt, {
+    executable: '/usr/local/bin/claude',
+    spawn: (file, args, options) => { calls.push(options); return { stdout: new PassThrough(), once() {} }; },
+  });
+  assert.equal(calls[0].env.AFK_SUPERVISOR_ATTEMPT, 'attempt-7');
+  assert.equal(calls[0].env.PATH ?? calls[0].env.Path, process.env.PATH ?? process.env.Path,
+    'the child still needs the environment it was going to get');
 });
 
 test('a Claude child is never detached on Windows', () => {

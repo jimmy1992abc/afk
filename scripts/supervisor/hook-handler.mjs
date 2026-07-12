@@ -8,7 +8,7 @@ import { ConfigStore } from './config.mjs';
 import { parseSupervisorLedger } from './ledger.mjs';
 import { isTerminalState } from './state-machine.mjs';
 import { StateStore, emptyRecoveryLease } from './state-store.mjs';
-import { currentRateLimitStart, estimateReset, stableJitterSeconds } from './usage-provider.mjs';
+import { currentRateLimitStart, estimateReset, scheduleRun } from './usage-provider.mjs';
 
 function dataRoot() {
   if (process.env.AFK_SUPERVISOR_DATA_DIR) return process.env.AFK_SUPERVISOR_DATA_DIR;
@@ -88,17 +88,16 @@ async function stopFailure(event, deps) {
     const now = deps.now();
     const firstRateLimitedAt = currentRateLimitStart(run, now);
     const reset = estimateReset(state.usage, { firstRateLimitedAt }, now, deps.config);
-    const scheduledResumeAt = reset.resetAt + stableJitterSeconds({ ...run, runId: id }, reset.resetAt, deps.config);
+    // Ask the one scheduler for the schedule rather than rebuilding it here. Built
+    // inline, it forgot `scheduleSource`, so a run that had escalated to a 24-hour
+    // quota backoff kept saying so while carrying an ordinary reset schedule — and
+    // the next window's headroom un-parked it as if it were still backed off.
     state.runs[id] = {
-      ...run,
+      ...scheduleRun({ ...run, runId: id }, reset.resetAt, reset.confidence, deps.config, now),
       state: 'RATE_LIMITED',
       firstRateLimitedAt,
       rateLimitedUntil: reset.resetAt,
       resetConfidence: reset.confidence,
-      scheduledResetAt: reset.resetAt,
-      scheduledResumeAt,
-      scheduleConfidence: reset.confidence,
-      scheduleState: 'pending',
       updatedAt: now,
       // The runner owns the probe-rejection counter. The supervisor's own
       // --resume runs with hooks enabled, so a single quota rejection reaches

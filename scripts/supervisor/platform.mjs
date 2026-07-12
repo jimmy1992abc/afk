@@ -30,16 +30,38 @@ export function platformAdapter(platform, deps) {
 //
 // Returns the OS-reported start time in epoch milliseconds, or null when it
 // cannot be determined. Null is never treated as proof of anything.
+// Three answers, not two:
+//   a number  — the process started then.
+//   null      — we asked, and it is not running.
+//   undefined — we could not ask. Says nothing about the process.
+//
+// Collapsing the last two is how "the probe failed" came to mean "the runner is
+// dead": on a host where PowerShell or ps cannot be executed, every live runner
+// read as dead and the supervisor started a second Claude on top of each one.
+//
+// The probe is bounded: launchd has no ExecutionTimeLimit, so a hung ps would
+// stall the whole supervisor under its single-job semantics.
+const PROBE_TIMEOUT_MS = 10_000;
+
+// A non-zero exit is the tool answering "no such process". A spawn failure, or a
+// probe we killed for hanging, is the tool failing to answer at all.
+function probeAnswered(error) {
+  return Number.isInteger(error?.code) && !error?.killed;
+}
+
 export async function processStartedAt(pid, deps = {}) {
   if (!Number.isInteger(pid) || pid <= 0) return null;
   const run = deps.execFile ?? execFileAsync;
   const platform = deps.platform ?? process.platform;
+  const options = { windowsHide: true, timeout: PROBE_TIMEOUT_MS };
   try {
     if (platform === 'win32') {
+      // -ErrorAction SilentlyContinue: an absent process is empty stdout and exit 0,
+      // so a throw here is always a failure to ask.
       const { stdout } = await run('powershell.exe', [
         '-NoProfile', '-NonInteractive', '-Command',
         `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue; if ($p) { $p.StartTime.ToUniversalTime().Ticks }`,
-      ], { windowsHide: true });
+      ], options);
       const ticks = Number(stdout.trim());
       // .NET ticks are 100ns since year 1; convert to epoch milliseconds.
       return Number.isFinite(ticks) && ticks > 0 ? Math.round(ticks / 10_000 - 62_135_596_800_000) : null;
@@ -50,16 +72,21 @@ export async function processStartedAt(pid, deps = {}) {
       // spaces and parentheses, so parse from the last ')'.
       const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
       const ticks = Number(fields[19]);
-      if (!Number.isFinite(ticks)) return null;
+      if (!Number.isFinite(ticks)) return undefined;
       const uptime = Number((await readFile('/proc/uptime', 'utf8')).split(' ')[0]);
+      if (!Number.isFinite(uptime)) return undefined;
       const bootMs = Date.now() - uptime * 1000;
       return Math.round(bootMs + (ticks / 100) * 1000);
     }
-    const { stdout } = await run('ps', ['-p', String(pid), '-o', 'lstart=']);
+    const { stdout } = await run('ps', ['-p', String(pid), '-o', 'lstart='], options);
     const parsed = Date.parse(stdout.trim());
-    return Number.isFinite(parsed) ? parsed : null;
-  } catch {
-    return null;
+    // ps can exit 0 with no rows; an unparseable row is not an answer either.
+    return stdout.trim().length === 0 ? null : (Number.isFinite(parsed) ? parsed : undefined);
+  } catch (error) {
+    // /proc/<pid> is gone: that IS the answer, and it means dead.
+    if (platform === 'linux') return error?.code === 'ENOENT' ? null : undefined;
+    if (platform === 'win32') return undefined;
+    return probeAnswered(error) ? null : undefined;
   }
 }
 
@@ -70,7 +97,8 @@ export async function runnerLiveness(lease, deps = {}) {
   const pid = lease?.pid;
   if (!Number.isInteger(pid)) return 'dead';
   const startedAt = await processStartedAt(pid, deps);
-  if (startedAt === null) return Number.isFinite(lease.startedAt) ? 'dead' : 'unknown';
+  if (startedAt === undefined) return 'unknown';
+  if (startedAt === null) return 'dead';
   if (!Number.isFinite(lease.startedAt)) return 'unknown';
   // Clocks and rounding differ between the two readings; a second of slack is
   // far tighter than any plausible pid-reuse interval.

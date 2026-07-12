@@ -78,6 +78,25 @@ test('rate-limit StopFailure records upper bound without spawning', async () => 
   assert.equal(active.spawnCalls.length, 0);
 });
 
+test('a rescheduled run stops calling itself a quota backoff', async () => {
+  // The hook rebuilt the schedule inline instead of asking the one scheduler for
+  // it, and forgot `scheduleSource`. A run that had escalated to a 24-hour quota
+  // backoff kept that source while carrying an ordinary reset schedule — so the
+  // next new window, whose headroom un-parks quota-backoff runs, un-parked a run
+  // that was merely waiting for its reset.
+  const active = await harness();
+  await handleHook(sessionStart(active.cwd), active.deps);
+  await active.store.update((state) => {
+    state.runs['run-1'].scheduleSource = 'quota-backoff';
+    return state;
+  });
+  await handleHook({
+    hook_event_name: 'StopFailure', session_id: sessionId, cwd: active.cwd,
+    transcript_path: 'ignored', error: 'rate_limit', error_details: '429',
+  }, active.deps);
+  assert.equal((await active.store.read()).runs['run-1'].scheduleSource, 'reset');
+});
+
 test('a StopFailure never schedules a resume in the past', async () => {
   // The run carries a firstRateLimitedAt from an earlier limit episode that the
   // supervisor never finalized — the in-session tick recovered it instead. The

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
+import { processStartedAt } from './platform.mjs';
 import { applyUsageObservation } from './usage-provider.mjs';
 import { pruneState, runnerOwns, selectCandidate, transitionRun, usableHeartbeat } from './state-machine.mjs';
 
@@ -41,10 +42,13 @@ async function resolveLiveness(state, deps, now) {
   const unknownRuns = new Set();
   for (const [runId, run] of Object.entries(state.runs)) {
     const lease = run.recoveryLease;
-    if (!Number.isInteger(lease?.pid)) continue;
+    if (!lease?.attemptId) continue;
     if (runnerOwns(run, now, deps.config)) continue;
 
-    const liveness = await deps.runnerLiveness(lease);
+    // A claim with no pid cannot be verified — an upgrade mid-recovery leaves
+    // exactly that. Skipping it read it as free and started a second runner on top
+    // of a live one. Unverifiable is `unknown`: occupied, and loudly so.
+    const liveness = Number.isInteger(lease.pid) ? await deps.runnerLiveness(lease) : 'unknown';
     if (liveness === 'alive') aliveRuns.add(runId);
     else if (liveness === 'unknown') unknownRuns.add(runId);
     else continue;
@@ -63,6 +67,26 @@ async function resolveLiveness(state, deps, now) {
     }
   }
   return { aliveRuns, unknownRuns };
+}
+
+// The claim has to be written before the spawn, or two passes could both start a
+// runner — so the pid can only be recorded after. Record it here and not at the
+// runner's first renewal a minute later: a runner that dies inside that minute
+// leaves behind a claim that nothing can verify, and suspend is exactly that.
+async function recordRunnerIdentity(deps, runId, attempt, child) {
+  const pid = child?.pid;
+  if (!Number.isInteger(pid)) return;
+  const probe = deps.processStartedAt ?? processStartedAt;
+  const startedAt = await probe(pid);
+  await deps.store.update((current) => {
+    const lease = current.runs[runId]?.recoveryLease;
+    // The runner may have renewed already, and a later attempt's claim is not ours
+    // to stamp. Only the lease this attempt wrote carries this token.
+    if (lease?.token !== attempt.token) return current;
+    lease.pid = pid;
+    lease.startedAt = Number.isFinite(startedAt) ? startedAt : null;
+    return current;
+  });
 }
 
 export async function reconcileOnce(deps) {
@@ -171,11 +195,16 @@ export async function reconcileOnce(deps) {
       ...recovering,
       recoveryLease: { attemptId, token, lastRenewedAt: now, expiresAt, pid: null, startedAt: null, stuckNotifiedAt: null },
       scheduleState: run.scheduleState === 'pending' ? 'leased' : run.scheduleState,
+      // An operator override is spent once it has been acted on; leaving it set
+      // would re-force the run on every pass until it expired.
+      forcedUntil: null,
     };
     attempt = { id: attemptId, token, runId: decision.runId, sessionId: run.sessionId, cwd: run.cwd, ledgerPath: run.ledgerPath };
     return current;
   });
   if (!attempt) return { code: 'skip:state-changed' };
-  deps.spawnRunner(attempt).unref();
+  const child = deps.spawnRunner(attempt);
+  child.unref?.();
+  await recordRunnerIdentity(deps, decision.runId, attempt, child);
   return { code: 'action:runner-started', attemptId };
 }

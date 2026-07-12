@@ -87,6 +87,19 @@ const held = (code, notBefore = null, extra = {}) => ({ runnable: false, code, n
  * liveness could not be determined. Both mean "do not touch this run"; only a
  * verified one is a real Claude invocation that counts against the global cap.
  */
+// How long a claim has gone without a renewal. A claim expires one TTL after its
+// last renewal, so an expiry stands in for a missing `lastRenewedAt` — an old-shape
+// lease from before an upgrade carries no such stamp. A forward clock step cannot
+// make the answer negative, and so cannot buy a claim an indefinite hold.
+function unrenewedFor(run, config, now) {
+  const claim = run.recoveryLease;
+  const ttl = config.leaseRenewalSeconds * config.leaseMissedRenewals;
+  const renewed = Number.isFinite(claim?.lastRenewedAt)
+    ? claim.lastRenewedAt
+    : (Number.isFinite(claim?.expiresAt) ? claim.expiresAt - ttl : 0);
+  return now - Math.min(renewed, now);
+}
+
 export function runnability(run, state, config, now, inputs = {}) {
   if (TERMINAL.has(run.state)) return held('skip:run-terminal');
   if (!TRANSITIONS[run.state]) return held('skip:run-state-unknown');
@@ -95,7 +108,17 @@ export function runnability(run, state, config, now, inputs = {}) {
   if (runnerOwns(run, now, config)) return held('skip:runner-active', run.recoveryLease.expiresAt);
   // A lease that expired while the machine slept still has a live runner behind
   // it. It will be re-evaluated next pass, so it is held, not abandoned.
-  if (inputs.aliveRuns?.has(run.runId) || inputs.unknownRuns?.has(run.runId)) {
+  if (inputs.aliveRuns?.has(run.runId)) return held('skip:runner-alive', now + config.leaseRenewalSeconds);
+
+  // A claim we could not verify holds its own run — we never double-drive it — but
+  // it may not hold it for ever. This branch re-armed its notBefore every pass, so
+  // a recycled pid wedged its run permanently: never recovered, never pruned, and
+  // burning an OS probe every pass until the end of time.
+  //
+  // A live runner renews, and a renewed claim is unexpired, so it never reaches
+  // here. A claim unrenewed for longer than a runner can even live — its own action
+  // timeout bounds that — has no runner behind it.
+  if (inputs.unknownRuns?.has(run.runId) && unrenewedFor(run, config, now) <= config.recoveryAttemptTimeoutSeconds) {
     return held('skip:runner-alive', now + config.leaseRenewalSeconds);
   }
 
@@ -103,6 +126,15 @@ export function runnability(run, state, config, now, inputs = {}) {
     return held('skip:seven-day-limit', state.usage.sevenDaySuppressedUntil);
   }
   if (config.activeRunRecovery === 'off') return held('skip:recovery-disabled');
+
+  // The operator has said: drive this run now. `trigger-now --force` has already
+  // released the claims and reset the counters, so what is left are the timers —
+  // and "wait for the next tick" is precisely what they were overriding. It is
+  // cleared when the run is claimed, so a force resumes once, not for ever.
+  if (Number.isFinite(run.forcedUntil) && run.forcedUntil > now) {
+    return { runnable: true, code: 'action:resume-afk', dueAt: now, notBefore: null };
+  }
+
   if (exhausted(run, config)) return held('skip:recovery-attempts-exhausted');
 
   if (Number.isFinite(run.quotaRejections?.nextProbeAt) && run.quotaRejections.nextProbeAt > now) {
@@ -234,8 +266,13 @@ export function pruneState(state, config, now, inputs = {}) {
     // Deliberate holds are not abandonment. A run parked on a seven-day quota
     // probe, or held while its runner is alive, is waiting — deleting it is how
     // the mechanism meant to resume it destroyed it instead.
+    // ...but retention is the outer bound on how long any run may sit here. A status
+    // line reporting a reset years out parks the run for years, and the hold then
+    // kept the reaper off it for exactly as long. A hold past the horizon protects
+    // nothing; the run still has to be idle beyond retention to actually go.
     const verdict = runnability(run, state, config, now, inputs);
-    if (Number.isFinite(verdict.notBefore) && verdict.notBefore > now) continue;
+    const horizon = now + config.terminalRunRetentionSeconds;
+    if (Number.isFinite(verdict.notBefore) && verdict.notBefore > now && verdict.notBefore <= horizon) continue;
 
     const spent = TERMINAL.has(run.state) || exhausted(run, config);
     const idleSince = Math.max(run.updatedAt ?? 0, run.lastHeartbeatAt ?? 0);

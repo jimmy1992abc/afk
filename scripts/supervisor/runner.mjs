@@ -170,6 +170,10 @@ export async function runAttempt(attemptId, deps) {
   }
   if (!entry) return { code: 'skip:attempt-not-found' };
   const [runId, run] = entry;
+  // Stamp the identity now rather than one renewal interval from now. The
+  // reconciler stamps it too; whichever of us survives, the claim is verifiable
+  // from the first second, and a runner that dies early is never mistaken for free.
+  await renewLease(deps.store, runId, run.recoveryLease.token, deps.now, deps.config, deps.identity).catch(() => {});
   const interval = deps.setInterval(
     () => renewLease(deps.store, runId, run.recoveryLease.token, deps.now, deps.config, deps.identity).catch(() => {}),
     deps.config.leaseRenewalSeconds * 1000,

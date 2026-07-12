@@ -2,6 +2,11 @@ import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { isAbsolute, relative } from 'node:path';
 
+// The recovery attempt the resumed session belongs to. It reaches the session's own
+// `afk-supervisor lease` call by ordinary environment inheritance — the same route
+// CLAUDE_PLUGIN_ROOT already travels to a skill's helpers.
+export const ATTEMPT_ENV = 'AFK_SUPERVISOR_ATTEMPT';
+
 export const RESUME_PROMPT = 'Resume the active AFK run from .afk/afk-ledger.md. Continue from the first unfinished step. Preserve the existing scope, constraints, merge policy, and overlap guard.';
 export const ACTIVATION_PROMPT = 'Reply exactly: ok';
 
@@ -24,8 +29,12 @@ export function buildResumeArgs(run) {
 }
 
 export function buildActivationArgs() {
+  // `--tools <tools...>` is variadic: it consumes every argument after it until an
+  // end-of-options marker. With the prompt simply placed last, Claude read a tool
+  // list of ["", "<the prompt>"] and got no prompt at all — every activation exited
+  // 1 with "Input must be provided". `--` fences the prompt off from it.
   return ['--print', '--verbose', '--output-format', 'stream-json', '--no-session-persistence',
-    '--max-turns', '1', '--tools', '', ACTIVATION_PROMPT];
+    '--max-turns', '1', '--tools', '', '--', ACTIVATION_PROMPT];
 }
 
 export function classifyStreamFrame(frame) {
@@ -89,6 +98,12 @@ export function startClaudeProcess(attempt, options = {}) {
     shell: false,
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'ignore'],
+    // `claude --resume` keeps the SAME session id, so the session that wedged and
+    // the one we start to replace it cannot be told apart by session identity. The
+    // attempt id can: the tick inside this child inherits it and may take its own
+    // guard, while the original session — which has no attempt id — is refused.
+    env: { ...process.env, [ATTEMPT_ENV]: attempt.id },
+    ...(options.spawn ? { spawn: options.spawn } : {}),
   });
   const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
   const completion = new Promise((resolve) => {

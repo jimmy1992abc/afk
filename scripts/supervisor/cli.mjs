@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { validateRecoveryRun } from './claude-runner.mjs';
+import { ATTEMPT_ENV, validateRecoveryRun } from './claude-runner.mjs';
 import { ConfigStore, validateConfig } from './config.mjs';
 import { createInstallDeps, installSupervisor, preflightClaude, repairSupervisor, statusSupervisor, uninstallSupervisor } from './install.mjs';
 import { runnerLiveness } from './platform.mjs';
@@ -111,6 +111,7 @@ function newRunRecovery() {
     scheduledResumeAt: null, scheduledResetAt: null, scheduleState: null, scheduleConfidence: null,
     recoveryLease: emptyRecoveryLease(),
     tickGuard: null,
+    forcedUntil: null,
     retry: { attempts: 0, nextAttemptAt: null },
     quotaRejections: { consecutive: 0, backoffLevel: 0, nextProbeAt: null, lastNotifiedAt: null },
   };
@@ -152,17 +153,38 @@ async function transition(args, deps) {
 // takes its own guard and gets on with it. The only thing that blocks it is
 // *another session* holding the guard, which is the overlap this guard is for.
 async function lease(args, deps) {
+  const before = await deps.stateStore.read();
+  const target = before.runs[args.runId];
+  if (!target) return emit(deps, 'skip:run-not-registered', 1);
+
+  // The caller's own identity, not the run's. `lease` used to write the guard with
+  // the RUN's session id and then compare the guard against the RUN's session id —
+  // always equal, so the guard could never detect the overlap it exists for.
+  const holder = args.sessionId ?? target.sessionId;
+
+  // Is a supervisor runner driving this run right now, and is it a *different*
+  // driver from the caller? The session the supervisor resumed carries the attempt
+  // id of the recovery that started it; refusing that session is what deadlocked
+  // the supervisor. Refusing every *other* session is the whole point of the claim.
+  const claim = target.recoveryLease;
+  const attempt = deps.callerAttemptId?.() ?? null;
+  if (claim?.attemptId && claim.attemptId !== attempt) {
+    const unexpired = Number.isFinite(claim.expiresAt) && claim.expiresAt > deps.now();
+    if (unexpired || await deps.runnerLiveness(claim) !== 'dead') {
+      return emit(deps, 'skip:runner-active', 1);
+    }
+  }
+
   let result = 'skip:run-not-registered';
   await deps.stateStore.update((state) => {
     const run = state.runs[args.runId];
     if (!run) return state;
     const guard = run.tickGuard;
-    const mine = guard?.sessionId === run.sessionId;
-    if (guard && !mine && guard.expiresAt > deps.now()) {
+    if (guard && guard.sessionId !== holder && guard.expiresAt > deps.now()) {
       result = 'skip:tick-guard-held'; return state;
     }
     run.tickGuard = {
-      sessionId: run.sessionId,
+      sessionId: holder,
       expiresAt: deps.now() + deps.currentConfig.heartbeatStaleSeconds,
     };
     run.lastHeartbeatAt = deps.now();
@@ -198,6 +220,14 @@ async function triggerNow(args, deps) {
     run.scheduledResumeAt = deps.now();
     run.scheduledResetAt ??= deps.now();
     run.scheduleState = 'pending';
+    if (args.force) {
+      // The stuck notification promises the operator that --force releases the run.
+      // It released the recovery lease and nothing else: a live tick guard still
+      // held it, and a heartbeat that merely *looked* fresh still held it. Both are
+      // exactly what the operator is overriding by saying --force.
+      run.tickGuard = null;
+      run.forcedUntil = deps.now() + deps.currentConfig.heartbeatStaleSeconds;
+    }
     return state;
   });
   const result = await deps.reconcile();
@@ -246,6 +276,8 @@ export function productionDeps() {
     uninstall: () => uninstallSupervisor(installDeps), installStatus: () => statusSupervisor(installDeps),
     reconcile: () => reconcileMain(['--once']), writeOutput: (text) => process.stdout.write(text),
     runnerLiveness: (lease) => runnerLiveness(lease),
+    // Set by the runner on the session it resumes; absent in every other session.
+    callerAttemptId: () => process.env[ATTEMPT_ENV] ?? null,
   };
 }
 

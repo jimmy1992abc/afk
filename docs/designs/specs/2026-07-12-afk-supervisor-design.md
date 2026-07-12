@@ -993,11 +993,68 @@ double-drive it — but it does **not** consume the global invocation slot. A
 recycled pid must be able to wedge one run, never the whole supervisor. The
 operator is notified, and `trigger-now` releases it.
 
+## Who may drive a run
+
+Two things can drive one run, and they must never do it at once: a supervisor
+runner, and the in-session tick. The claims are `recoveryLease` and `tickGuard`,
+and the mutex between them needs an identity that survives `--resume`.
+
+**`claude --resume` keeps the same session id.** The session that wedged and the
+session the supervisor starts to replace it are therefore *indistinguishable* by
+session identity. This is the trap: refuse a tick because a recovery lease is held,
+and the supervisor deadlocks the very session it just resumed. Let it through, and
+a wedged session that comes back to life runs a second `claude --resume` on top of
+the runner's — the corruption the whole liveness apparatus exists to prevent.
+
+The discriminator is the **recovery attempt**. The runner puts its attempt id in
+the environment of the child it spawns; that child's `afk-supervisor lease` call
+inherits it, and nothing else has it. So:
+
+- a live claim whose attempt id is *not* the caller's → `skip:runner-active`;
+- a live claim whose attempt id *is* the caller's → the resumed session works;
+- a live tick guard held by *another session* → `skip:tick-guard-held`.
+
+The tick guard carries the **caller's** session id, not the run's. Comparing the
+run's id against the run's id is always true, and a guard that always says "mine"
+guards nothing.
+
+Environment inheritance is load-bearing here, and it is verified end-to-end against
+the real CLI, not assumed: an attempt id set on the spawned Claude is visible to a
+Bash tool subprocess inside it.
+
+## Liveness has three answers, not two
+
+`alive` / `dead` / `unknown`. A probe that **could not run** is `unknown` — never
+`dead`. Conflating them meant that on any host where PowerShell or `ps` could not
+be executed, every live runner read as dead and the supervisor started a second
+Claude on top of each one.
+
+An identity is `(pid, process start time)` and is stamped **at the spawn**, by the
+reconciler that holds the pid — not at the runner's first renewal a minute later. A
+runner that dies inside that minute used to leave a claim nothing could verify, and
+an unverifiable claim was read as free.
+
+An unverifiable claim holds its own run, but not for ever: a live runner renews, so
+a claim unrenewed for longer than a runner can even live has no runner behind it.
+Without that bound, a recycled pid wedged its run permanently — never recovered,
+never pruned, burning an OS probe every pass.
+
+Retention is the outer bound on all of it. A hold beyond the retention horizon —
+a status line reporting a reset years away — protects nothing from the reaper.
+
 ## Notes on what only a real machine could find
 
-Two defects survived five adversarial review rounds and three hundred unit tests,
-because neither is visible from inside the process. Both were found by running the
+Three defects survived six adversarial review rounds and three hundred unit tests,
+because none is visible from inside the process. All were found by running the
 thing.
+
+- **`--tools <tools...>` is variadic.** Activation passed `--tools '' <prompt>`, so
+  Claude parsed the *prompt* as a tool name and received no prompt at all. Every
+  activation exited 1 with `Input must be provided`. The empty-window activation
+  path had never once worked, and the test asserted the flags were *present* —
+  which is just as true of the broken order. The prompt is now fenced off with
+  `--`. Both arg shapes are checked against the real CLI: activation exits 0, and
+  resume fails on a bogus *session id* rather than on a missing prompt.
 
 - **A detached child on Windows loses its stdout.** The runner spawned Claude with
   `detached: true`; on Windows that gives the child its own console and its output

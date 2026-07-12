@@ -52,6 +52,47 @@ const OBSERVATION = {
   source: 'statusline', confidence: 'exact',
 };
 
+test('a lease records the runner it started, at the moment it starts it', async () => {
+  // The pid was written only by the runner's own first renewal, a minute later. A
+  // runner that died inside that minute — a suspend, which is the very scenario
+  // this machinery exists for — left a claim carrying no pid, and an unverifiable
+  // claim was skipped by the liveness pass and read as free. The supervisor then
+  // started a second Claude on the same session. The reconciler has held the pid
+  // in its hand the whole time.
+  const h = await harness(run());
+  h.deps.spawnRunner = (attempt) => { h.spawnCalls.push(attempt); return { pid: 4242, unref() {} }; };
+  h.deps.processStartedAt = async () => 1_700_000_000_000;
+  assert.equal((await reconcileOnce(h.deps)).code, 'action:runner-started');
+  const lease = (await h.store.read()).runs['run-1'].recoveryLease;
+  assert.equal(lease.pid, 4242);
+  assert.equal(lease.startedAt, 1_700_000_000_000);
+});
+
+test('an expired claim with no verifiable identity is occupied, not free', async () => {
+  // An upgrade in the middle of a recovery leaves an old-shape lease with no pid at
+  // all. It was skipped by the liveness pass entirely — so the live runner was
+  // orphaned and a second one started on top of it.
+  const h = await harness(run({
+    state: 'RECOVERING',
+    recoveryLease: { attemptId: 'from-the-old-version', token: 't', expiresAt: now - 1, pid: null, startedAt: null, stuckNotifiedAt: null },
+  }));
+  const result = await reconcileOnce(h.deps);
+  assert.notEqual(result.code, 'action:runner-started');
+  assert.equal(h.spawnCalls.length, 0, 'a claim we cannot verify must never be double-driven');
+});
+
+test('an operator force is spent once it has been acted on', async () => {
+  // The heartbeat is fresh and the next tick is not due, so nothing would normally
+  // run this — which is exactly the state an operator reaches for --force in. Left
+  // set afterwards, the override would re-fire on every pass until it expired, and
+  // the supervisor would keep resuming a run it was asked to resume once.
+  const h = await harness(run({
+    forcedUntil: now + 900, lastHeartbeatAt: now - 1, nextExpectedTickAt: now + 900,
+  }));
+  assert.equal((await reconcileOnce(h.deps)).code, 'action:runner-started');
+  assert.equal((await h.store.read()).runs['run-1'].forcedUntil, null);
+});
+
 test('a pass that lost the race never leases a run a second time', async () => {
   const h = await harness(run({ lastHeartbeatAt: now - 99_999, nextExpectedTickAt: null }));
   h.deps.readLedgerHeartbeat = async () => {
@@ -183,9 +224,12 @@ test('an in-session AFK lease never consumes the supervisor invocation slot', as
 test('a lease expiry from a stepped clock does not occupy its slot for ever', async () => {
   // A forward clock step during a renewal persists an expiry years out. Nothing
   // reaps run leases, so an unclamped one holds the only invocation slot for good.
+  // The claim carries an identity because every claim now does — it is stamped at
+  // the spawn — and the runner behind this one is gone (the harness says `dead`).
+  // Without the clamp the run reads as still-owned and the pass skips for ever.
   const h = await harness(run({
     state: 'RECOVERING', lastHeartbeatAt: now - 99_999, nextExpectedTickAt: null,
-    recoveryLease: { attemptId: 'a', token: 't', expiresAt: now + 400 * 86_400, pid: null, startedAt: 1 },
+    recoveryLease: { attemptId: 'a', token: 't', expiresAt: now + 400 * 86_400, pid: 4242, startedAt: 1 },
   }));
   const result = await reconcileOnce(h.deps);
   assert.equal(result.code, 'action:runner-started');

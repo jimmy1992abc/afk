@@ -4,7 +4,7 @@ import test from 'node:test';
 import { platformAdapter } from '../../scripts/supervisor/platform.mjs';
 import { renderLaunchAgent } from '../../scripts/supervisor/platform-macos.mjs';
 import { createWindowsAdapter, renderWindowsTask } from '../../scripts/supervisor/platform-windows.mjs';
-import { runnerLiveness } from '../../scripts/supervisor/platform.mjs';
+import { processStartedAt, runnerLiveness } from '../../scripts/supervisor/platform.mjs';
 
 test('LaunchAgent runs at load and every 60 seconds with escaped paths', () => {
   const plist = renderLaunchAgent({ nodePath: '/Library/Node & Tools/node', workerPath: '/User Data/supervisor.mjs', stdoutPath: '/Logs/out.log', stderrPath: '/Logs/error.log' });
@@ -105,6 +105,37 @@ test('a recycled pid is not our runner', async () => {
     'a claim with no recorded identity can never be verified, only distrusted');
   assert.equal(await runnerLiveness({ pid: null }, deps), 'dead');
 
-  const gone = { platform: 'darwin', execFile: async () => { throw new Error('no such process'); } };
-  assert.equal(await runnerLiveness({ pid: 4242, startedAt: started }, gone), 'dead');
+  // `ps -p` exits 1 to say "no such process". That is an answer, and it means dead.
+  const absent = { platform: 'darwin', execFile: async () => { throw Object.assign(new Error('no such process'), { code: 1 }); } };
+  assert.equal(await runnerLiveness({ pid: 4242, startedAt: started }, absent), 'dead');
+});
+
+test('a probe that could not run is unknown, never dead', async () => {
+  // This test used to assert the opposite, and so certified the defect: ANY throw
+  // from the probe was read as "the process is gone". On a host where the probe
+  // itself cannot execute — a locked-down box, an ExecutionPolicy, a PATH problem,
+  // a transient EPERM — every live runner read as dead and the supervisor started
+  // a second Claude on top of each one. Not being able to ask is not an answer.
+  const started = Date.parse('Wed Nov 15 03:33:20 2023');
+  const spawnFailed = Object.assign(new Error('spawn ps ENOENT'), { code: 'ENOENT' });
+  const cannotAsk = { platform: 'darwin', execFile: async () => { throw spawnFailed } };
+  assert.equal(await runnerLiveness({ pid: 4242, startedAt: started }, cannotAsk), 'unknown');
+
+  const powershellBroke = { platform: 'win32', execFile: async () => { throw new Error('ExecutionPolicy'); } };
+  assert.equal(await runnerLiveness({ pid: 4242, startedAt: started }, powershellBroke), 'unknown');
+
+  const timedOut = { platform: 'darwin', execFile: async () => { throw Object.assign(new Error('timed out'), { killed: true, code: 1 }); } };
+  assert.equal(await runnerLiveness({ pid: 4242, startedAt: started }, timedOut), 'unknown',
+    'a probe we killed for hanging told us nothing about the process');
+});
+
+test('the liveness probe cannot hang the supervisor', async () => {
+  // launchd has no ExecutionTimeLimit, so a hung `ps` would stall the whole
+  // supervisor indefinitely under its single-job semantics.
+  const seen = [];
+  await processStartedAt(4242, {
+    platform: 'darwin',
+    execFile: async (file, args, options) => { seen.push(options); return { stdout: 'Wed Nov 15 03:33:20 2023' }; },
+  });
+  assert.ok(seen[0]?.timeout > 0, 'the probe must be bounded');
 });
