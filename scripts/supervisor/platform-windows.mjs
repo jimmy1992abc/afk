@@ -1,4 +1,7 @@
-import { xmlEscape } from './platform.mjs';
+import { defaultSpawnDetached, xmlEscape } from './platform.mjs';
+
+// schtasks rejects a UTF-16 document that does not begin with a byte-order mark.
+export const TASK_XML_BOM = '﻿';
 
 export function renderWindowsTask(values) {
   const argumentsValue = `&quot;${xmlEscape(values.workerPath)}&quot; --once`;
@@ -13,25 +16,35 @@ export function renderWindowsTask(values) {
     </CalendarTrigger>
   </Triggers>
   <Principals><Principal id="Author"><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
-  <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><StartWhenAvailable>true</StartWhenAvailable><WakeToRun>false</WakeToRun><ExecutionTimeLimit>PT1M</ExecutionTimeLimit></Settings>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <WakeToRun>false</WakeToRun>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <ExecutionTimeLimit>PT5M</ExecutionTimeLimit>
+  </Settings>
   <Actions Context="Author"><Exec><Command>${xmlEscape(values.nodePath)}</Command><Arguments>${argumentsValue}</Arguments></Exec></Actions>
 </Task>
 `;
 }
 
 export function createWindowsAdapter(deps = {}) {
+  const spawnDetached = deps.spawnDetached ?? defaultSpawnDetached;
   return {
     name: 'windows',
     intervalSeconds: 60,
     async installScheduler(values) {
-      await deps.writeFile(values.taskXmlPath, renderWindowsTask(values), 'utf16le');
+      await deps.writeFile(values.taskXmlPath, `${TASK_XML_BOM}${renderWindowsTask(values)}`, 'utf16le');
       await deps.execFile('schtasks.exe', ['/create', '/tn', 'AFK Supervisor', '/xml', values.taskXmlPath, '/f']);
     },
-    async uninstallScheduler() {
+    async uninstallScheduler(values) {
       await deps.execFile('schtasks.exe', ['/delete', '/tn', 'AFK Supervisor', '/f'], { allowFailure: true });
+      await deps.unlink(values.taskXmlPath, { force: true });
     },
     async notify(title, message, values) {
-      return deps.execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', values.notifyScript, '-Title', title, '-Message', message]);
+      return spawnDetached('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+        '-File', values.notifyScript, '-Title', title, '-Message', message]);
     },
   };
 }

@@ -57,9 +57,13 @@ export async function installSupervisor(deps) {
   const existingRecord = await deps.readInstallRecord();
   const settings = await deps.readSettings();
   const patched = patchStatuslineSettings(settings, deps.wrapperCommand);
-  if (patched.changed) await deps.writeSettings(patched.settings);
+  // The record is the only copy of the user's previous status line. Writing it
+  // after the settings would lose that command for good if the process died in
+  // between: a second setup then sees its own marker, records no previous
+  // command, and uninstall would delete the status line outright.
   const record = existingRecord ?? { previousStatusLine: patched.previous, marker: STATUSLINE_MARKER };
   await deps.writeInstallRecord(record);
+  if (patched.changed) await deps.writeSettings(patched.settings);
   await deps.installScheduler();
   return { code: existingRecord ? 'action:supervisor-repaired' : 'action:supervisor-installed' };
 }

@@ -1,5 +1,15 @@
+import { spawn } from 'node:child_process';
+
 import { createMacAdapter } from './platform-macos.mjs';
 import { createWindowsAdapter } from './platform-windows.mjs';
+
+// Notifications are fired and forgotten: a supervisor pass must never wait on a
+// window that only a present human could dismiss.
+export function defaultSpawnDetached(file, args) {
+  const child = spawn(file, args, { detached: true, stdio: 'ignore', windowsHide: true });
+  child.unref();
+  return { pid: child.pid };
+}
 
 export function platformAdapter(platform, deps) {
   if (platform === 'darwin') return createMacAdapter(deps);

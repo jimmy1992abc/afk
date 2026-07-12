@@ -76,9 +76,13 @@ Claude.ai subscribers, after the first API response, it may contain:
 - `rate_limits.seven_day.resets_at`
 - `session_id`, `cwd`, and `transcript_path`
 
-`resets_at` is a Unix epoch timestamp in seconds. Rate-limit fields may be
-absent, so missing or malformed input must not erase a previous valid snapshot.
-The status-line command is local and does not consume API tokens.
+`resets_at` is a Unix epoch timestamp in seconds. Rate-limit fields are absent
+before a session's first API response and for API-key or third-party-provider
+sessions. Such a payload observes nothing: it is neither published nor allowed to
+relabel a previous snapshot. Recording it as an exact reading would both
+misreport confidence and stop a later genuine exact snapshot from replacing
+pending estimated schedules. Missing or malformed input never erases a previous
+valid snapshot. The status-line command is local and does not consume API tokens.
 
 ### Hooks
 
@@ -138,6 +142,14 @@ The existing approximately 15-minute tick continues to:
 AFK lifecycle steps also call a small bundled registration command. Registration
 is best-effort but loud: failure is recorded in the ledger and surfaced to the
 operator without changing the existing run semantics.
+
+Because the lifecycle calls it repeatedly, registration is idempotent with
+respect to recovery state. It refreshes identity and liveness only. Schedules,
+quota backoff, and retry counters belong to the supervisor and survive
+re-registration; discarding them would let a later tick erase a pending threshold
+schedule or an active quota backoff. A run registered for the first time after
+the threshold event but before its reset inherits the schedule already armed for
+that reset.
 
 The SessionStart hook also checks the current cwd for a valid
 `.afk/afk-ledger.md`. It reconstructs missing registration only when the ledger
@@ -292,6 +304,11 @@ Each threshold schedule records its reset timestamp, due time, state
 session-scoped. Exact usage snapshots are account-level and replace compatible
 per-run estimates during reconciliation.
 
+The lock record is published by linking a fully written private file into place,
+so the lock path never exists in a partially written state. Creating the lock and
+then writing its record would let a concurrent acquirer read it empty, judge it
+corrupt, and steal a lock that is alive.
+
 Writes use a same-directory temporary file, fsync where supported, atomic
 rename, and parent-directory sync where supported. Readers validate the entire
 shape. Every committed state replacement increments `revision`; compare-and-set
@@ -322,6 +339,7 @@ Global configuration is separate from repository `.afk/config.md`:
   "heartbeatStaleSeconds": 1500,
   "overdueAutoActivationSeconds": 7200,
   "maxWindowActivationsPer24Hours": 4,
+  "sevenDaySuppressionPercentage": 99,
   "maxRecoveryAttempts": 3,
   "maxConsecutiveQuotaRejections": 3,
   "quotaEscalationBaseSeconds": 86400,
@@ -347,9 +365,13 @@ The state store uses these reset sources in order:
 1. **Status-line snapshot:** the only confirmed exact reset source. While an
    interactive surface emits status-line data, it also enables proactive 90%
    scheduling and can avoid a quota failure.
-2. **Supervisor window anchor:** after a runner receives a successful response
-   at time `T`, it may record `windowAnchorAt = T` and estimate the next reset at
-   `T + 5 hours`. A quota-classified response does not create an anchor. The
+2. **Supervisor window anchor:** when a runner that issued its first request at
+   time `T` receives a successful response, it may record `windowAnchorAt = T`
+   and estimate the next reset at `T + 5 hours`. The anchor is the moment the
+   request was issued, never the moment the run finished: the five-hour window
+   opens at the first request, so anchoring on completion would push every
+   estimate out by the recovery's own duration, which for AFK is usually hours.
+   A quota-classified response does not create an anchor. The
    anchor is write-once within a window: later successes before its estimated
    boundary never move it forward. After that boundary, or after an exact reset
    proves the prior window ended, the first subsequent success may establish the
@@ -427,10 +449,14 @@ fields but become ineligible. A newer exact reset replaces only schedules that
 have not started. Missing or estimated reset data never invents a threshold
 schedule.
 
-When an exact seven-day snapshot reports 100% usage and a future seven-day reset,
-it suppresses five-hour recovery probes and empty-window activation until that
-reset plus grace. This prevents bounded retries from repeatedly hitting a known
-weekly limit. Missing seven-day data does not block recovery.
+When an exact seven-day snapshot reports at least
+`sevenDaySuppressionPercentage` usage and a future seven-day reset, it suppresses
+five-hour recovery probes and empty-window activation alike until that reset plus
+grace; neither can succeed before the weekly window reopens. The threshold is not
+a strict 100 because `used_percentage` is a float derived from a utilization
+ratio and an exhausted weekly window can report just under 100. This prevents
+bounded retries from repeatedly hitting a known weekly limit. Missing seven-day
+data does not block recovery.
 
 At or after a schedule's due time, a heartbeat newer than the associated reset
 proves that the session already made progress in the new window. The supervisor
@@ -603,10 +629,19 @@ reasons cannot establish AFK completion and add no authoritative transition.
 Setup explicitly asks to install the status-line bridge. It parses the current
 user setting, writes a backup before modification, and installs a stable wrapper
 that passes the same stdin payload to both AFK and the previous command. The
-previous command's stdout and exit behavior remain the visible status line;
-AFK emits no stdout. Repeated setup recognizes its marker and does not layer
-wrappers. Uninstall restores the prior configuration only when the installed
-marker still matches, avoiding overwrite of later user edits.
+backup record is the only copy of the user's previous status line, so it is
+committed before the settings are touched: writing it afterwards would lose that
+command for good if the process died in between, because a second setup then
+recognizes its own marker, records no previous command, and uninstall would
+delete the status line outright.
+
+The wrapper runs the previous command first. Its stdout and exit code remain the
+visible status line; AFK emits no stdout, and an AFK-side failure — an unwritable
+data directory, a corrupt inbox — is swallowed rather than allowed to blank the
+status line or delay its render. A previous command that exits without draining
+stdin is normal and does not raise. Repeated setup recognizes its marker and does
+not layer wrappers. Uninstall restores the prior configuration only when the
+installed marker still matches, avoiding overwrite of later user edits.
 
 Malformed input, slow previous commands, and cancelled status-line executions
 cannot erase valid usage state. The AFK update is bounded and does not wait for
@@ -627,12 +662,23 @@ falls back to an informational notification.
 
 Setup copies the worker into `%LOCALAPPDATA%` and installs per-user Task
 Scheduler entries for a 60-second recurring trigger and user-logon catch-up.
-Task settings use `IgnoreNew` for overlapping reconciler instances. The adapter
-uses the resolved absolute Node executable and a stable wrapper, with paths
-passed as argument arrays or correctly XML-escaped values. It does not use a VS
-Code extension binary or require WSL. Notifications use a PowerShell-compatible
-interactive-user adapter and fall back to an informational dialog when actions
-are unavailable.
+Task settings use `IgnoreNew` for overlapping reconciler instances.
+
+Three Task Scheduler defaults would silently disable the supervisor and are set
+explicitly. The task document is written as UTF-16 **with a byte-order mark**,
+which `schtasks /create /xml` requires and which Node does not emit on its own.
+`DisallowStartIfOnBatteries` and `StopIfGoingOnBatteries` both default to true,
+which would stop the supervisor the moment a laptop is unplugged — the AFK case
+exactly — so both are set to false. `ExecutionTimeLimit` leaves headroom above a
+pass rather than matching the poll interval, so a slow pass is not killed
+mid-reconcile.
+
+The adapter uses the resolved absolute Node executable and a stable wrapper, with
+paths passed as argument arrays or correctly XML-escaped values. It does not use
+a VS Code extension binary or require WSL. Notifications are detached and never
+awaited by a supervisor pass, and they dismiss themselves: a modal dialog would
+wait for a click that, by definition of away-from-keyboard, nobody is there to
+give, blocking the pass until the scheduler killed it.
 
 Install, repair, status, and uninstall are idempotent on both platforms. Worker
 updates are copied to a temporary path and verified before replacing the stable
@@ -698,9 +744,29 @@ Tests inject a fake clock, filesystem, process runner, scheduler adapter, and
 Claude runner. Normal tests never make Claude requests or modify the real user
 scheduler or settings.
 
+A test that only asserts a field starts null and stays null cannot observe the
+invariant it names. Each estimate rule below is covered by a test that fails when
+the rule is removed, and the window-anchor path is covered positively — a fresh
+anchor being consumed — not only by its negative cases.
+
 Coverage includes:
 
 - exact and malformed status-line parsing;
+- a status-line payload with no rate limits is neither exact nor published;
+- the window anchor is the request's start time, not the run's finish time;
+- a fresh window anchor is consumed for a quota estimate;
+- a successful recovery clears the run's rate-limit timestamps, so a later limit
+  cannot derive an upper bound in the past and re-probe immediately;
+- a successful response reschedules no run, including other active runs;
+- seven-day suppression blocks recovery probes and empty-window activation, and
+  triggers below a strict 100% reading;
+- registration preserves recovery state and inherits an armed threshold schedule;
+- the previous status line runs first, keeps its exit code, and survives an
+  AFK-side failure;
+- the previous status line is recorded before the settings are overwritten;
+- the Windows task carries a byte-order mark and runs on battery;
+- a Windows notification is detached and never awaited;
+- a held lock is never observable as a partially written record;
 - headless rate-limit classification and changed-schema fallback;
 - active child termination after a validated quota frame;
 - successful-run window anchoring and exact status-line replacement;
