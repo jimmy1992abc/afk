@@ -94,6 +94,7 @@ export function applyUsageObservation(state, observation, config) {
 
   const next = structuredClone(state);
   const previousConfidence = next.usage.confidence;
+  const previousReset = next.usage.fiveHourResetAt;
   // Only a five-hour reset the observation actually carried may change how the
   // stored one is labelled. A payload with seven-day data but no five_hour
   // resets_at would otherwise relabel a retained window-anchor estimate as
@@ -135,13 +136,15 @@ export function applyUsageObservation(state, observation, config) {
         : scheduled;
     }
   }
-  if (exact && Number.isFinite(resetAt)) {
+  // A *new* exact reset starts a new bounded attempt series. Not any exact
+  // observation: the bridge republishes one whenever the integer usage bucket
+  // moves, and at least once a minute, so clearing backoff on every import would
+  // make failures retry every minute and put the escalation to a 24-hour probe
+  // permanently out of reach.
+  if (exact && Number.isFinite(resetAt) && resetAt !== previousReset) {
     for (const run of Object.values(next.runs)) {
       if (!RECOVERABLE.has(run.state)) continue;
       run.quotaRejections = { consecutive: 0, backoffLevel: 0, nextProbeAt: null, lastNotifiedAt: null };
-      // A new exact reset starts a new bounded attempt series. Without this a run
-      // that exhausted its retries is skipped for ever, is never terminal, and so
-      // is never pruned either.
       run.retry = { attempts: 0, nextAttemptAt: null };
     }
   }

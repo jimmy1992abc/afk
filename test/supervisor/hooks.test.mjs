@@ -122,6 +122,23 @@ test('a stop failure that is not a rate limit never parks the run', async () => 
     'a crash or an overload must not park the run rate-limited for five hours');
 });
 
+test('a rate limit never resurrects a finished run', async () => {
+  // The operator keeps using the session interactively after the run completes.
+  // A rate limit there would otherwise park the finished run RATE_LIMITED and
+  // have the supervisor fire `claude --resume` at a session a human is using.
+  const active = await harness();
+  await handleHook(sessionStart(active.cwd), active.deps);
+  await active.store.update((state) => {
+    state.runs['run-1'].state = 'COMPLETED';
+    return state;
+  });
+  const result = await handleHook({
+    hook_event_name: 'StopFailure', session_id: sessionId, cwd: active.cwd, error: 'rate_limit',
+  }, active.deps);
+  assert.equal(result.code, 'skip:run-not-registered');
+  assert.equal((await active.store.read()).runs['run-1'].state, 'COMPLETED');
+});
+
 test('SessionStart refuses a working directory that is not absolute', async () => {
   const active = await harness();
   const result = await handleHook({ hook_event_name: 'SessionStart', session_id: sessionId, cwd: 'relative/path' }, active.deps);

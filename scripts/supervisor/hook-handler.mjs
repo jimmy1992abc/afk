@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url';
 
 import { ConfigStore } from './config.mjs';
 import { parseSupervisorLedger } from './ledger.mjs';
+import { isTerminalState } from './state-machine.mjs';
 import { StateStore } from './state-store.mjs';
 import { currentRateLimitStart, estimateReset, stableJitterSeconds } from './usage-provider.mjs';
 
@@ -74,7 +75,12 @@ async function sessionStart(event, deps) {
 async function stopFailure(event, deps) {
   let found = false;
   await deps.store.update((state) => {
-    const entry = Object.entries(state.runs).find(([, run]) => run.sessionId === event.session_id);
+    // A terminal run stays terminal. The operator keeps using the same session
+    // interactively after a run completes, and a rate limit there would otherwise
+    // park the finished run RATE_LIMITED and have the supervisor fire
+    // `claude --resume` at a session a human is sitting in front of.
+    const entry = Object.entries(state.runs)
+      .find(([, run]) => run.sessionId === event.session_id && !isTerminalState(run.state));
     if (!entry) return state;
     found = true;
     const [id, run] = entry;

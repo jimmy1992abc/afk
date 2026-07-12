@@ -52,14 +52,17 @@ export function selectCandidate(state, inputs, config, now) {
   if (Number.isFinite(state.usage.sevenDaySuppressedUntil) && state.usage.sevenDaySuppressedUntil > now) {
     return { kind: 'skip', code: 'skip:seven-day-limit' };
   }
-  // An empty-window activation is a Claude invocation too, and its child lives
-  // for as long as any recovery. Counting only run leases lets a run be leased
-  // while an activation is still running, so two Claudes run at once despite a
-  // limit of one.
+  // A run is occupied while its lease is live *or* while its runner is still
+  // alive — a suspended machine expires the lease without killing anything. The
+  // caller resolves liveness, because this function may not touch processes.
+  // Counting only unexpired leases would leave a running Claude uncounted, which
+  // is exactly the double invocation this cap exists to prevent.
+  const occupied = (run) => Number.isFinite(run.lease?.expiresAt) && run.lease.expiresAt > now
+    ? true
+    : Boolean(inputs.aliveRuns?.has(run.runId));
   const activationLive = state.activation.inProgress
     && Number.isFinite(state.activation.expiresAt) && state.activation.expiresAt > now ? 1 : 0;
-  const liveLeases = activationLive + Object.values(state.runs)
-    .filter((run) => Number.isFinite(run.lease?.expiresAt) && run.lease.expiresAt > now).length;
+  const liveLeases = activationLive + Object.values(state.runs).filter(occupied).length;
   if (liveLeases >= config.maxConcurrentInvocations) {
     return { kind: 'skip', code: 'skip:concurrency-exhausted' };
   }
@@ -90,6 +93,16 @@ export function selectCandidate(state, inputs, config, now) {
 
   let nearest = null;
   for (const run of recoverable) {
+    // Already being worked on. This must skip the run, not end the pass: ending
+    // it lets one occupied run starve every other due run behind it.
+    if (occupied(run)) {
+      nearest ??= { kind: 'skip', code: 'skip:runner-alive', runId: run.runId };
+      continue;
+    }
+    if (config.activeRunRecovery === 'off') {
+      nearest ??= { kind: 'skip', code: 'skip:recovery-disabled' };
+      continue;
+    }
     if (run.state === 'FAILED' && (run.retry?.attempts ?? 0) >= config.maxRecoveryAttempts
         && !Number.isFinite(run.retry?.nextAttemptAt)) {
       nearest ??= { kind: 'skip', code: 'skip:recovery-attempts-exhausted' };
@@ -148,7 +161,14 @@ export function isTerminalState(state) {
 
 export function pruneState(state, config, now) {
   for (const [runId, run] of Object.entries(state.runs)) {
-    if (TERMINAL.has(run.state) && Number.isFinite(run.updatedAt)
+    // A run that exhausted its retries is skipped for ever but is not TERMINAL,
+    // so without this it survives every prune and grows the state without bound
+    // on any machine that never sees an exact reset.
+    const exhausted = run.state === 'FAILED'
+      && (run.retry?.attempts ?? 0) >= config.maxRecoveryAttempts
+      && !Number.isFinite(run.retry?.nextAttemptAt);
+    const spent = TERMINAL.has(run.state) || exhausted;
+    if (spent && Number.isFinite(run.updatedAt)
         && now - run.updatedAt > config.terminalRunRetentionSeconds) delete state.runs[runId];
   }
   for (const [cwd, session] of Object.entries(state.sessions)) {

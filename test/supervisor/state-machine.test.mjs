@@ -97,6 +97,28 @@ test('a run whose state the code does not know is never selected', () => {
   assert.notEqual(selectCandidate(stateWith(item), {}, config, now).kind, 'invoke');
 });
 
+test('activeRunRecovery off actually stops recovering runs', () => {
+  // It was validated, settable, and documented — and read by nothing.
+  const item = run({ lastHeartbeatAt: now - 99_999, nextExpectedTickAt: null });
+  assert.equal(selectCandidate(stateWith(item), {}, config, now).kind, 'invoke');
+  assert.equal(
+    selectCandidate(stateWith(item), {}, { ...config, activeRunRecovery: 'off' }, now).code,
+    'skip:recovery-disabled',
+  );
+});
+
+test('a run that exhausted its retries is eventually pruned', () => {
+  // FAILED is not TERMINAL, so without this it survives every prune and grows the
+  // state without bound on any machine that never sees an exact reset.
+  const state = defaultState();
+  state.runs.spent = run({
+    runId: 'spent', state: 'FAILED', retry: { attempts: 3, nextAttemptAt: null },
+    updatedAt: now - config.terminalRunRetentionSeconds - 1,
+  });
+  pruneState(state, config, now);
+  assert.equal(state.runs.spent, undefined);
+});
+
 test('a failed run waits out its retry backoff', () => {
   const item = run({ state: 'FAILED', retry: { attempts: 1, nextAttemptAt: now + 300 } });
   const decision = selectCandidate(stateWith(item), {}, config, now);

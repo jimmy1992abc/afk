@@ -67,16 +67,75 @@ test('a pass that lost the race never leases a run a second time', async () => {
   assert.equal((await h.store.read()).runs['run-1'].lease.attemptId, 'other');
 });
 
-test('a lease is never re-issued while its runner is still alive', async () => {
+test('a runner that outlived its lease still occupies its invocation slot', async () => {
   // A suspended machine stops the renewal timer while the runner and its Claude
-  // child stay alive. Expiry alone would spawn a second resume of one session.
+  // child stay alive. An expired lease is not an abandoned one: counting only
+  // unexpired leases leaves a running Claude uncounted, and the next pass starts
+  // a second one against the same session.
   const h = await harness(run({
     state: 'RECOVERING', lastHeartbeatAt: now - 99_999, nextExpectedTickAt: null,
     lease: { attemptId: 'a', token: 't', expiresAt: now - 1, pid: 4242 },
   }), { isRunnerAlive: async (pid) => pid === 4242 });
   const result = await reconcileOnce(h.deps);
-  assert.equal(result.code, 'skip:runner-alive');
+  assert.equal(result.code, 'skip:concurrency-exhausted');
   assert.equal(h.spawnCalls.length, 0);
+});
+
+test('an occupied run is skipped, never re-leased, and never starves the others', async () => {
+  // With a spare slot the occupied run must be stepped over rather than
+  // re-selected — and stepping over it must not end the pass, or one long
+  // recovery would starve every other due run for up to its whole timeout.
+  const busy = run({
+    runId: 'a-busy', state: 'RECOVERING', scheduledResumeAt: 100, scheduleState: 'leased',
+    lastHeartbeatAt: now - 99_999, nextExpectedTickAt: null,
+    lease: { attemptId: 'a', token: 't', expiresAt: now - 1, pid: 4242 },
+  });
+  const h = await harness(busy, {
+    config: { ...defaultConfig(), maxConcurrentInvocations: 2 },
+    isRunnerAlive: async (pid) => pid === 4242,
+  });
+  await h.store.update((state) => {
+    state.runs['b-due'] = run({
+      runId: 'b-due', sessionId: '00000000-0000-4000-8000-000000000002',
+      state: 'RATE_LIMITED', rateLimitedUntil: now - 1_000, resetConfidence: 'exact',
+      lastHeartbeatAt: now - 99_999, nextExpectedTickAt: null,
+    });
+    return state;
+  });
+
+  const result = await reconcileOnce(h.deps);
+  assert.equal(result.code, 'action:runner-started');
+  assert.equal(h.spawnCalls.length, 1);
+  assert.equal(h.spawnCalls[0].runId, 'b-due', 'the occupied run must not be resumed a second time');
+  assert.equal((await h.store.read()).runs['a-busy'].lease.attemptId, 'a', 'its lease is untouched');
+});
+
+test('a ledger heartbeat from the future never satisfies a reset', async () => {
+  // A ledger written by a machine whose clock runs ahead. Trusting it here marks
+  // the schedule handled, discards the reset, and persists the future timestamp —
+  // after which the run reads "fresh" for ever and is never selectable again.
+  const h = await harness(run({
+    scheduledResetAt: now - 200, scheduledResumeAt: now - 10, scheduleState: 'pending',
+    lastHeartbeatAt: now - 99_999, nextExpectedTickAt: null,
+  }), { readLedgerHeartbeat: async () => now + 86_400 });
+
+  const result = await reconcileOnce(h.deps);
+  assert.equal(result.code, 'action:runner-started');
+  assert.equal(h.spawnCalls.length, 1);
+  assert.notEqual((await h.store.read()).runs['run-1'].lastHeartbeatAt, now + 86_400,
+    'a future heartbeat must never be persisted');
+});
+
+test('a recycled pid cannot wedge a run for ever', async () => {
+  // Windows recycles pids aggressively, and isRunnerAlive says "alive" for a pid
+  // owned by another user. Past a whole action timeout the pid is no longer
+  // believed, or one recycled number would strand the run permanently.
+  const h = await harness(run({
+    state: 'RECOVERING', lastHeartbeatAt: now - 99_999, nextExpectedTickAt: null,
+    lease: { attemptId: 'a', token: 't', expiresAt: now - defaultConfig().recoveryAttemptTimeoutSeconds - 1, pid: 4242 },
+  }), { isRunnerAlive: async () => true });
+  const result = await reconcileOnce(h.deps);
+  assert.equal(result.code, 'action:runner-started');
 });
 
 test('observations are committed only after the import that used them is durable', async () => {

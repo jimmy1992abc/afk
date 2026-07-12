@@ -1,13 +1,17 @@
 import { randomUUID } from 'node:crypto';
 
 import { applyUsageObservation } from './usage-provider.mjs';
-import { pruneState, selectCandidate, transitionRun } from './state-machine.mjs';
+import { pruneState, selectCandidate, transitionRun, usableHeartbeat } from './state-machine.mjs';
 
 function applyBatch(state, batch, config) {
   return batch.reduce((current, item) => applyUsageObservation(current, item.observation, config), state);
 }
 
-function heartbeatDecision(run, heartbeat, config, now) {
+// The same clamp the selector applies. A ledger heartbeat from the future would
+// otherwise satisfy the reset here, discard the run's schedule, and be persisted
+// — after which the run reads "fresh" for ever and is never selectable again.
+function heartbeatDecision(run, rawHeartbeat, config, now) {
+  const heartbeat = usableHeartbeat(rawHeartbeat, now, config);
   if (Number.isFinite(run.scheduledResetAt) && Number.isFinite(heartbeat) && heartbeat > run.scheduledResetAt) {
     return 'skip:heartbeat-satisfied-reset';
   }
@@ -15,6 +19,23 @@ function heartbeatDecision(run, heartbeat, config, now) {
     return 'skip:heartbeat-fresh';
   }
   return null;
+}
+
+// A lease that expired while its machine slept still has a live runner behind it.
+// A pid alone is not proof for ever, though: Windows recycles pids, so once a
+// lease is older than a whole action timeout the pid is no longer believed —
+// otherwise one recycled pid would wedge that run permanently.
+async function aliveRunIds(state, deps, now) {
+  const alive = new Set();
+  for (const [runId, run] of Object.entries(state.runs)) {
+    const lease = run.lease;
+    if (!Number.isFinite(lease?.pid)) continue;
+    const abandoned = Number.isFinite(lease.expiresAt)
+      && now - lease.expiresAt > deps.config.recoveryAttemptTimeoutSeconds;
+    if (abandoned) continue;
+    if (await deps.isRunnerAlive(lease.pid)) alive.add(runId);
+  }
+  return alive;
 }
 
 export async function reconcileOnce(deps) {
@@ -28,7 +49,9 @@ export async function reconcileOnce(deps) {
   if (batch.length > 0) {
     await deps.commitObservationBatch(batch);
   }
-  const decision = selectCandidate(state, { heartbeats }, deps.config, now);
+  const aliveRuns = await aliveRunIds(state, deps, now);
+  const inputs = { heartbeats, aliveRuns };
+  const decision = selectCandidate(state, inputs, deps.config, now);
   if (decision.kind === 'notify') {
     if (deps.dryRun) return { code: 'action:would-notify-window' };
     await deps.notifyWindow(decision);
@@ -44,7 +67,7 @@ export async function reconcileOnce(deps) {
     const attemptId = deps.randomUUID?.() ?? randomUUID();
     let attempt = null;
     await deps.store.update((current) => {
-      const currentDecision = selectCandidate(current, { heartbeats }, deps.config, now);
+      const currentDecision = selectCandidate(current, inputs, deps.config, now);
       if (currentDecision.kind !== 'activate' || currentDecision.resetAt !== decision.resetAt) return current;
       const token = deps.randomUUID?.() ?? randomUUID();
       current.activation = {
@@ -89,14 +112,6 @@ export async function reconcileOnce(deps) {
     return { code: fresh };
   }
 
-  // A lease must not be re-issued just because the previous one expired: a
-  // suspended machine stops the renewal timer while the runner and its Claude
-  // child stay alive, and a second runner would then resume the same session.
-  const held = state.runs[decision.runId].lease;
-  if (Number.isFinite(held?.pid) && await deps.isRunnerAlive(held.pid)) {
-    return { code: 'skip:runner-alive', runId: decision.runId };
-  }
-
   const attemptId = deps.randomUUID?.() ?? randomUUID();
   let attempt = null;
   await deps.store.update((current) => {
@@ -104,7 +119,8 @@ export async function reconcileOnce(deps) {
     // heartbeat map to one run makes every other run fall back to its persisted
     // heartbeat, so the re-check can disagree with the selection even though the
     // state never changed — and the pass then skips for ever.
-    const currentDecision = selectCandidate(current, { heartbeats: { ...heartbeats, [decision.runId]: heartbeat } }, deps.config, now);
+    const recheck = { ...inputs, heartbeats: { ...heartbeats, [decision.runId]: heartbeat } };
+    const currentDecision = selectCandidate(current, recheck, deps.config, now);
     if (currentDecision.kind !== 'invoke' || currentDecision.runId !== decision.runId) return current;
     const run = current.runs[decision.runId];
     const token = deps.randomUUID?.() ?? randomUUID();

@@ -29,6 +29,9 @@ export async function main(argv = process.argv.slice(2)) {
   const config = await new ConfigStore(data).read();
   const store = new StateStore(data);
   const runner = new URL('./runner.mjs', import.meta.url);
+  // A pass that loses a lock race, or hits a revision conflict, must still name
+  // what happened. Letting it escape gives an unhandled rejection with no log
+  // line and no result code — the pass simply vanishes.
   const result = await reconcileOnce({
     store, config,
     now: () => Math.floor(Date.now() / 1000),
@@ -50,7 +53,7 @@ export async function main(argv = process.argv.slice(2)) {
     spawnRunner: (attempt) => spawn(process.execPath, [fileURLToPath(runner), '--attempt', attempt.id], {
       detached: true, stdio: 'ignore', env: { ...process.env, AFK_SUPERVISOR_DATA_DIR: data },
     }),
-  });
+  }).catch((error) => ({ code: `error:${error?.code === 'LOCK_HELD' ? 'state-lock-held' : 'pass-failed'}` }));
   // Outside the lock and after the pass: an inbox file the reconciler will never
   // import is never committed either, so it would be re-read on every pass for
   // ever. Sweeping must never fail a pass that has already done its work.

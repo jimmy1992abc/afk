@@ -63,7 +63,14 @@ export async function steal(dir, now, ttlMs) {
     throw new LockHeldError();
   }
   if (!await reclaimable(tombstone, now, ttlMs)) {
-    try { await rename(tombstone, dir); } catch { /* a third party already took it */ }
+    try {
+      await rename(tombstone, dir);
+    } catch {
+      // A third party took the vacant path while we were putting this back. The
+      // tombstone is ours alone now and is not a lock, so it must not be left
+      // behind: nothing else ever sweeps it.
+      await discard(tombstone).catch(() => {});
+    }
     throw new LockHeldError();
   }
   await discard(tombstone);

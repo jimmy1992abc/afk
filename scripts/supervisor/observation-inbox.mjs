@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, open, readFile, readdir, rename, stat, unlink } from 'node:fs/promises';
+import { mkdir, open, readFile, readdir, rename, rm, stat, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 
 const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -11,6 +11,8 @@ function validObservation(value) {
     && value.confidence === 'exact';
 }
 
+const CONTENDED = new Set(['EPERM', 'EACCES', 'EBUSY']);
+
 async function atomicJson(path, value) {
   const temp = `${path}.tmp-${randomUUID()}`;
   const handle = await open(temp, 'wx', 0o600);
@@ -20,7 +22,18 @@ async function atomicJson(path, value) {
   } finally {
     await handle.close();
   }
-  await rename(temp, path);
+  // Windows refuses to replace a file another writer still has open. This runs
+  // inside the status-line hook, where an unhandled rejection is visible to the
+  // user, so a transient sharing conflict is waited out rather than raised.
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await rename(temp, path);
+      return;
+    } catch (error) {
+      if (!CONTENDED.has(error.code) || attempt >= 10) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 5 + attempt * 5));
+    }
+  }
 }
 
 function markerValue(observation, writtenAt) {
@@ -54,29 +67,34 @@ export async function publishObservation(root, observation, options = {}) {
 
 export const OBSERVATION_RETENTION_SECONDS = 3_600;
 
-// Anything the reconciler will not import is never committed, so without this it
-// stays in the inbox for ever and is re-read and re-parsed on every single pass.
-// That includes files that fail validation, and the temp files an interrupted
-// publish leaves behind — which do not even end in `.json`.
+// Everything the supervisor leaves lying around and never looks at again: inbox
+// files that fail validation and so are never committed, the per-session markers,
+// the temp files an interrupted atomic write orphans, the corrupt-state
+// quarantines, and the lock tombstones. None of these were bounded.
 export async function sweepObservations(root, options = {}) {
   const now = options.now ?? (() => Math.floor(Date.now() / 1000));
   const retention = options.retentionSeconds ?? OBSERVATION_RETENTION_SECONDS;
-  const inbox = join(root, 'observations');
-  let names;
-  try { names = await readdir(inbox); } catch (error) {
-    if (error.code === 'ENOENT') return 0;
-    throw error;
-  }
   let removed = 0;
-  for (const name of names) {
-    const path = join(inbox, name);
-    try {
-      const info = await stat(path);
-      if (now() - Math.floor(info.mtimeMs / 1000) <= retention) continue;
-      await unlink(path);
-      removed += 1;
-    } catch (error) {
-      if (error.code !== 'ENOENT') throw error;
+  for (const [dir, match] of [
+    [join(root, 'observations'), () => true],
+    [join(root, 'observation-markers'), () => true],
+    [root, (name) => name.includes('.tmp-') || name.startsWith('state.corrupt-') || name.includes('.stale-')],
+  ]) {
+    let names;
+    try { names = await readdir(dir); } catch (error) {
+      if (error.code === 'ENOENT') continue;
+      throw error;
+    }
+    for (const name of names.filter(match)) {
+      const path = join(dir, name);
+      try {
+        const info = await stat(path);
+        if (now() - Math.floor(info.mtimeMs / 1000) <= retention) continue;
+        await rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 10 });
+        removed += 1;
+      } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+      }
     }
   }
   return removed;

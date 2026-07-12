@@ -148,10 +148,15 @@ export async function runAttempt(attemptId, deps) {
     catch (error) { result = { kind: 'failure', reason: error?.code ?? 'runner-exception' }; }
     finally { deps.clearInterval(interval); }
     let finalized;
+    let applied = false;
     await deps.store.update((current) => {
+      applied = current.activation.token === state.activation.token;
       finalized = finalizeActivation(current, state.activation.token, result, deps.now());
       return finalized;
     });
+    // A finalize that never landed leaves `finalized` undefined; reading through
+    // it would throw and lose the result entirely.
+    if (!applied || !finalized) return { code: 'skip:stale-attempt' };
     return { code: finalized.activation.lastResult };
   }
   if (!entry) return { code: 'skip:attempt-not-found' };
@@ -182,7 +187,12 @@ export async function runAttempt(attemptId, deps) {
   });
   if (!applied) return { code: 'skip:stale-attempt' };
   const saved = finalized.runs[runId];
-  if (saved?.lastResult === 'result:quota-backoff-escalated') await deps.notify(saved);
+  const exhausted = saved?.state === 'FAILED'
+    && (saved.retry?.attempts ?? 0) >= deps.config.maxRecoveryAttempts
+    && !Number.isFinite(saved.retry?.nextAttemptAt);
+  // The spec says exhaustion notifies the operator. It only ever notified on a
+  // quota escalation, so a run that simply ran out of retries died in silence.
+  if (saved?.lastResult === 'result:quota-backoff-escalated' || exhausted) await deps.notify(saved);
   return { code: result.kind === 'success' ? 'result:success' : saved?.lastResult ?? 'error:resume-failed' };
 }
 

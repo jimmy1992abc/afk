@@ -202,6 +202,27 @@ test('a new exact reset starts a fresh attempt series for an exhausted run', () 
     'without this the run is skipped for ever and never pruned, because FAILED is not terminal');
 });
 
+test('re-observing the same reset does not clear backoff', () => {
+  // The bridge republishes an exact observation whenever the integer usage bucket
+  // moves, and at least once a minute. Clearing backoff on every import would
+  // make failures retry every minute and put the 24-hour escalation permanently
+  // out of reach — the counter could never reach three.
+  const state = withRuns(['1']);
+  const armed = applyUsageObservation(state, exact(50, 3_000, 1_000), config);
+  armed.runs['1'] = {
+    ...armed.runs['1'], state: 'RATE_LIMITED',
+    retry: { attempts: 2, nextAttemptAt: 99_000 },
+    quotaRejections: { consecutive: 2, backoffLevel: 0, nextProbeAt: 88_000, lastNotifiedAt: null },
+  };
+  const again = applyUsageObservation(armed, exact(55, 3_000, 1_100), config);
+  assert.equal(again.runs['1'].retry.attempts, 2, 'the same reset is not a new attempt series');
+  assert.equal(again.runs['1'].quotaRejections.consecutive, 2);
+
+  const newWindow = applyUsageObservation(again, exact(10, 21_000, 1_200), config);
+  assert.equal(newWindow.runs['1'].retry.attempts, 0, 'a genuinely new reset does start one');
+  assert.equal(newWindow.runs['1'].quotaRejections.consecutive, 0);
+});
+
 test('an exact reset in the future outranks every estimate', () => {
   const usage = { confidence: 'exact', fiveHourResetAt: 50_000, windowAnchorAt: 1_000 };
   assert.deepEqual(estimateReset(usage, { firstRateLimitedAt: 1_000 }, 20_000, config), {
