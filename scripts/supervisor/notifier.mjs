@@ -1,6 +1,6 @@
 import { execFile as execFileCallback } from 'node:child_process';
 import { promisify } from 'node:util';
-import { join } from 'node:path';
+import { posix, win32 } from 'node:path';
 
 import { platformAdapter } from './platform.mjs';
 
@@ -8,6 +8,7 @@ const execFile = promisify(execFileCallback);
 
 export function createNotifier(options = {}) {
   const platform = options.platform ?? process.platform;
+  const join = platform === 'win32' ? win32.join : posix.join;
   const adapter = options.adapter ?? platformAdapter(platform, {
     execFile: (file, args) => execFile(file, args, { windowsHide: true }),
   });
@@ -20,6 +21,7 @@ export function createNotifier(options = {}) {
 
 export function createWindowNotifier(options = {}) {
   const platform = options.platform ?? process.platform;
+  const join = platform === 'win32' ? win32.join : posix.join;
   const adapter = options.adapter ?? platformAdapter(platform, {
     execFile: (file, args) => execFile(file, args, { windowsHide: true }),
   });

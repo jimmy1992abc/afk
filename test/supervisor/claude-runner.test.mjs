@@ -28,8 +28,10 @@ test('activation is bounded and does not persist a session', () => {
 });
 
 test('recovery run rejects a ledger outside its working directory', () => {
+  const cwd = process.platform === 'win32' ? 'C:\\repo' : '/repo';
+  const ledgerPath = process.platform === 'win32' ? 'C:\\other\\afk-ledger.md' : '/other/afk-ledger.md';
   assert.throws(() => validateRecoveryRun({
-    sessionId: run.sessionId, cwd: 'C:\\repo', ledgerPath: 'C:\\other\\afk-ledger.md',
+    sessionId: run.sessionId, cwd, ledgerPath,
   }), /ledger path/);
 });
 

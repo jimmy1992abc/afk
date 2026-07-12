@@ -51,8 +51,9 @@ test('repeated setup and uninstall are idempotent through injected platform oper
 });
 
 test('Claude preflight accepts authenticated status without retaining identity fields', () => {
-  assert.deepEqual(validateClaudeStatus('C:\\Tools\\claude.exe', JSON.stringify({ loggedIn: true, identity: 'private-value', subscriptionType: 'max' })), {
-    claudePath: 'C:\\Tools\\claude.exe', authenticated: true,
+  const claudePath = process.platform === 'win32' ? 'C:\\Tools\\claude.exe' : '/opt/claude';
+  assert.deepEqual(validateClaudeStatus(claudePath, JSON.stringify({ loggedIn: true, identity: 'private-value', subscriptionType: 'max' })), {
+    claudePath, authenticated: true,
   });
-  assert.throws(() => validateClaudeStatus('C:\\Tools\\claude.exe', JSON.stringify({ loggedIn: false })), /authentication missing/);
+  assert.throws(() => validateClaudeStatus(claudePath, JSON.stringify({ loggedIn: false })), /authentication missing/);
 });
