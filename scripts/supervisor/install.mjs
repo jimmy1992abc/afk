@@ -10,22 +10,41 @@ import { platformAdapter } from './platform.mjs';
 const execFileAsync = promisify(execFileCallback);
 export const STATUSLINE_MARKER = '--afk-supervisor:1';
 
+// The CLI surfaces a thrown message as `error:<message>`, so these are the
+// reason codes the design documents for a repairable setup failure.
+export const CLI_MISSING = 'claude-cli-missing';
+export const AUTH_MISSING = 'claude-auth-missing';
+
 export function validateClaudeStatus(claudePath, statusJson) {
   if (!isAbsolute(claudePath) || !/^claude(?:\.exe)?$/i.test(basename(claudePath))) {
-    throw new Error('standalone Claude CLI path invalid');
+    throw new Error(CLI_MISSING);
   }
   let status;
-  try { status = JSON.parse(statusJson); } catch { throw new Error('Claude authentication status invalid'); }
-  if (status.loggedIn !== true) throw new Error('Claude authentication missing');
+  try { status = JSON.parse(statusJson); } catch { throw new Error(AUTH_MISSING); }
+  if (status.loggedIn !== true) throw new Error(AUTH_MISSING);
   return { claudePath, authenticated: true };
 }
 
-export async function preflightClaude(platform = process.platform) {
+export async function preflightClaude(platform = process.platform, deps = {}) {
+  const execFile = deps.execFile ?? execFileAsync;
   const locator = platform === 'win32' ? ['where.exe', ['claude.exe']] : ['which', ['claude']];
-  const located = await execFileAsync(locator[0], locator[1], { windowsHide: true });
+  let located;
+  try {
+    located = await execFile(locator[0], locator[1], { windowsHide: true });
+  } catch {
+    // A locator that exits non-zero means the CLI is not on PATH. Letting its
+    // raw "Command failed" text through would report an unrepairable error for
+    // a plainly repairable condition.
+    throw new Error(CLI_MISSING);
+  }
   const claudePath = located.stdout.split(/\r?\n/).map((line) => line.trim()).find(Boolean);
-  if (!claudePath) throw new Error('standalone Claude CLI missing');
-  const status = await execFileAsync(claudePath, ['auth', 'status', '--json'], { windowsHide: true, maxBuffer: 1024 * 1024 });
+  if (!claudePath) throw new Error(CLI_MISSING);
+  let status;
+  try {
+    status = await execFile(claudePath, ['auth', 'status', '--json'], { windowsHide: true, maxBuffer: 1024 * 1024 });
+  } catch {
+    throw new Error(AUTH_MISSING);
+  }
   return validateClaudeStatus(claudePath, status.stdout);
 }
 

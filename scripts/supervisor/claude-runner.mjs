@@ -5,8 +5,12 @@ import { isAbsolute, relative } from 'node:path';
 export const RESUME_PROMPT = 'Resume the active AFK run from .afk/afk-ledger.md. Continue from the first unfinished step. Preserve the existing scope, constraints, merge policy, and overlap guard.';
 export const ACTIVATION_PROMPT = 'Reply exactly: ok';
 
+// The same shape the state store and the observation inbox accept. A looser rule
+// here would let a session ID through that no other layer would ever have stored.
+const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 export function validateRecoveryRun(run) {
-  if (!/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(run?.sessionId ?? '')) throw new Error('invalid session ID');
+  if (!SESSION_ID.test(run?.sessionId ?? '')) throw new Error('invalid session ID');
   if (!isAbsolute(run?.cwd ?? '')) throw new Error('invalid working directory');
   const ledgerRelative = relative(run.cwd, run?.ledgerPath ?? '');
   if (!isAbsolute(run?.ledgerPath ?? '') || ledgerRelative.startsWith('..') || isAbsolute(ledgerRelative)) {

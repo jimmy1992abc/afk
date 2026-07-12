@@ -1,3 +1,7 @@
+import { randomUUID } from 'node:crypto';
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+
 const WINDOW_MODES = new Set(['off', 'notify', 'auto']);
 const CATCH_UP_MODES = new Set(['activate', 'notify', 'skip']);
 const RECOVERY_MODES = new Set(['auto', 'off']);
@@ -87,6 +91,3 @@ export class ConfigStore {
     return config;
   }
 }
-import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';

@@ -100,6 +100,25 @@ test('newer exact snapshot replaces pending estimated schedules', () => {
   assert.equal(next.runs['1'].scheduleConfidence, 'exact');
 });
 
+test('an exact snapshot also refreshes a rate-limited run own reset deadline', () => {
+  const state = withRuns(['1']);
+  state.runs['1'] = {
+    ...state.runs['1'], state: 'RATE_LIMITED',
+    firstRateLimitedAt: 1_000, rateLimitedUntil: 19_000, resetConfidence: 'estimated',
+    scheduledResumeAt: 19_100, scheduledResetAt: 19_000, scheduleConfidence: 'estimated',
+  };
+  const next = applyUsageObservation(state, exact(91, 3_000), config);
+  assert.equal(next.runs['1'].rateLimitedUntil, 3_000);
+  assert.equal(next.runs['1'].resetConfidence, 'exact');
+});
+
+test('an exact snapshot does not give a running run a rate-limit deadline', () => {
+  const state = withRuns(['1']);
+  const next = applyUsageObservation(state, exact(91, 3_000), config);
+  assert.equal(next.runs['1'].state, 'RUNNING');
+  assert.equal(next.runs['1'].rateLimitedUntil ?? null, null);
+});
+
 test('exact snapshot clears escalated quota backoff', () => {
   const state = withRuns(['1']);
   state.runs['1'].quotaRejections = { consecutive: 3, backoffLevel: 1, nextProbeAt: 50_000, lastNotifiedAt: 10_000 };

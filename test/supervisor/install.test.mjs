@@ -4,6 +4,8 @@ import test from 'node:test';
 import {
   installSupervisor,
   patchStatuslineSettings,
+  preflightClaude,
+  repairSupervisor,
   restoreStatuslineSettings,
   statusSupervisor,
   uninstallSupervisor,
@@ -78,10 +80,51 @@ test('repeated setup and uninstall are idempotent through injected platform oper
   assert.ok(calls.includes('uninstall-scheduler'));
 });
 
+test('a missing Claude CLI reports the documented repairable reason', async () => {
+  const notFound = async () => { throw Object.assign(new Error('Command failed: where.exe claude.exe'), { code: 1 }); };
+  await assert.rejects(() => preflightClaude('win32', { execFile: notFound }), /claude-cli-missing/);
+
+  const foundNothing = async () => ({ stdout: '\r\n' });
+  await assert.rejects(() => preflightClaude('win32', { execFile: foundNothing }), /claude-cli-missing/);
+});
+
+test('an unauthenticated Claude CLI reports the documented repairable reason', async () => {
+  const execFile = async (file) => (file === 'where.exe'
+    ? { stdout: 'C:\\Tools\\claude.exe\r\n' }
+    : { stdout: JSON.stringify({ loggedIn: false }) });
+  await assert.rejects(() => preflightClaude('win32', { execFile }), /claude-auth-missing/);
+});
+
+test('preflight returns the located CLI when it is present and authenticated', async () => {
+  const execFile = async (file) => (file === 'where.exe'
+    ? { stdout: 'C:\\Tools\\claude.exe\r\n' }
+    : { stdout: JSON.stringify({ loggedIn: true, subscriptionType: 'max' }) });
+  assert.deepEqual(await preflightClaude('win32', { execFile }), {
+    claudePath: 'C:\\Tools\\claude.exe', authenticated: true,
+  });
+});
+
+test('repair refreshes the worker and scheduler without re-wrapping the status line', async () => {
+  const calls = [];
+  const deps = installDeps({ copyStable: async () => calls.push('copy') });
+  const { state } = deps;
+  await installSupervisor(deps);
+  const original = state.record;
+  state.registered = false;
+
+  const result = await repairSupervisor(deps);
+  assert.equal(result.code, 'action:supervisor-repaired');
+  assert.equal(state.registered, true, 'repair must re-register a scheduler that went missing');
+  assert.equal(calls.filter((c) => c === 'copy').length, 2, 'repair must refresh the stable worker copy');
+  assert.deepEqual(state.record, original, 'repair must not overwrite the recorded previous status line');
+  assert.equal(state.settings.statusLine.command.match(/afk-supervisor:/g).length, 1);
+});
+
 test('Claude preflight accepts authenticated status without retaining identity fields', () => {
   const claudePath = process.platform === 'win32' ? 'C:\\Tools\\claude.exe' : '/opt/claude';
   assert.deepEqual(validateClaudeStatus(claudePath, JSON.stringify({ loggedIn: true, identity: 'private-value', subscriptionType: 'max' })), {
     claudePath, authenticated: true,
   });
-  assert.throws(() => validateClaudeStatus(claudePath, JSON.stringify({ loggedIn: false })), /authentication missing/);
+  assert.throws(() => validateClaudeStatus(claudePath, JSON.stringify({ loggedIn: false })), /claude-auth-missing/);
+  assert.throws(() => validateClaudeStatus('claude.exe', '{}'), /claude-cli-missing/);
 });

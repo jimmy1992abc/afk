@@ -35,6 +35,20 @@ test('recovery run rejects a ledger outside its working directory', () => {
   }), /ledger path/);
 });
 
+test('recovery run rejects a session ID the rest of the supervisor would refuse', () => {
+  const cwd = process.platform === 'win32' ? 'C:\\repo' : '/repo';
+  const ledgerPath = process.platform === 'win32' ? 'C:\\repo\\.afk\\afk-ledger.md' : '/repo/.afk/afk-ledger.md';
+  const refused = [
+    '00000000-0-0-0-0-0-0-0-0-0-0-0-0-0-0',   // hyphens anywhere
+    'deadbeef-aaaa-aaaa-aaaa-aaaaaaaaaaaa',   // no UUID version or variant
+    '00000000-0000-0000-0000-000000000000',   // nil
+  ];
+  for (const sessionId of refused) {
+    assert.throws(() => validateRecoveryRun({ sessionId, cwd, ledgerPath }), /session ID/, sessionId);
+  }
+  assert.doesNotThrow(() => validateRecoveryRun({ sessionId: run.sessionId, cwd, ledgerPath }));
+});
+
 test('classifies only the wire-visible quota retry frame', () => {
   assert.deepEqual(classifyStreamFrame({ type: 'system', subtype: 'api_retry', error: 'rate_limit', error_status: 429, attempt: 1, max_retries: 10 }), { kind: 'quota', status: 429 });
   assert.equal(classifyStreamFrame({ type: 'system', subtype: 'api_error', error: { rate_limits: { resets_at: 2_000 } } }), null);

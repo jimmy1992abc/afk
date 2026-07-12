@@ -87,9 +87,15 @@ export function applyUsageObservation(state, observation, config) {
   if (newThreshold || replacesEstimate) {
     for (const [id, run] of Object.entries(next.runs)) {
       if (!RECOVERABLE.has(run.state)) continue;
-      if (newThreshold || run.scheduleConfidence === 'estimated') {
-        next.runs[id] = scheduleRun({ ...run, runId: run.runId ?? id }, resetAt, 'exact', config);
-      }
+      if (!newThreshold && run.scheduleConfidence !== 'estimated') continue;
+      const scheduled = scheduleRun({ ...run, runId: run.runId ?? id }, resetAt, 'exact', config);
+      // A rate-limited run also carries its own reset deadline, which the
+      // selector consults whenever its schedule is no longer pending. Leaving it
+      // on an estimate while the schedule became exact would let a stale
+      // deadline decide when the run is due.
+      next.runs[id] = run.state === 'RATE_LIMITED'
+        ? { ...scheduled, rateLimitedUntil: resetAt, resetConfidence: 'exact' }
+        : scheduled;
     }
   }
   if (exact && Number.isFinite(resetAt)) {
