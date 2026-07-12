@@ -53,6 +53,48 @@ test('first successful supervisor response establishes anchor and clears quota e
   assert.equal(next.runs['run-1'].quotaRejections.nextProbeAt, null);
 });
 
+test('window anchor uses the request start time, not the finalize time', () => {
+  const current = state();
+  const startedAt = now - 10_800;
+  const next = finalizeAttempt(current, 'run-1', 'token-1', { kind: 'success', startedAt }, now, defaultConfig());
+  assert.equal(next.usage.windowAnchorAt, startedAt);
+  assert.equal(next.usage.fiveHourResetAt, startedAt + 18_000);
+});
+
+test('success clears the rate-limit timestamps of the recovered run', () => {
+  const current = state(run({ firstRateLimitedAt: now - 18_000, rateLimitedUntil: now, resetConfidence: 'estimated' }));
+  const next = finalizeAttempt(current, 'run-1', 'token-1', { kind: 'success', startedAt: now }, now, defaultConfig());
+  assert.equal(next.runs['run-1'].firstRateLimitedAt, null);
+  assert.equal(next.runs['run-1'].rateLimitedUntil, null);
+});
+
+test('success never reschedules another run', () => {
+  const current = state();
+  current.runs['run-2'] = run({
+    runId: 'run-2', sessionId: '00000000-0000-4000-8000-000000000002', state: 'RUNNING',
+    scheduleState: null, lease: { attemptId: null, token: null, lastRenewedAt: null, expiresAt: null },
+  });
+  const untouched = structuredClone(current.runs['run-2']);
+  const next = finalizeAttempt(current, 'run-1', 'token-1', { kind: 'success', startedAt: now }, now, defaultConfig());
+  assert.deepEqual(next.runs['run-2'], untouched);
+});
+
+test('a fresh window anchor is consumed for the quota estimate', () => {
+  const current = state();
+  current.usage.windowAnchorAt = now - 3_600;
+  const next = finalizeAttempt(current, 'run-1', 'token-1', { kind: 'quota' }, now, defaultConfig());
+  assert.equal(next.runs['run-1'].rateLimitedUntil, now - 3_600 + 18_000);
+  assert.equal(next.runs['run-1'].resetConfidence, 'estimated');
+});
+
+test('a stale first-rate-limit timestamp never schedules a resume in the past', () => {
+  const current = state(run({ firstRateLimitedAt: now - 6 * 3_600 }));
+  const next = finalizeAttempt(current, 'run-1', 'token-1', { kind: 'quota' }, now, defaultConfig());
+  const item = next.runs['run-1'];
+  assert.ok(item.rateLimitedUntil > now, `rateLimitedUntil ${item.rateLimitedUntil} must not be in the past`);
+  assert.ok(item.scheduledResumeAt > now, `scheduledResumeAt ${item.scheduledResumeAt} must not be in the past`);
+});
+
 test('quota result reschedules without consuming ordinary recovery attempts', () => {
   const current = state();
   const next = finalizeAttempt(current, 'run-1', 'token-1', { kind: 'quota' }, now, defaultConfig());

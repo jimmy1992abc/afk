@@ -81,6 +81,43 @@ test('register resolves a recent SessionStart observation for the cwd', async ()
   assert.equal(h.state.runs.one.sessionId, '00000000-0000-4000-8000-000000000001');
 });
 
+const REGISTER = ['register', '--run-id', 'one', '--session-id', '00000000-0000-4000-8000-000000000001',
+  '--cwd', 'C:\\repo', '--ledger', 'C:\\repo\\.afk\\afk-ledger.md'];
+
+test('re-registering a run preserves its recovery state', async () => {
+  const h = harness();
+  await runCli(REGISTER, h.deps);
+  const state = h.state;
+  state.runs.one = {
+    ...state.runs.one, state: 'RATE_LIMITED',
+    firstRateLimitedAt: 15_000, rateLimitedUntil: 33_000, resetConfidence: 'estimated',
+    scheduledResumeAt: 33_100, scheduledResetAt: 33_000, scheduleState: 'pending', scheduleConfidence: 'estimated',
+    quotaRejections: { consecutive: 2, backoffLevel: 0, nextProbeAt: null, lastNotifiedAt: null },
+    retry: { attempts: 1, nextAttemptAt: 21_000 },
+  };
+  h.state = state;
+  await runCli(REGISTER, h.deps);
+  const item = h.state.runs.one;
+  assert.equal(item.firstRateLimitedAt, 15_000);
+  assert.equal(item.rateLimitedUntil, 33_000);
+  assert.equal(item.scheduledResumeAt, 33_100);
+  assert.equal(item.scheduleState, 'pending');
+  assert.equal(item.quotaRejections.consecutive, 2);
+  assert.equal(item.retry.attempts, 1);
+});
+
+test('a run registered after the threshold crossing inherits the current schedule', async () => {
+  const h = harness();
+  const state = defaultState();
+  state.usage = { ...state.usage, confidence: 'exact', fiveHourResetAt: 40_000, thresholdResetAt: 40_000 };
+  h.state = state;
+  await runCli(REGISTER, h.deps);
+  const item = h.state.runs.one;
+  assert.equal(item.scheduledResetAt, 40_000);
+  assert.ok(item.scheduledResumeAt >= 40_060 && item.scheduledResumeAt <= 40_180);
+  assert.equal(item.scheduleState, 'pending');
+});
+
 test('unknown commands and missing runs emit distinct errors', async () => {
   const h = harness();
   assert.equal((await runCli(['unknown'], h.deps)).code, 2);

@@ -16,6 +16,7 @@ export function defaultConfig() {
     heartbeatStaleSeconds: 1500,
     overdueAutoActivationSeconds: 7200,
     maxWindowActivationsPer24Hours: 4,
+    sevenDaySuppressionPercentage: 99,
     maxRecoveryAttempts: 3,
     maxConsecutiveQuotaRejections: 3,
     quotaEscalationBaseSeconds: 86400,
@@ -46,7 +47,7 @@ export function validateConfig(value) {
   for (const key of [
     'thresholdPercentage', 'thresholdJitterMinSeconds', 'thresholdJitterMaxSeconds',
     'graceSeconds', 'heartbeatStaleSeconds', 'overdueAutoActivationSeconds',
-    'maxWindowActivationsPer24Hours', 'maxRecoveryAttempts',
+    'maxWindowActivationsPer24Hours', 'sevenDaySuppressionPercentage', 'maxRecoveryAttempts',
     'maxConsecutiveQuotaRejections', 'quotaEscalationBaseSeconds',
     'quotaEscalationMaxSeconds', 'recoveryAttemptTimeoutSeconds',
     'leaseRenewalSeconds', 'leaseMissedRenewals', 'maxConcurrentInvocations',
@@ -54,6 +55,7 @@ export function validateConfig(value) {
     'registrationRecoveryMaxAgeSeconds',
   ]) positiveInteger(config[key], key);
   if (config.thresholdPercentage > 100) throw new TypeError('thresholdPercentage must be at most 100');
+  if (config.sevenDaySuppressionPercentage > 100) throw new TypeError('sevenDaySuppressionPercentage must be at most 100');
   if (config.thresholdJitterMaxSeconds < config.thresholdJitterMinSeconds) {
     throw new TypeError('threshold jitter range is invalid');
   }

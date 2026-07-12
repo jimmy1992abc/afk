@@ -13,10 +13,18 @@ function unixSeconds(value, observedAt) {
   return value >= lowerBound && value <= upperBound ? value : null;
 }
 
+// Status-line payloads carry no rate limits before the session's first API
+// response, and never for API-key or third-party-provider sessions. Such a
+// payload observes nothing, so it must not be presented as an exact reading.
+export function hasRateLimitData(snapshot) {
+  return Number.isFinite(snapshot?.fiveHourResetAt) || Number.isFinite(snapshot?.fiveHourUsedPercentage)
+    || Number.isFinite(snapshot?.sevenDayResetAt) || Number.isFinite(snapshot?.sevenDayUsedPercentage);
+}
+
 export function parseStatuslineSnapshot(value, observedAt = Math.floor(Date.now() / 1000)) {
   const five = value?.rate_limits?.five_hour;
   const seven = value?.rate_limits?.seven_day;
-  return {
+  const snapshot = {
     fiveHourResetAt: unixSeconds(five?.resets_at, observedAt),
     fiveHourUsedPercentage: finiteInRange(five?.used_percentage, 0, 100),
     sevenDayResetAt: unixSeconds(seven?.resets_at, observedAt),
@@ -25,6 +33,8 @@ export function parseStatuslineSnapshot(value, observedAt = Math.floor(Date.now(
     source: 'statusline',
     confidence: 'exact',
   };
+  if (!hasRateLimitData(snapshot)) snapshot.confidence = 'none';
+  return snapshot;
 }
 
 export function stableJitterSeconds(run, resetAt, config) {
@@ -35,7 +45,7 @@ export function stableJitterSeconds(run, resetAt, config) {
   return config.thresholdJitterMinSeconds + (digest.readUInt32BE(0) % width);
 }
 
-function scheduleRun(run, resetAt, confidence, config) {
+export function scheduleRun(run, resetAt, confidence, config) {
   const jitter = stableJitterSeconds(run, resetAt, config);
   return {
     ...run,
@@ -48,6 +58,7 @@ function scheduleRun(run, resetAt, confidence, config) {
 
 export function applyUsageObservation(state, observation, config) {
   if (!observation || !Number.isFinite(observation.observedAt)) return state;
+  if (!hasRateLimitData(observation)) return state;
   if (Number.isFinite(state.usage.lastImportedObservationAt)
       && observation.observedAt < state.usage.lastImportedObservationAt) return state;
 
@@ -87,7 +98,11 @@ export function applyUsageObservation(state, observation, config) {
       run.quotaRejections = { consecutive: 0, backoffLevel: 0, nextProbeAt: null, lastNotifiedAt: null };
     }
   }
-  if (observation.sevenDayUsedPercentage === 100 && Number.isFinite(observation.sevenDayResetAt)) {
+  // used_percentage is a float derived from a utilization ratio, so an exhausted
+  // weekly window can report just under 100.
+  if (Number.isFinite(observation.sevenDayUsedPercentage)
+      && observation.sevenDayUsedPercentage >= config.sevenDaySuppressionPercentage
+      && Number.isFinite(observation.sevenDayResetAt)) {
     next.usage.sevenDaySuppressedUntil = observation.sevenDayResetAt + config.graceSeconds;
   }
   return next;

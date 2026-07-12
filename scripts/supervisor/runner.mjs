@@ -39,13 +39,24 @@ function quotaReset(state, run, now, config) {
   return { resetAt: (run.firstRateLimitedAt ?? now) + WINDOW_SECONDS, confidence: 'estimated' };
 }
 
+// A timestamp from an earlier limit episode would place the upper bound in the
+// past and make the run immediately re-probable, so only a same-window value is
+// carried forward.
+function currentRateLimitStart(run, now) {
+  const previous = run.firstRateLimitedAt;
+  return Number.isFinite(previous) && now - previous < WINDOW_SECONDS ? previous : now;
+}
+
 export function finalizeAttempt(state, runId, token, result, now, config) {
   const run = state.runs[runId];
   if (!run || run.lease?.token !== token) return state;
   const next = structuredClone(state);
   const current = next.runs[runId];
   if (result.kind === 'success') {
-    next.usage.windowAnchorAt = allowedAnchor(next.usage, now);
+    // The five-hour window opens at the first request, not when the run ends, so
+    // the anchor is the moment the runner started rather than the finalize time.
+    const anchorAt = Number.isFinite(result.startedAt) ? result.startedAt : now;
+    next.usage.windowAnchorAt = allowedAnchor(next.usage, anchorAt);
     if (next.usage.confidence !== 'exact') {
       next.usage.fiveHourResetAt = next.usage.windowAnchorAt + WINDOW_SECONDS;
       next.usage.source = 'window-anchor';
@@ -55,6 +66,7 @@ export function finalizeAttempt(state, runId, token, result, now, config) {
     next.runs[runId] = {
       ...current,
       state: 'RUNNING', lastHeartbeatAt: now, updatedAt: now,
+      firstRateLimitedAt: null, rateLimitedUntil: null, resetConfidence: 'unknown',
       lease: clearLease(), retry: { attempts: 0, nextAttemptAt: null },
       quotaRejections: resetQuota(), scheduleState: current.scheduleState === 'leased' ? 'handled' : current.scheduleState,
       lastResult: 'result:success',
@@ -62,7 +74,7 @@ export function finalizeAttempt(state, runId, token, result, now, config) {
     return next;
   }
   if (result.kind === 'quota') {
-    const firstRateLimitedAt = current.firstRateLimitedAt ?? now;
+    const firstRateLimitedAt = currentRateLimitStart(current, now);
     const reset = quotaReset(next, { ...current, firstRateLimitedAt }, now, config);
     const consecutive = (current.quotaRejections?.consecutive ?? 0) + 1;
     let backoffLevel = current.quotaRejections?.backoffLevel ?? 0;
@@ -200,13 +212,15 @@ async function main() {
   const activationCwd = join(root, 'activation-work');
   await mkdir(activationCwd, { recursive: true });
   const config = await new ConfigStore(root).read();
+  const now = () => Math.floor(Date.now() / 1000);
   const result = await runAttempt(attemptId, {
-    store: new StateStore(root), config,
-    now: () => Math.floor(Date.now() / 1000),
+    store: new StateStore(root), config, now,
     runClaude: (attempt) => executeClaude(attempt, {
+      now,
       startClaude: (value) => startClaudeProcess(value, { executable: config.claudePath }),
     }),
     runActivation: (attempt) => executeActivation(attempt, {
+      now,
       startActivation: (value) => startActivationProcess(value, { executable: config.claudePath, cwd: activationCwd }),
     }),
     setInterval, clearInterval, notify: createNotifier({ root }),

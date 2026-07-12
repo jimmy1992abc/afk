@@ -81,6 +81,8 @@ export function startActivationProcess(attempt, options = {}) {
 }
 
 export async function runClaude(attempt, deps = {}) {
+  const now = deps.now ?? (() => Math.floor(Date.now() / 1000));
+  const startedAt = now();
   const processHandle = (deps.startClaude ?? startClaudeProcess)(attempt);
   const consume = async () => {
     let sawSuccess = false;
@@ -105,16 +107,16 @@ export async function runClaude(attempt, deps = {}) {
   if (timeoutId) clearTimeout(timeoutId);
   if (streamed.kind === 'quota') {
     await processHandle.kill();
-    return streamed;
+    return { ...streamed, startedAt };
   }
   if (streamed.kind === 'timeout') {
     await processHandle.kill();
-    return { kind: 'failure', reason: 'action-timeout' };
+    return { kind: 'failure', reason: 'action-timeout', startedAt };
   }
   const completed = await processHandle.completion;
   return streamed.sawSuccess && completed.code === 0
-    ? { kind: 'success' }
-    : { kind: 'failure', code: completed.code, reason: completed.error?.code ?? completed.signal ?? 'process-exit' };
+    ? { kind: 'success', startedAt }
+    : { kind: 'failure', code: completed.code, reason: completed.error?.code ?? completed.signal ?? 'process-exit', startedAt };
 }
 
 export async function runActivation(attempt, deps = {}) {

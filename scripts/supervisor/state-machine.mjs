@@ -40,6 +40,11 @@ function orderedRuns(state) {
 
 export function selectCandidate(state, inputs, config, now) {
   if (!config.enabled) return { kind: 'skip', code: 'skip:disabled' };
+  // A known-exhausted weekly window suppresses recovery probes and empty-window
+  // activation alike; neither can succeed before the weekly reset.
+  if (Number.isFinite(state.usage.sevenDaySuppressedUntil) && state.usage.sevenDaySuppressedUntil > now) {
+    return { kind: 'skip', code: 'skip:seven-day-limit' };
+  }
   const liveLeases = Object.values(state.runs)
     .filter((run) => Number.isFinite(run.lease?.expiresAt) && run.lease.expiresAt > now).length;
   if (liveLeases >= config.maxConcurrentInvocations) {
@@ -64,9 +69,6 @@ export function selectCandidate(state, inputs, config, now) {
         : { kind: 'skip', code: 'skip:overdue-window' };
     }
     return { kind: 'activate', code: 'action:activate-window', resetAt };
-  }
-  if (Number.isFinite(state.usage.sevenDaySuppressedUntil) && state.usage.sevenDaySuppressedUntil > now) {
-    return { kind: 'skip', code: 'skip:seven-day-limit' };
   }
 
   let nearest = null;

@@ -9,6 +9,7 @@ import { createInstallDeps, installSupervisor, preflightClaude, repairSupervisor
 import { main as reconcileMain } from './supervisor.mjs';
 import { transitionRun } from './state-machine.mjs';
 import { StateStore } from './state-store.mjs';
+import { scheduleRun } from './usage-provider.mjs';
 
 const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -77,20 +78,40 @@ async function register(args, deps) {
   }
   await deps.stateStore.update((state) => {
     const existing = state.runs[args.runId];
-    state.runs[args.runId] = {
-      ...existing,
+    // Registration is repeated by the AFK lifecycle, so it may only refresh
+    // identity and liveness. Recovery state — schedules, quota backoff, retry
+    // counters — belongs to the supervisor and must survive re-registration.
+    const merged = {
+      ...(existing ?? newRunRecovery()),
       runId: args.runId, sessionId, cwd: args.cwd, ledgerPath: args.ledger,
-      state: existing?.state ?? 'RUNNING', lastHeartbeatAt: deps.now(), nextExpectedTickAt: deps.now() + 900,
-      firstRateLimitedAt: null, rateLimitedUntil: null, resetConfidence: 'unknown',
-      scheduledResumeAt: null, scheduledResetAt: null, scheduleState: null, scheduleConfidence: null,
-      lease: { attemptId: null, token: null, lastRenewedAt: null, expiresAt: null },
-      retry: { attempts: 0, nextAttemptAt: null },
-      quotaRejections: { consecutive: 0, backoffLevel: 0, nextProbeAt: null, lastNotifiedAt: null },
+      state: existing?.state ?? 'RUNNING',
+      lastHeartbeatAt: deps.now(), nextExpectedTickAt: deps.now() + 900,
       updatedAt: deps.now(),
     };
+    state.runs[args.runId] = existing
+      ? merged
+      : inheritThresholdSchedule(merged, state.usage, deps.currentConfig, deps.now());
     return state;
   });
   return emit(deps, 'action:run-registered');
+}
+
+function newRunRecovery() {
+  return {
+    firstRateLimitedAt: null, rateLimitedUntil: null, resetConfidence: 'unknown',
+    scheduledResumeAt: null, scheduledResetAt: null, scheduleState: null, scheduleConfidence: null,
+    lease: { attemptId: null, token: null, lastRenewedAt: null, expiresAt: null },
+    retry: { attempts: 0, nextAttemptAt: null },
+    quotaRejections: { consecutive: 0, backoffLevel: 0, nextProbeAt: null, lastNotifiedAt: null },
+  };
+}
+
+// A run registered after the 90% crossing but before the reset joins the queue
+// for the reset that is already armed.
+function inheritThresholdSchedule(run, usage, config, now) {
+  const resetAt = usage.thresholdResetAt;
+  if (usage.confidence !== 'exact' || !Number.isFinite(resetAt) || resetAt <= now) return run;
+  return scheduleRun(run, resetAt, 'exact', config);
 }
 
 async function transition(args, deps) {

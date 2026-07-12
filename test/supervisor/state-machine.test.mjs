@@ -45,6 +45,15 @@ test('stale anchor falls back to first-rate-limit upper bound', () => {
   assert.equal(decision.dueAt, 28_000 + config.graceSeconds);
 });
 
+test('seven-day suppression also blocks empty-window activation', () => {
+  const state = defaultState();
+  state.usage = {
+    ...state.usage, confidence: 'exact', fiveHourResetAt: 19_000, sevenDaySuppressedUntil: 500_000,
+  };
+  const decision = selectCandidate(state, {}, { ...config, windowMode: 'auto' }, now);
+  assert.equal(decision.code, 'skip:seven-day-limit');
+});
+
 test('post-reset heartbeat satisfies a due schedule', () => {
   const item = run({ scheduledResetAt: 19_000, scheduledResumeAt: 19_100, scheduleState: 'pending' });
   const decision = selectCandidate(stateWith(item), { heartbeats: { 'run-1': 19_001 } }, config, now);

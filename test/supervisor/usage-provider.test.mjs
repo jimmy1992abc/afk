@@ -107,6 +107,30 @@ test('exact snapshot clears escalated quota backoff', () => {
   assert.deepEqual(next.runs['1'].quotaRejections, { consecutive: 0, backoffLevel: 0, nextProbeAt: null, lastNotifiedAt: null });
 });
 
+test('a status-line payload without rate limits is not an exact observation', () => {
+  assert.notEqual(parseStatuslineSnapshot({ session_id: 'x' }, 1_000).confidence, 'exact');
+});
+
+test('an empty status-line payload cannot relabel an estimated window anchor as exact', () => {
+  const state = withRuns(['1']);
+  state.usage = {
+    ...state.usage, fiveHourResetAt: 5_000, observedAt: 900,
+    source: 'window-anchor', confidence: 'estimated',
+  };
+  const next = applyUsageObservation(state, parseStatuslineSnapshot({}, 1_000), config);
+  assert.equal(next.usage.confidence, 'estimated');
+  assert.equal(next.usage.source, 'window-anchor');
+  assert.equal(next.usage.fiveHourResetAt, 5_000);
+});
+
+test('a nearly exhausted seven-day window still suppresses recovery', () => {
+  const state = withRuns(['1']);
+  const next = applyUsageObservation(state, {
+    ...exact(50, 3_000), sevenDayUsedPercentage: 99.8, sevenDayResetAt: 400_000,
+  }, config);
+  assert.equal(next.usage.sevenDaySuppressedUntil, 400_000 + config.graceSeconds);
+});
+
 test('stable jitter is deterministic and inside the inclusive range', () => {
   const item = run('1');
   const first = stableJitterSeconds(item, 2_000, config);
