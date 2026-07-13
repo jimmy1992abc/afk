@@ -42,7 +42,7 @@ test('an npm-installed Claude is a .cmd shim, which cannot be spawned directly',
   // at its first space and every setup and activation for that user failed.
   const calls = [];
   const fake = (file, args, options) => { calls.push({ file, args, options }); return {}; };
-  const shim = String.raw`C:\Users\Jim my\npm\claude.cmd`;
+  const shim = String.raw`C:\Program Files\claude\claude.cmd`;
 
   spawnClaude(shim, ['--print', 'hi'], { spawn: fake });
   assert.match(calls[0].file, /cmd\.exe$/i);
