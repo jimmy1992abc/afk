@@ -8,12 +8,24 @@ const execFile = promisify(execFileCallback);
 
 // Fired and forgotten. The pass has exactly one thing worth interrupting a
 // human for: an activation that gave up. Everything else is in the log.
+//
+// Best-effort all the way down: on a platform with no notification adapter
+// (Linux is not an install target, but the pass itself runs fine there) this
+// degrades to a no-op instead of throwing — a missing toast must never be the
+// reason a pass dies, which is exactly what an eager adapter constructor did.
 export function createNotifier(options = {}) {
   const platform = options.platform ?? process.platform;
   const join = platform === 'win32' ? win32.join : posix.join;
-  const adapter = options.adapter ?? platformAdapter(platform, {
-    execFile: (file, args) => execFile(file, args, { windowsHide: true }),
-  });
+  let adapter = options.adapter ?? null;
+  if (!adapter) {
+    try {
+      adapter = platformAdapter(platform, {
+        execFile: (file, args) => execFile(file, args, { windowsHide: true }),
+      });
+    } catch {
+      return async () => {};
+    }
+  }
   return async (title, message) => adapter.notify(title, message, {
     notifyScript: join(options.root, 'worker', 'notify-windows.ps1'),
   });

@@ -24,3 +24,13 @@ test('an idle pass runs end-to-end against real files', async () => {
   const result = await runOnce(root);
   assert.equal(result.code, 'skip:no-limit-observed');
 });
+
+test('a platform with no notifier still runs the pass', async () => {
+  // CI caught this: Linux is not an install target, but the pass runs there —
+  // and an eagerly-constructed notification adapter threw "unsupported
+  // platform" before the pass could do anything at all. A missing toast must
+  // never be the reason a pass dies.
+  const { createNotifier } = await import('../../scripts/supervisor/notifier.mjs');
+  const notify = createNotifier({ platform: 'linux', root: '/tmp/afk' });
+  await assert.doesNotReject(() => notify('title', 'message'));
+});
