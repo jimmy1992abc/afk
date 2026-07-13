@@ -20,25 +20,28 @@ function root(argv) {
 }
 
 export async function runOnce(data) {
-  const config = await new ConfigStore(data).read();
-  const files = paths(data);
-  const result = await runPass({
-    config,
-    now: () => Math.floor(Date.now() / 1000),
-    readObservation: () => readJson(files.observation, null),
-    readStopFailure: () => readJson(files.stopFailure, null),
-    readState: () => readState(data),
-    writeState: (state) => writeState(data, state),
-    activate: () => runActivation({
-      executable: config.claudePath ?? undefined,
-      timeoutSeconds: config.activationTimeoutSeconds,
-      cwd: data,
-    }),
-    notify: createNotifier({ root: data }),
-  }).catch((error) => (
-    // A pass that dies must still name what happened: letting it escape gives an
-    // unhandled rejection with no log line, and the scheduler reports success
-    // for ever while the activator does nothing.
+  // A pass that dies must still name what happened: letting anything escape —
+  // including a corrupt config, which fails BEFORE the pass proper — gives an
+  // unhandled rejection with no log line, and the scheduler reports success for
+  // ever while the activator does nothing.
+  const result = await (async () => {
+    const config = await new ConfigStore(data).read();
+    const files = paths(data);
+    return runPass({
+      config,
+      now: () => Math.floor(Date.now() / 1000),
+      readObservation: () => readJson(files.observation, null),
+      readStopFailure: () => readJson(files.stopFailure, null),
+      readState: () => readState(data),
+      writeState: (state) => writeState(data, state),
+      activate: () => runActivation({
+        executable: config.claudePath ?? undefined,
+        timeoutSeconds: config.activationTimeoutSeconds,
+        cwd: data,
+      }),
+      notify: createNotifier({ root: data }),
+    });
+  })().catch((error) => (
     { code: 'error:pass-failed', message: String(error?.message ?? error) }
   ));
   await appendBoundedLog(join(data, 'logs', 'supervisor.log'), {

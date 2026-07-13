@@ -112,7 +112,22 @@ export async function runActivation(deps = {}) {
     await handle.kill();
     return { kind: 'failure', reason: 'activation-timeout', startedAt };
   }
-  const completed = await handle.completion;
+  // The stream has ended; the exit must not be waited on for ever. Windows is
+  // bailed out by the task's execution limit, but launchd has none and will not
+  // start a new instance while one runs — a child that half-closes stdout
+  // without exiting would silently disable the supervisor until reboot. A child
+  // that already printed its success frame did the work: killing the husk does
+  // not undo the request, and calling it a failure would burn another one.
+  const grace = deps.exitGrace
+    ? deps.exitGrace()
+    : new Promise((resolve) => { setTimeout(resolve, 10_000, 'hung').unref?.(); });
+  const completed = await Promise.race([handle.completion, grace.then(() => null)]);
+  if (completed === null) {
+    await handle.kill();
+    return streamed.sawSuccess
+      ? { kind: 'success', startedAt }
+      : { kind: 'failure', reason: 'exit-hung', startedAt };
+  }
   return streamed.sawSuccess && completed.code === 0
     ? { kind: 'success', startedAt }
     : { kind: 'failure', reason: completed.error?.code ?? completed.signal ?? 'process-exit', startedAt };

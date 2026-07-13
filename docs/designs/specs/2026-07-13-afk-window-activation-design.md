@@ -60,7 +60,8 @@ Three single-writer files under the per-user data root, no locks:
 - `latest-stopfailure.json` — written only by the StopFailure hook.
 - `state.json` — written only by the supervisor pass
   (`{handledResetAt, windowAnchorAt, attempts[], nextAttemptAt, lastResult,
-  notifiedResetAt}`).
+  notifiedAt}`). Attempts belong to a reset by time (`at >= resetAt`), not by
+  resetAt equality — a refined estimate must not forget the attempts cap.
 
 A scheduled task (Task Scheduler / launchd, every minute, `StartWhenAvailable`
 so a sleep is caught up on wake) runs one pass:
@@ -91,11 +92,25 @@ by the afk skill to aim its next tick), `run-once`.
 ## Security
 
 - The supervisor never inspects or resumes sessions and reads no transcripts.
-- Claude and the notifier are spawned without shell interpolation.
-- Mutable state cannot supply commands, flags, or prompts.
+- Claude and the notifier are spawned without shell interpolation; the
+  activation's flags and prompt are compile-time constants.
+- Observation and state files cannot supply commands, flags, or prompts. The
+  chained status-line command and the Claude path do come from configuration
+  files — both same-user, mode 0600, the same trust level as `settings.json`
+  itself, so they grant nothing their owner does not already have.
 - Malformed observation input never erases previous valid state.
 - Scheduler installation requires the explicit `setup` command; uninstall
   restores `settings.json` byte-identically when the user has not changed it.
+
+## Known limitations
+
+- Evidence is account-blind: observations carry no account identity, so with
+  multiple Claude accounts on one machine (separate `CLAUDE_CONFIG_DIR`s) the
+  activation fires as whichever account the CLI resolves by default, and a
+  success settles the reset even if the account that was actually limited
+  stays closed. Single-account machines — the normal case — are unaffected.
+- The supervisor does not resume anything after a reboot or sleep; the
+  in-session tick owns resumption, and dies with its host. By design.
 
 ## Test strategy
 

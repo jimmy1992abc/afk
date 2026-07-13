@@ -23,7 +23,7 @@ export function resolveReset({ observation, stopFailure, state, config }) {
     candidates.push({ resetAt: obsReset, confidence: 'exact' });
   }
   if (limitedAt !== null) {
-    if (obsReset !== null && obsReset > limitedAt && obsReset <= limitedAt + WINDOW_SECONDS + config.graceSeconds) {
+    if (obsReset !== null && obsReset >= limitedAt && obsReset <= limitedAt + WINDOW_SECONDS + config.graceSeconds) {
       candidates.push({ resetAt: obsReset, confidence: 'exact' });
     } else {
       const anchor = Number.isFinite(state?.windowAnchorAt) ? state.windowAnchorAt : null;
@@ -39,8 +39,13 @@ export function resolveReset({ observation, stopFailure, state, config }) {
   return candidates[0];
 }
 
+// Attempts that belong to this reset: everything fired at or after it. Keying by
+// resetAt equality forgot the cap whenever the estimate refined between passes —
+// thirty seconds of drift and four spent attempts read as zero. Time separates
+// episodes cleanly instead: consecutive resets are at least one full window
+// apart, so an earlier episode's attempts always predate the next reset.
 function attemptsFor(state, resetAt) {
-  return state.attempts.filter((attempt) => attempt.resetAt === resetAt);
+  return state.attempts.filter((attempt) => attempt.at >= resetAt);
 }
 
 // May an activation fire right now? Pure, and the only place that answers.
@@ -101,12 +106,13 @@ export async function runPass(deps) {
     await deps.writeState({ ...state, handledResetAt: decision.resetAt, nextAttemptAt: null, lastResult: 'skip:reset-stale' });
     return { code: 'skip:reset-stale', resetAt: decision.resetAt };
   }
-  if (decision.code === 'skip:attempts-exhausted' && state.notifiedResetAt !== decision.resetAt) {
+  const notifiedRecently = Number.isFinite(state.notifiedAt) && now - state.notifiedAt < WINDOW_SECONDS;
+  if (decision.code === 'skip:attempts-exhausted' && !notifiedRecently) {
     // Once per dead reset, not once per minute. The next real session will open
     // its own window; the operator just deserves to know this one never did.
     await deps.notify?.('AFK window activation gave up',
       `Activation for the reset at ${new Date(decision.resetAt * 1000).toISOString()} failed ${config.maxAttemptsPerReset} times. The next Claude session will open the window itself.`);
-    await deps.writeState({ ...state, notifiedResetAt: decision.resetAt });
+    await deps.writeState({ ...state, notifiedAt: now });
     return decision;
   }
   if (decision.code !== 'action:activate') return decision;

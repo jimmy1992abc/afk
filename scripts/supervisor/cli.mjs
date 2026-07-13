@@ -63,21 +63,28 @@ export async function runCli(argv, deps) {
   }
   if (command === 'next-reset') {
     // Consumed by the afk skill: a rate-limited tick aims its next wake-up just
-    // past this instead of waiting out the fixed interval.
+    // past this instead of waiting out the fixed interval. Only a FUTURE,
+    // still-unhandled reset is worth aiming at — reporting a past or settled one
+    // would point the tick "shortly after" an instant that already happened, and
+    // the tick would spin on immediate retries instead of keeping its cadence.
+    const state = await deps.readState();
     const target = resolveReset({
       observation: await deps.readObservation(),
       stopFailure: await deps.readStopFailure(),
-      state: await deps.readState(),
+      state,
       config,
     });
-    const state = await deps.readState();
+    const now = deps.now();
+    const aimable = target
+      && target.resetAt > now
+      && !(Number.isFinite(state.handledResetAt) && target.resetAt <= state.handledResetAt);
     deps.writeOutput(`${JSON.stringify({
-      resetAt: target?.resetAt ?? null,
-      confidence: target?.confidence ?? null,
+      resetAt: aimable ? target.resetAt : null,
+      confidence: aimable ? target.confidence : null,
       handledResetAt: state.handledResetAt,
-      now: deps.now(),
+      now,
     })}\n`);
-    return { code: target ? 0 : 1 };
+    return { code: aimable ? 0 : 1 };
   }
   if (command === 'run-once') {
     const result = await deps.runPass();

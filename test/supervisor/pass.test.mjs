@@ -125,10 +125,45 @@ test('an exhausted reset notifies the operator exactly once', async () => {
 
   assert.equal((await runPass(h.deps)).code, 'skip:attempts-exhausted');
   assert.equal(h.notifications.length, 1, 'the operator hears about a dead reset once');
-  assert.equal(h.state.notifiedResetAt, NOW - 200);
+  assert.equal(h.state.notifiedAt, NOW);
 
   assert.equal((await runPass(h.deps)).code, 'skip:attempts-exhausted');
   assert.equal(h.notifications.length, 1, '...not once per minute for ever');
+
+  // A drifting estimate must not re-arm it either: the suppression is by time,
+  // not by which resetAt the notification happened to be filed under.
+  const drifted = harness({
+    observation: { ...EXHAUSTED, fiveHourResetAt: NOW - 170 },
+    initial: state({ attempts: spent, notifiedAt: NOW - 60 }),
+  });
+  assert.equal((await runPass(drifted.deps)).code, 'skip:attempts-exhausted');
+  assert.equal(drifted.notifications.length, 0, 'a 30s refinement is the same dead reset');
+});
+
+test('a refined estimate does not forget the attempts cap', async () => {
+  // Attempts were keyed by exact resetAt equality, so thirty seconds of estimate
+  // drift between passes read four spent attempts as zero and the cap restarted.
+  // Attempts belong to a reset by TIME — consecutive resets are at least one full
+  // window apart, so everything fired at-or-after this reset is this reset's.
+  const spent = Array.from({ length: config.maxAttemptsPerReset }, () => ({ at: NOW - 60, resetAt: NOW - 200, result: 'quota' }));
+  const h = harness({
+    observation: { ...EXHAUSTED, fiveHourResetAt: NOW - 230 },   // refined by 30s
+    initial: state({ attempts: spent }),
+  });
+  assert.equal((await runPass(h.deps)).code, 'skip:attempts-exhausted');
+});
+
+test('an exact reading at the very moment of the failure still beats the estimate', async () => {
+  // The same-episode check used a strict `>`: at exact equality the exact reading
+  // lost to the +5h estimate via later-reset-wins, and activation ran up to five
+  // hours late on a boundary that real clocks do hit.
+  const target = resolveReset({
+    observation: { fiveHourResetAt: NOW, fiveHourUsedPercentage: null, observedAt: NOW },
+    stopFailure: { limitedAt: NOW },
+    state: state(),
+    config,
+  });
+  assert.deepEqual(target, { resetAt: NOW, confidence: 'exact' });
 });
 
 test('a pass with nothing to do writes nothing', async () => {

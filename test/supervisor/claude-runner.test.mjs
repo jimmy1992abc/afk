@@ -92,6 +92,36 @@ test('success needs both a success frame and a clean exit', async () => {
   assert.equal(failed.kind, 'failure');
 });
 
+test('a child that will not exit after its stream ends cannot wedge the pass', async () => {
+  // launchd has no execution time limit and will not start a new instance while
+  // one runs: a child that half-closes stdout without exiting would silently
+  // disable the supervisor until reboot. And a child that already printed its
+  // success frame DID the work — killing the husk does not undo the request,
+  // and calling it a failure would burn another one.
+  let killed = 0;
+  const hungAfterSuccess = await runActivation({
+    startActivation: () => ({
+      lines: lines([{ type: 'result', subtype: 'success' }]),
+      completion: new Promise(() => {}),          // never exits
+      kill: async () => { killed += 1; },
+    }),
+    exitGrace: async () => 'hung',
+  });
+  assert.equal(hungAfterSuccess.kind, 'success');
+  assert.equal(killed, 1, 'the husk is killed, not waited on');
+
+  const hungWithoutSuccess = await runActivation({
+    startActivation: () => ({
+      lines: lines(['garbage only']),
+      completion: new Promise(() => {}),
+      kill: async () => {},
+    }),
+    exitGrace: async () => 'hung',
+  });
+  assert.equal(hungWithoutSuccess.kind, 'failure');
+  assert.equal(hungWithoutSuccess.reason, 'exit-hung');
+});
+
 test('a hung activation is killed at the timeout', async () => {
   let killed = 0;
   async function* pending() { await new Promise(() => {}); }

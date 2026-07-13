@@ -30,9 +30,9 @@ export function defaultState() {
     attempts: [],
     nextAttemptAt: null,
     lastResult: null,
-    // The reset an attempts-exhausted notification was sent for, so the
-    // operator hears about each dead reset once, not once per minute.
-    notifiedResetAt: null,
+    // When the last attempts-exhausted notification went out; suppressed for a
+    // full window so the operator hears about a dead reset once, not per minute.
+    notifiedAt: null,
   };
 }
 
