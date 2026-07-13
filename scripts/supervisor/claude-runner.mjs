@@ -5,14 +5,29 @@ export const ACTIVATION_PROMPT = 'Reply exactly: ok';
 
 // Node refuses to spawn a .cmd or .bat without a shell (EINVAL since Node 20),
 // and npm installs Claude Code on Windows as exactly that — there is no
-// claude.exe. Shims run through cmd.exe with the arguments still an ARRAY: a
-// shell string would put a prompt and a path in a shell's hands. Every place
-// that runs the Claude executable goes through here; knowing this rule in only
-// one caller is how setup once reported a logged-in CLI as missing.
+// claude.exe. Shims run through cmd.exe. Every place that runs the Claude
+// executable goes through here; knowing this rule in only one caller is how
+// setup once reported a logged-in CLI as missing.
+//
+// The cmd line is built by hand and passed VERBATIM, because the default
+// per-argument quoting composes badly with `/s`: cmd strips the first and last
+// quote on the line, so a shim under a path with spaces — an ordinary Windows
+// user profile — was cut at its first space and reported as missing. Every
+// element is quoted and the whole `/c` payload wrapped in one more pair, which
+// is exactly the pairing `/s` consumes. The elements stay an array right up to
+// that final join: nothing here ever passes through shell interpretation, and
+// arguments are compile-time constants — a quote in one is a bug, not an input.
 export function claudeInvocation(executable, args) {
-  return /\.(cmd|bat)$/i.test(executable)
-    ? { file: process.env.COMSPEC ?? 'cmd.exe', args: ['/d', '/s', '/c', executable, ...args] }
-    : { file: executable, args };
+  if (!/\.(cmd|bat)$/i.test(executable)) return { file: executable, args, options: {} };
+  for (const value of [executable, ...args]) {
+    if (String(value).includes('"')) throw new Error('cmd shim arguments must not contain quotes');
+  }
+  const payload = [executable, ...args].map((value) => `"${value}"`).join(' ');
+  return {
+    file: process.env.COMSPEC ?? 'cmd.exe',
+    args: ['/d', '/s', '/c', `"${payload}"`],
+    options: { windowsVerbatimArguments: true },
+  };
 }
 
 // `detached` exists so POSIX can signal a process group. Windows kills by pid
@@ -23,7 +38,7 @@ export const DETACHED = process.platform !== 'win32';
 export function spawnClaude(executable, args, options = {}) {
   const { spawn: launch = spawn, ...rest } = options;
   const invocation = claudeInvocation(executable, args);
-  return launch(invocation.file, invocation.args, { ...rest, detached: DETACHED });
+  return launch(invocation.file, invocation.args, { ...rest, ...invocation.options, detached: DETACHED });
 }
 
 export function buildActivationArgs() {

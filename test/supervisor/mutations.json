@@ -94,5 +94,11 @@
     "file": "scripts/supervisor/supervisor.mjs",
     "old": "  const result = await (async () => {\n    const config = await new ConfigStore(data).read();",
     "new": "  const config = await new ConfigStore(data).read();\n  const result = await (async () => {"
+  },
+  {
+    "name": "per-argument quoting returns: a spaced shim path is cut at the space",
+    "file": "scripts/supervisor/claude-runner.mjs",
+    "old": "  const payload = [executable, ...args].map((value) => `\"${value}\"`).join(' ');\n  return {\n    file: process.env.COMSPEC ?? 'cmd.exe',\n    args: ['/d', '/s', '/c', `\"${payload}\"`],\n    options: { windowsVerbatimArguments: true },\n  };",
+    "new": "  return {\n    file: process.env.COMSPEC ?? 'cmd.exe',\n    args: ['/d', '/s', '/c', executable, ...args],\n    options: {},\n  };"
   }
 ]

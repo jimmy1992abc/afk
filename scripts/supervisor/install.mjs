@@ -66,7 +66,7 @@ export async function preflightClaude(platform = process.platform, deps = {}) {
   const probe = claudeInvocation(claudePath, ['auth', 'status', '--json']);
   let status;
   try {
-    status = await execFile(probe.file, probe.args, { windowsHide: true, maxBuffer: 1024 * 1024 });
+    status = await execFile(probe.file, probe.args, { windowsHide: true, maxBuffer: 1024 * 1024, ...probe.options });
   } catch {
     throw new Error(AUTH_MISSING);
   }

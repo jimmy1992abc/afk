@@ -36,21 +36,30 @@ test('a Claude child is never detached on Windows', () => {
 
 test('an npm-installed Claude is a .cmd shim, which cannot be spawned directly', () => {
   // Node refuses to spawn a .cmd without a shell (EINVAL since Node 20). It goes
-  // through cmd.exe with the arguments still an ARRAY: a shell string would put
-  // the prompt in a shell's hands.
+  // through cmd.exe as ONE verbatim, fully-quoted payload: per-argument quoting
+  // composes badly with /s (cmd strips the first and last quote on the line), so
+  // a shim under a path with spaces — an ordinary Windows user profile — was cut
+  // at its first space and every setup and activation for that user failed.
   const calls = [];
-  const fake = (file, args) => { calls.push({ file, args }); return {}; };
-  const shim = String.raw`C:\npm\claude.cmd`;
+  const fake = (file, args, options) => { calls.push({ file, args, options }); return {}; };
+  const shim = String.raw`C:\Users\Jim my\npm\claude.cmd`;
 
   spawnClaude(shim, ['--print', 'hi'], { spawn: fake });
   assert.match(calls[0].file, /cmd\.exe$/i);
-  assert.ok(calls[0].args.includes(shim));
-  assert.ok(calls[0].args.includes('--print'));
+  assert.deepEqual(calls[0].args.slice(0, 3), ['/d', '/s', '/c']);
+  assert.equal(calls[0].args[3], `""${shim}" "--print" "hi""`,
+    'every element quoted, and the whole payload wrapped in the pair /s consumes');
+  assert.equal(calls[0].options.windowsVerbatimArguments, true,
+    'the payload must reach cmd.exe exactly as built');
 
   calls.length = 0;
   spawnClaude('/usr/local/bin/claude', ['--print', 'hi'], { spawn: fake });
   assert.equal(calls[0].file, '/usr/local/bin/claude');
   assert.deepEqual(calls[0].args, ['--print', 'hi']);
+
+  // Every argument is a compile-time constant; a quote in one is a bug, and
+  // mangling it quietly inside cmd's quoting rules would be worse than refusing.
+  assert.throws(() => spawnClaude(shim, ['--print', 'say "hi"'], { spawn: fake }), /quotes/);
 });
 
 test('classifies only the wire-visible quota retry frame', () => {

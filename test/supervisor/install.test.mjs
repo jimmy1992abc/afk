@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { execFile as execFileCallback } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -150,16 +150,21 @@ test('preflight probes the shim through cmd.exe, as Node requires', async () => 
   const found = await preflightClaude('win32', { execFile });
   const probe = asked.at(-1);
   assert.match(probe.file, /cmd\.exe$/i, 'a .cmd must be probed through cmd.exe');
-  assert.ok(probe.args.includes(String.raw`C:\npm\claude.cmd`));
-  assert.ok(probe.args.includes('auth'), 'and the arguments stay an array, never a shell string');
+  assert.ok(probe.args.at(-1).includes(String.raw`"C:\npm\claude.cmd"`), 'the shim is quoted inside the payload');
+  assert.ok(probe.args.at(-1).includes('"auth"'));
   assert.equal(found.claudePath, String.raw`C:\npm\claude.cmd`);
 });
 
 test('a real .cmd shim is executable by preflight on this machine', { skip: process.platform !== 'win32' }, async () => {
   // The fake execFile above cannot fail the way Node does, which is precisely how
   // the defect survived: every preflight test passed against a stub that would
-  // happily "run" a .cmd. This one spawns a real shim with the real execFile.
-  const directory = await mkdtemp(join(tmpdir(), 'afk-preflight-'));
+  // happily "run" a .cmd. This one spawns a real shim with the real execFile —
+  // and from a path WITH SPACES, because per-argument quoting under cmd's /s rule
+  // cut such a path at its first space, and an ordinary Windows user profile is
+  // exactly such a path. Both defects were invisible to every stubbed test.
+  const root = await mkdtemp(join(tmpdir(), 'afk-preflight-'));
+  const directory = join(root, 'space d');
+  await mkdir(directory, { recursive: true });
   const shim = join(directory, 'claude.cmd');
   await writeFile(shim, '@echo off\r\necho {"loggedIn":true}\r\n');
   try {
@@ -168,7 +173,7 @@ test('a real .cmd shim is executable by preflight on this machine', { skip: proc
       : execFileAsync(file, args, options));
     assert.deepEqual(await preflightClaude('win32', { execFile }), { claudePath: shim, authenticated: true });
   } finally {
-    await rm(directory, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true });
   }
 });
 
