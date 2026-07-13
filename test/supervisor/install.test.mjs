@@ -78,6 +78,26 @@ test('uninstall restores previous status line only while marker still matches', 
   assert.equal(restoreStatuslineSettings(userChanged, patched.previous).statusLine.command, 'new-user-status');
 });
 
+test('repair honours a status line the user configured after installing', async () => {
+  // The user installed, later replaced the wrapper with their own new command,
+  // then ran setup again. The repair path reused the ORIGINAL install record, so
+  // the wrapper chained to the pre-install command instead of the user's current
+  // one — and a later uninstall restored that stale command, silently discarding
+  // the configuration the user had chosen since.
+  const deps = installDeps();
+  const { state } = deps;
+  await installSupervisor(deps);
+  state.settings = { statusLine: { type: 'command', command: 'new-user-status' } };   // user replaces the wrapper
+
+  await installSupervisor(deps);
+  assert.equal(state.record.previousStatusLine.command, 'new-user-status',
+    'the record must follow what the wrapper actually displaced this time');
+
+  await uninstallSupervisor(deps);
+  assert.equal(state.settings.statusLine.command, 'new-user-status',
+    'uninstall gives back what the user actually had');
+});
+
 test('repeated setup and uninstall are idempotent through injected platform operations', async () => {
   const calls = [];
   const deps = installDeps({

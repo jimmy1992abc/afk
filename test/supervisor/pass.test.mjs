@@ -153,6 +153,31 @@ test('a refined estimate does not forget the attempts cap', async () => {
   assert.equal((await runPass(h.deps)).code, 'skip:attempts-exhausted');
 });
 
+test('evidence from a settled episode cannot reopen it', async () => {
+  // The StopFailure file is never deleted — the hook owns it, and the pass only
+  // reads it. After an activation settled reset R, the surviving failure record
+  // (from one hour BEFORE R) still produced an estimated reset at R+4h: a ghost
+  // episode, four hours into the healthy new window, and the supervisor fired an
+  // unwanted activation at it. A failure at or before the handled reset belongs
+  // to the settled episode and is spent.
+  const R = NOW - 16_000;
+  const settled = state({ handledResetAt: R, windowAnchorAt: R + 95 });
+  const oldFailure = { limitedAt: R - 3_600 };
+
+  assert.equal(resolveReset({ observation: null, stopFailure: oldFailure, state: settled, config }), null,
+    'a spent failure resolves nothing');
+
+  // ...and it must not pair with a healthy new window's exact reset either.
+  const healthy = { fiveHourResetAt: R - 3_600 + 9_000, fiveHourUsedPercentage: 30, observedAt: NOW - 60 };
+  assert.equal(resolveReset({ observation: healthy, stopFailure: oldFailure, state: settled, config }), null,
+    'a spent failure must not borrow a healthy window’s reset as "exact" evidence');
+
+  // A failure AFTER the handled reset is the next episode, and counts.
+  const fresh = { limitedAt: R + 2_000 };
+  assert.deepEqual(resolveReset({ observation: null, stopFailure: fresh, state: settled, config }),
+    { resetAt: R + 95 + WINDOW, confidence: 'estimated' });
+});
+
 test('an exact reading at the very moment of the failure still beats the estimate', async () => {
   // The same-episode check used a strict `>`: at exact equality the exact reading
   // lost to the +5h estimate via later-reset-wins, and activation ran up to five

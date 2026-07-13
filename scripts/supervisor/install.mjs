@@ -105,7 +105,15 @@ export async function installSupervisor(deps) {
   // after the settings would lose that command for good if the process died in
   // between: a second setup then sees its own marker, records no previous
   // command, and uninstall would delete the status line outright.
-  const record = existingRecord ?? { previousStatusLine: patched.previous, marker: STATUSLINE_MARKER };
+  // `patched.changed` with an existing record means the wrapper is NOT currently
+  // installed — the user replaced or removed it since. What the wrapper displaces
+  // THIS time is their current configuration, and that is what uninstall must
+  // give back; reusing the original record chained the wrapper to the pre-install
+  // command and silently discarded what the user had chosen since. Only while the
+  // marker is still in place does the original record stay authoritative.
+  const record = existingRecord && !patched.changed
+    ? existingRecord
+    : { ...(existingRecord ?? {}), previousStatusLine: patched.previous, marker: STATUSLINE_MARKER };
   await deps.writeInstallRecord(record);
   if (patched.changed) await deps.writeSettings(patched.settings);
   try {

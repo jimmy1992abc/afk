@@ -15,7 +15,14 @@ import { WINDOW_SECONDS } from './constants.mjs';
 export function resolveReset({ observation, stopFailure, state, config }) {
   const candidates = [];
   const obsReset = Number.isFinite(observation?.fiveHourResetAt) ? observation.fiveHourResetAt : null;
-  const limitedAt = Number.isFinite(stopFailure?.limitedAt) ? stopFailure.limitedAt : null;
+  // The StopFailure file is never deleted — the hook owns it and the pass only
+  // reads it — so a failure from a SETTLED episode survives being handled. Left
+  // in play it manufactured a ghost reset (limitedAt + 5h) hours into the
+  // healthy new window, or worse, paired itself with the new window's exact
+  // reset as same-episode evidence. A failure at or before the handled reset is
+  // spent: it is precisely the failure that reset settled.
+  const spent = Number.isFinite(state?.handledResetAt) && stopFailure?.limitedAt <= state.handledResetAt;
+  const limitedAt = Number.isFinite(stopFailure?.limitedAt) && !spent ? stopFailure.limitedAt : null;
 
   if (obsReset !== null
       && Number.isFinite(observation?.fiveHourUsedPercentage)
