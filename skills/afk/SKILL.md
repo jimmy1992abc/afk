@@ -91,21 +91,36 @@ another session's branch; never deploy (merge ≠ deploy).
 
 Each run owns a directory `.afk/runs/<run-id>/` (gitignored) holding everything
 that run produces: `ledger.md`, updated in place, and the per-PR final reports
-written beside it. At kickoff, adopt the existing directory whose ledger matches
-this run's scope; only when none matches, allocate `<run-id>` as
-`<YYYY-MM-DD>-<scope-slug>`, the slug sanitized for the filesystem and
-length-capped, appending a numeric suffix while the path already exists — capping
-and sanitizing can map two distinct scopes onto one slug, and reusing the path
-would overwrite the other run's ledger. If the ledger is missing, reconstruct it
-from the state checks below.
+written beside it. If the ledger is missing, reconstruct it from the state checks
+below.
 
-Resolve `.afk/` against the repository's **main working tree** — the parent of
-`git rev-parse --path-format=absolute --git-common-dir` — never against the
-current directory. The
-directory is per **run**, never per worktree: one run legitimately spans several
-worktrees, and each linked worktree has its own tree, so a path resolved from the
-current directory would split one run's state across trees and hide concurrent
-runs from each other's cross-run check.
+Resolve `.afk/` against the repository's **main working tree** — the first
+`worktree` line of `git worktree list --porcelain` — never against the current
+directory, and never by taking the parent of the common git dir (under
+`--separate-git-dir`, or in a submodule, that parent is git metadata rather than
+a working tree). The directory is per **run**, never per worktree: one run
+legitimately spans several worktrees, and each linked worktree has its own tree,
+so a path resolved from the current directory would split one run's state across
+trees and hide concurrent runs from each other.
+
+**Kickoff, in this order** — each check is only meaningful before you adopt
+anything:
+
+1. **Read every `.afk/runs/*/ledger.md`**: its `run-id`, `scope`, and heartbeat.
+   Do this first — once a directory is yours it is no longer "other", and stops
+   being checked.
+2. **A live run (heartbeat under ~20 min) whose scope overlaps yours → stop and
+   ask the operator.** Two runs would drive the same issue. This holds however
+   the scopes overlap, exact match included: a live same-scope run is a
+   collision, not an invitation to resume. Disjoint scopes proceed silently.
+3. **Resume** only a run that is not live — the directory whose ledger scope
+   matches yours, or whose `run-id` the operator handed you.
+4. **Otherwise allocate** `<run-id>` as `<YYYY-MM-DD>-<scope-slug>`, the slug
+   sanitized for the filesystem and length-capped. Create the directory with an
+   operation that **fails if it already exists** (`mkdir` without `-p`), and on
+   failure retry the next numeric suffix: sanitizing and capping can map two
+   distinct scopes onto one slug, and testing the path before writing leaves a
+   window for a concurrent run to create it first.
 
 The ledger opens with a header carrying `run-id`, the run's `scope` as the
 operator gave it, and the UTC `heartbeat` — written at allocation and kept
@@ -114,10 +129,6 @@ identify this one, so a ledger without them is unmatchable.
 
 - **Never write into another run's directory.** Concurrent runs in one repository
   are normal; a shared ledger path is what makes them collide.
-- **Cross-run check at kickoff:** read the heartbeat and scope of every other
-  `.afk/runs/*/ledger.md`. A live run (heartbeat under ~20 min) whose scope
-  overlaps yours means two runs would drive the same issue — stop and ask the
-  operator. Disjoint scopes proceed silently.
 - **If the host supports scheduled re-invocation** (a cron or wake-up), set up a
   recurring tick that re-invokes you; the tick prompt is static (scope, order,
   merge policy, constraints, run directory) — never embed the ledger itself.

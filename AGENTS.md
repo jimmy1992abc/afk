@@ -53,10 +53,10 @@ A consuming project's per-developer preferences live in a **gitignored** `.afk/`
 `config.md` (personal run preferences) and `runs/<run-id>/`, one directory per
 run holding that run's ledger and its saved final reports. Run state is keyed by
 run, never by repository or worktree, so concurrent runs cannot overwrite one
-another. `.afk/` itself lives in the main working tree (the parent of
-`git rev-parse --path-format=absolute --git-common-dir`), shared by every linked
-worktree. Everything is optional; a blank or absent `config.md` resolves to safe
-defaults. Skills never write project specifics back into this plugin.
+another. `.afk/` itself lives in the main working tree (the first `worktree` line
+of `git worktree list --porcelain`), shared by every linked worktree. Everything
+is optional; a blank or absent `config.md` resolves to safe defaults. Skills
+never write project specifics back into this plugin.
 
 When a skill finds `.afk/` absent it runs the `afk-init` bootstrap automatically
 (create `.afk/`, add the gitignore entry, detect commands, record `pluginRoot`)
