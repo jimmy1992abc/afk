@@ -21,12 +21,16 @@ test('glm gate disabled flag emits a clean skipped review', () => {
   assert.match(result.stdout, /===== END GLM REVIEW =====/);
 });
 
-test('plugin surfaces list glm as a supported external gate', () => {
+test('every external gate is listed on every plugin surface', () => {
+  // A gate nobody can discover is a gate that never runs, so each surface that
+  // advertises the set must advertise all of it.
   const afkSkill = readFileSync(new URL('../skills/afk/SKILL.md', import.meta.url), 'utf8');
   const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
   const config = readFileSync(new URL('../templates/afk-config.example.md', import.meta.url), 'utf8');
 
-  assert.match(afkSkill, /afk-glm-review/);
-  assert.match(readme, /afk-glm-review/);
-  assert.match(config, /codex > kimi > glm/);
+  for (const gate of ['afk-codex-review', 'afk-claude-review', 'afk-kimi-review', 'afk-glm-review']) {
+    assert.match(afkSkill, new RegExp(gate), `afk/SKILL.md must list ${gate}`);
+    assert.match(readme, new RegExp(gate), `README must list ${gate}`);
+  }
+  assert.match(config, /priority: codex > claude > kimi > glm/);
 });

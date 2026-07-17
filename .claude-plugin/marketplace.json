@@ -5,19 +5,20 @@
   },
   "metadata": {
     "description": "Autonomous PR-pipeline skills for AI coding agents",
-    "version": "0.2.2",
+    "version": "0.2.3",
     "homepage": "https://github.com/jimmy1992abc/afk"
   },
   "plugins": [
     {
       "name": "afk-skills",
       "description": "Autonomous PR pipeline: plan, implement, internal review, and independent external gates.",
-      "version": "0.2.2",
+      "version": "0.2.3",
       "source": "./",
       "strict": false,
       "skills": [
         "./skills/afk",
         "./skills/afk-agent-relay",
+        "./skills/afk-claude-review",
         "./skills/afk-codex-review",
         "./skills/afk-glm-review",
         "./skills/afk-implementation-pilot",

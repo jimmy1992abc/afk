@@ -2,8 +2,8 @@
 // codex-gate.mjs — cross-platform external review wrapper around Codex.
 //
 // Runs `codex exec review` headless against a branch/commit/uncommitted diff
-// and prints ONLY Codex's final review message on stdout (full transcript
-// goes to a log file). Used by the afk-codex-review skill as a read-only,
+// and prints ONLY Codex's final review message on stdout (full transcript goes
+// to a log file). Used by the afk-codex-review skill as a read-only,
 // independent-model review gate.
 //
 // Per-OS behavior:
@@ -16,11 +16,13 @@
 //   node codex-gate.mjs --base master   # review vs an explicit base branch
 //   node codex-gate.mjs --commit <sha>  # review one commit
 //   node codex-gate.mjs --uncommitted   # review staged/unstaged/untracked
+//   node codex-gate.mjs --print-args    # resolve and print argv; no model call
 //   (any extra flags are passed through to `codex exec review`)
 //
 // Review scope: Codex's built-in `review`. No custom focus prompt — codex-cli
 // rejects a PROMPT alongside a diff selector (--base/--commit/--uncommitted),
-// and the gate always selects one.
+// and the gate always selects one. This gate therefore consumes only the shared
+// target PARSING; it builds no scope label and no prompt.
 //
 // Lean context: overrides config per run via `-c` (the operator's interactive
 // Codex config is untouched):
@@ -32,13 +34,19 @@
 
 import { spawnSync } from 'node:child_process';
 import {
-  existsSync, openSync, readFileSync, mkdtempSync,
-  writeSync, closeSync, unlinkSync, statSync,
+  closeSync, existsSync, mkdtempSync, openSync,
+  readFileSync, statSync, unlinkSync, writeSync,
 } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { tmpdir, homedir } from 'node:os';
+
+import { isGateDisabled } from '../../lib/gate/env.mjs';
+import { detectBase, resolveBase } from '../../lib/gate/git.mjs';
+import { guardFor, stripImplementer } from '../../lib/gate/implementer.mjs';
+import { createProtocol } from '../../lib/gate/protocol.mjs';
 
 const isWin = process.platform === 'win32';
+const { emitSkip, emitReview, emitError } = createProtocol({ label: 'CODEX', slug: 'codex-gate' });
 
 // ── Machine-wide serialization of `codex exec` runs ──────────────────────────
 // Advisory lockfile in the OS temp dir, shared across repos/worktrees (the
@@ -48,6 +56,10 @@ const isWin = process.platform === 'win32';
 // Lock path is anchored to homedir(), not os.tmpdir() (which can differ per
 // process), so it matches the per-user auth boundary. Override with
 // CODEX_GATE_LOCK_PATH.
+//
+// Not shared with the other gates: this serializes `codex exec` specifically,
+// and hoisting a single-consumer helper trades duplication for premature
+// abstraction.
 const LOCK_PATH = (process.env.CODEX_GATE_LOCK_PATH || '').trim()
   || join(homedir(), '.codex-gate.lock');
 // Orphan cutoff: applies only when lock contents can't identify a live owner
@@ -138,25 +150,13 @@ function releaseCodexLock(lock) {
   } catch { /* already gone / corrupt — nothing to release */ }
 }
 
-function emitSkip(reason) {
-  // Not a failure — the gate is optional. Emit the marker block, exit 0.
-  process.stderr.write(`[codex-gate] skipped: ${reason}\n`);
-  process.stdout.write('===== CODEX REVIEW (final message) =====\n');
-  process.stdout.write(`SKIPPED: ${reason}\n`);
-  process.stdout.write('===== END CODEX REVIEW =====\n');
-  process.exit(0);
-}
-
 // Explicit opt-out: CODEX_REVIEW_GATE=off/0/false/no/disabled.
-const gateFlag = (process.env.CODEX_REVIEW_GATE || '').trim().toLowerCase();
-if (['off', '0', 'false', 'no', 'disabled'].includes(gateFlag)) {
+if (isGateDisabled('CODEX_REVIEW_GATE')) {
   emitSkip('Codex gate disabled via CODEX_REVIEW_GATE.');
 }
 
-// No custom focus PROMPT is injected: codex-cli rejects a PROMPT alongside a
-// diff selector, and the gate always selects a target.
-
 function resolveCodex() {
+  if (process.env.CODEX_GATE_BIN) return process.env.CODEX_GATE_BIN.trim();
   // Prefer PATH (works on macOS/Linux and Windows-with-PATH). On Windows also
   // fall back to the npm global shim, which isn't always on a child's PATH.
   if (isWin && process.env.APPDATA) {
@@ -164,21 +164,6 @@ function resolveCodex() {
     if (existsSync(shim)) return shim;
   }
   return 'codex';
-}
-
-function detectBase() {
-  // origin/HEAD -> the repo's default branch (main/master/...); fall back sanely.
-  const r = spawnSync('git', ['rev-parse', '--abbrev-ref', 'origin/HEAD'], {
-    encoding: 'utf8',
-  });
-  if (r.status === 0 && r.stdout.trim()) {
-    return r.stdout.trim().replace(/^origin\//, '');
-  }
-  for (const b of ['main', 'master']) {
-    const v = spawnSync('git', ['rev-parse', '--verify', b], { encoding: 'utf8' });
-    if (v.status === 0) return b;
-  }
-  return 'main';
 }
 
 const userArgs = process.argv.slice(2);
@@ -201,10 +186,29 @@ if (selftest) {
 const hasTarget = userArgs.some((a) =>
   ['--base', '--commit', '--uncommitted'].includes(a),
 );
+const printArgsOnly = userArgs.includes('--print-args');
 
-const work = mkdtempSync(join(tmpdir(), 'codex-gate-'));
-const finalFile = join(work, 'review.txt');
-const logFile = join(work, 'codex.log');
+// Promote an operator-supplied `--base` to its remote-tracking ref too, not just
+// the auto-detected default: a bare `--base main` against a stale local main is
+// the same wrong-commit-range defect, and the other three gates promote it.
+function promoteExplicitBase(argv) {
+  const i = argv.indexOf('--base');
+  if (i < 0 || i + 1 >= argv.length) return argv;
+  const next = [...argv];
+  next[i + 1] = resolveBase(argv[i + 1]);
+  return next;
+}
+
+// --implementer is an afk-level flag: strip it, or `codex exec review` rejects
+// an option it does not know and the gate cannot run at all in a relay setup.
+const passThrough = promoteExplicitBase(
+  stripImplementer(userArgs.filter((a) => a !== '--print-args')),
+);
+
+const guard = guardFor('codex', userArgs);
+if (!guard.run) {
+  emitSkip(`independence check — ${guard.reason}`);
+}
 
 // Lean-context overrides (review THE DIFF, not the project doc corpus):
 //   - model_reasoning_effort: default `medium`. Override via
@@ -216,20 +220,38 @@ const projectDocMaxBytes = (
   process.env.CODEX_REVIEW_PROJECT_DOC_MAX_BYTES || '0'
 ).trim();
 
+const work = mkdtempSync(join(tmpdir(), 'codex-gate-'));
+const finalFile = join(work, 'review.txt');
+const logFile = join(work, 'codex.log');
+
 const reviewArgs = ['exec', 'review'];
 // Push lean defaults FIRST so an operator-supplied `-c key=...` in extra args
 // still takes precedence (codex applies later -c overrides last).
 reviewArgs.push('-c', `model_reasoning_effort=${reasoning}`);
 reviewArgs.push('-c', `project_doc_max_bytes=${projectDocMaxBytes}`);
 
-if (!hasTarget) reviewArgs.push('--base', detectBase());
-reviewArgs.push(...userArgs);
+// Resolve the base to its remote-tracking ref when one exists. A stale local
+// `main` otherwise makes the gate review the wrong commit range and report
+// findings against commits that are not in the PR.
+if (!hasTarget) reviewArgs.push('--base', resolveBase(detectBase()));
+reviewArgs.push(...passThrough);
 reviewArgs.push('-o', finalFile);
 if (isWin) reviewArgs.push('--dangerously-bypass-approvals-and-sandbox');
 // Do NOT append a positional PROMPT — codex-cli rejects combining a diff
 // selector with a PROMPT; the gate always selects a target.
 
 const codex = resolveCodex();
+
+if (printArgsOnly) {
+  // Dry run: resolve the argv, call no model. Makes the target/base resolution
+  // observable without spending a metered call.
+  process.stdout.write(`${JSON.stringify({
+    bin: codex,
+    hasExplicitTarget: hasTarget,
+    args: reviewArgs.map((a) => (a === finalFile ? '<review-file>' : a)),
+  }, null, 2)}\n`);
+  process.exit(0);
+}
 
 // Availability + auth pre-check (local only, no model call / no metered cost).
 // Skip cleanly if Codex is missing or not logged in.
@@ -269,21 +291,10 @@ if (res.error) {
 }
 
 if (existsSync(finalFile)) {
-  const review = readFileSync(finalFile, 'utf8').trim();
-  process.stdout.write('===== CODEX REVIEW (final message) =====\n');
-  process.stdout.write(review + '\n');
-  process.stdout.write('===== END CODEX REVIEW =====\n');
+  emitReview(readFileSync(finalFile, 'utf8'));
   process.exit(res.status ?? 1);
 }
 
-// No verdict file: review failed. Still emit the marker block (parseable
-// SKIPPED/ERROR/verdict); never exit 0 without a verdict.
-process.stderr.write(
-  `[codex-gate] No final message produced (exit ${res.status}). See ${logFile}\n`,
-);
-process.stdout.write('===== CODEX REVIEW (final message) =====\n');
-process.stdout.write(
-  `ERROR: codex produced no final message (exit ${res.status}). Transcript: ${logFile}\n`,
-);
-process.stdout.write('===== END CODEX REVIEW =====\n');
-process.exit(res.status || 1);
+// No verdict file: the review failed. Still emit a parseable block; never exit 0
+// without a verdict.
+emitError(`codex produced no final message (exit ${res.status}). Transcript: ${logFile}`, res.status || 1);

@@ -1,38 +1,35 @@
 #!/usr/bin/env node
-// Z.ai GLM external review wrapper.
+// glm-gate.mjs — Z.ai GLM external review wrapper.
+//
+// The one gate reached through a REST API rather than an agentic CLI: it packs
+// the diff AND the full current contents of changed files into a bounded
+// context and sends that. The reviewer has no tools, so anything outside that
+// snapshot is invisible to it — which is why this gate's context clause tells
+// the model so explicitly.
+//
+// Usage:
+//   node glm-gate.mjs                 # current branch vs default base
+//   node glm-gate.mjs --base master   # vs an explicit base
+//   node glm-gate.mjs --commit <sha>  # one commit
+//   node glm-gate.mjs --uncommitted   # staged/unstaged/untracked
+//   node glm-gate.mjs --print-args    # resolve and print the target; no API call
+//
+// Opt out with GLM_REVIEW_GATE=off.
 
-import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
-const MARK_START = '===== GLM REVIEW (final message) =====';
-const MARK_END = '===== END GLM REVIEW =====';
+import { isGateDisabled } from '../../lib/gate/env.mjs';
+import { git } from '../../lib/gate/git.mjs';
+import { guardFor } from '../../lib/gate/implementer.mjs';
+import { buildReviewPrompt } from '../../lib/gate/prompt.mjs';
+import { createProtocol } from '../../lib/gate/protocol.mjs';
+import { collectDiff, parseTarget, validateTarget } from '../../lib/gate/target.mjs';
 
-function emitSkip(reason) {
-  process.stderr.write(`[glm-gate] skipped: ${reason}\n`);
-  process.stdout.write(`${MARK_START}\n`);
-  process.stdout.write(`SKIPPED: ${reason}\n`);
-  process.stdout.write(`${MARK_END}\n`);
-  process.exit(0);
-}
+const { emitSkip, emitReview, emitError } = createProtocol({ label: 'GLM', slug: 'glm-gate' });
 
-function emitReview(text) {
-  process.stdout.write(`${MARK_START}\n`);
-  process.stdout.write(`${text.trim()}\n`);
-  process.stdout.write(`${MARK_END}\n`);
-}
-
-const gateFlag = (process.env.GLM_REVIEW_GATE || '').trim().toLowerCase();
-if (['off', '0', 'false', 'no', 'disabled'].includes(gateFlag)) {
+if (isGateDisabled('GLM_REVIEW_GATE')) {
   emitSkip('GLM gate disabled via GLM_REVIEW_GATE.');
-}
-
-function git(args) {
-  const result = spawnSync('git', args, {
-    encoding: 'utf8',
-    maxBuffer: 128 * 1024 * 1024,
-  });
-  return result.status === 0 ? (result.stdout || '') : '';
 }
 
 function keyFromDotenv() {
@@ -59,65 +56,54 @@ function keyFromDotenv() {
   return '';
 }
 
-const apiKey = (process.env.ZAI_API_KEY || process.env.GLM_API_KEY || keyFromDotenv()).trim();
-if (!apiKey) {
-  emitSkip('No API key; set ZAI_API_KEY or GLM_API_KEY in env or .env, or GLM_REVIEW_GATE=off to disable.');
-}
+const userArgs = process.argv.slice(2);
+const printArgsOnly = userArgs.includes('--print-args');
 
 const model = (process.env.GLM_REVIEW_MODEL || 'glm-5.2').trim();
 const baseUrl = (process.env.GLM_REVIEW_BASE_URL || 'https://api.z.ai/api/anthropic').replace(/\/+$/, '');
 const maxCtx = Number.parseInt(process.env.GLM_REVIEW_MAX_CTX_BYTES || '400000', 10) || 400000;
 
-function detectBase() {
-  const remoteHead = git(['rev-parse', '--abbrev-ref', 'origin/HEAD']).trim();
-  if (remoteHead) return remoteHead.replace(/^origin\//, '');
-  for (const branch of ['main', 'master']) {
-    if (git(['rev-parse', '--verify', branch]).trim()) return branch;
-  }
-  return 'main';
+const guard = guardFor('glm', userArgs);
+if (!guard.run) {
+  emitSkip(`independence check — ${guard.reason}`);
 }
 
-function optVal(args, name) {
-  const index = args.indexOf(name);
-  return index >= 0 && index + 1 < args.length ? args[index + 1] : null;
+const target = parseTarget(userArgs);
+const valid = validateTarget(target);
+if (!valid.ok) {
+  emitError(`cannot review — ${valid.reason}`, 1);
+}
+const { diff, stat, changedFiles, error: diffError } = collectDiff(target);
+if (diffError) {
+  // Never a skip: a target git cannot read is unreviewable, not unchanged.
+  emitError(`cannot review — ${diffError}`, 1);
+}
+const hasChanges = Boolean(diff.trim() || changedFiles.length);
+
+if (printArgsOnly) {
+  // Dry run: resolve the target, call nothing. Runs before every skip so a dry
+  // run on a clean tree can still report which base it resolved.
+  process.stdout.write(`${JSON.stringify({
+    kind: target.kind,
+    base: target.base ?? null,
+    commit: target.commit ?? null,
+    label: target.label,
+    command: target.command,
+    hasChanges,
+    changedFiles,
+    model,
+    baseUrl,
+  }, null, 2)}\n`);
+  process.exit(0);
 }
 
-const userArgs = process.argv.slice(2);
-const commitArg = optVal(userArgs, '--commit');
-const uncommitted = userArgs.includes('--uncommitted');
-const baseArg = optVal(userArgs, '--base');
-
-let scopeLabel;
-let diff;
-let stat;
-let changedFiles;
-
-if (commitArg) {
-  scopeLabel = `the single commit ${commitArg}`;
-  diff = git(['show', commitArg]);
-  stat = git(['show', '--stat', '--oneline', commitArg]);
-  changedFiles = git(['show', '--name-only', '--pretty=format:', commitArg]).split('\n').filter(Boolean);
-} else if (uncommitted) {
-  scopeLabel = 'all uncommitted changes (staged, unstaged, and untracked)';
-  diff = git(['diff', 'HEAD']);
-  stat = git(['diff', '--stat', 'HEAD']);
-  const tracked = git(['diff', '--name-only', 'HEAD']).split('\n').filter(Boolean);
-  const untracked = git(['ls-files', '--others', '--exclude-standard']).split('\n').filter(Boolean);
-  changedFiles = [...new Set([...tracked, ...untracked])];
-} else {
-  const rawBase = baseArg || detectBase();
-  const hasRef = (ref) => spawnSync('git', ['rev-parse', '--verify', '--quiet', ref]).status === 0;
-  const base = /\//.test(rawBase)
-    ? rawBase
-    : (hasRef(`origin/${rawBase}`) ? `origin/${rawBase}` : rawBase);
-  scopeLabel = `the changes on the current branch versus ${base} (git diff ${base}...HEAD)`;
-  diff = git(['diff', `${base}...HEAD`]);
-  stat = git(['diff', '--stat', `${base}...HEAD`]);
-  changedFiles = git(['diff', '--name-only', `${base}...HEAD`]).split('\n').filter(Boolean);
+const apiKey = (process.env.ZAI_API_KEY || process.env.GLM_API_KEY || keyFromDotenv()).trim();
+if (!apiKey) {
+  emitSkip('No API key; set ZAI_API_KEY or GLM_API_KEY in env or .env, or GLM_REVIEW_GATE=off to disable.');
 }
 
-if (!diff.trim() && !changedFiles.length) {
-  emitSkip(`No changes found for ${scopeLabel}.`);
+if (!hasChanges) {
+  emitSkip(`No changes found for ${target.label}.`);
 }
 
 const diffCap = Math.floor(maxCtx * 0.6);
@@ -160,15 +146,15 @@ for (const file of changedFiles) {
 
 payload += filesBlock;
 
-const systemPrompt = [
-  'You are an independent senior software reviewer running the last structural gate before a pull request merges. This is a read-only review. You are given the diff and the full current contents of changed files.',
-  'Focus on structural issues: architecture/design, correctness bugs, security loopholes, missed edge cases, concurrency/data-integrity, breaking changes, fail-direction. Ignore pure nitpicks unless they cause a real defect.',
-  'For each finding output: a severity tag [P1]=blocker / [P2] / [minor], the file:line, the problem, and a concrete fix.',
-  'Finish with a one-line overall verdict: APPROVE / APPROVE WITH COMMENTS / REQUEST CHANGES. If nothing structural is wrong, say so plainly.',
-  'Output only the review.',
-].join('\n');
+// This gate's own context clause. GLM has NO tools: it must be told that the
+// snapshot is all it has, and must never be told to "inspect" or "run" anything
+// — that invites a fabricated "I checked X and found Y" from a reviewer that
+// cannot check. See lib/gate/prompt.mjs for why this clause is not shared.
+const context = 'You are given the diff and the full current contents of the changed files. That snapshot is everything you have: you cannot run commands or open other files, so never claim to have done either. Where a judgement would require a file you were not given, say so rather than assume.';
 
-const userPrompt = `Review ${scopeLabel}.\n\n${payload}`;
+const systemPrompt = buildReviewPrompt({ scope: target.label, context });
+const userPrompt = `Review ${target.label}.\n\n${payload}`;
+
 const isAnthropic = /\/anthropic(\/|$)/.test(baseUrl);
 const url = isAnthropic ? `${baseUrl}/v1/messages` : `${baseUrl}/chat/completions`;
 process.stderr.write(`[glm-gate] POST ${url} model=${model} mode=${isAnthropic ? 'anthropic' : 'openai'} payload=${payload.length}B files=${changedFiles.length}\n`);
