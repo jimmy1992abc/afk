@@ -6,9 +6,12 @@ lint:  <cmd>
 build: <cmd>
 
 ## external gate
-priority: codex > kimi > glm # preferred order
+priority: codex > claude > kimi > glm # preferred order
 min-pass: 1              # independent gates that must pass clean
 mode:     waterfall      # waterfall: try in order, stop at min-pass · parallel: run at once
+# implementer:           # who writes the code, if not the driver (relay). May only
+                         # BLOCK a gate, never permit one: a value here is written
+                         # once and goes stale, so it must not outrank a live signal.
 
 ## merge
 policy: leave-open       # leave-open · merge-to-unblock · merge-when-green

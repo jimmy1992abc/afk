@@ -34,6 +34,13 @@ describe('requiresBump', () => {
     assert.equal(requiresBump(['scripts/lint-skills.mjs']), true);
   });
 
+  test('true for a lib/ path', () => {
+    // lib/gate/ is shared runtime imported by every gate helper: a change there
+    // alters installed behaviour, and the version is the install cache key, so
+    // shipping it unbumped leaves every install running the stale lib.
+    assert.equal(requiresBump(['lib/gate/protocol.mjs']), true);
+  });
+
   test('true for a manifest file', () => {
     assert.equal(requiresBump(['.claude-plugin/marketplace.json']), true);
   });

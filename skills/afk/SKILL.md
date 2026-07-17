@@ -63,11 +63,19 @@ each gate's model is **not** the implementer's model, and is a
 current-generation mainstream frontier model.
 
 - **Selection** follows `.afk/config.md`: `priority` (default
-  `codex > kimi > glm`),
+  `codex > claude > kimi > glm`),
   `min-pass` (default 1), and `mode` (`waterfall` = try in priority order,
   stopping once `min-pass` gates pass; `parallel` = run `min-pass` at once).
   Skip any gate that is the implementer's own model or cannot run (uninstalled,
   logged out, out of credit, below tier); the next in priority takes its place.
+- **Declare the implementer when it is not the driver.** Pass
+  `--implementer <family>` to the gate whenever another model wrote the change —
+  most often after `afk-agent-relay`. `afk-claude-review` enforces the
+  no-self-review rule in code and, absent a declaration, assumes the driver is
+  the implementer; under a Claude Code driver it therefore self-skips and the
+  next gate in `priority` takes its place. That is correct behaviour, and it is
+  why the flag matters: without it, a Codex-driven relay to Claude would let
+  Claude review its own work.
 - **Stickiness:** a gate chosen in round 1 is locked for later rounds of the same
   PR; a mid-loop switch resets that gate's finding baseline and is recorded.
 - **`SKIPPED` is the last resort only** — when no qualifying reviewer can run.
@@ -75,8 +83,9 @@ current-generation mainstream frontier model.
   handing the gate to the operator is not a valid skip. When `min-pass` cannot be
   met, the round is not clean — do not mark ready.
 
-The gate skills (`afk-codex-review`, `afk-kimi-review`, `afk-glm-review`) carry
-the invocation, batching, and metering rules; they load when the gate runs.
+The gate skills (`afk-codex-review`, `afk-claude-review`, `afk-kimi-review`,
+`afk-glm-review`) carry the invocation, batching, and metering rules; they load
+when the gate runs.
 
 ## Autonomy
 

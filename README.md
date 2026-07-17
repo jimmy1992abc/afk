@@ -21,6 +21,7 @@ gitignored `.afk/` directory.
 | `afk-implementation-pilot` | Implements an approved plan and self-reviews it. |
 | `afk-internal-review` | Performs the internal production-readiness review. |
 | `afk-codex-review` | Runs Codex as an independent external review gate. |
+| `afk-claude-review` | Runs Claude as an independent external review gate; declines to review Claude's own work. |
 | `afk-kimi-review` | Runs Kimi as an independent external review gate. |
 | `afk-glm-review` | Runs GLM as an independent diff-scoped external review gate. |
 | `afk-agent-relay` | Offloads large reads or scoping work to an external model. |
@@ -120,6 +121,7 @@ gitignored `.env`.
 /afk issue 123
 /afk-internal-review PR 456
 /afk-codex-review
+/afk-claude-review
 /afk-kimi-review
 /afk-glm-review
 ```
