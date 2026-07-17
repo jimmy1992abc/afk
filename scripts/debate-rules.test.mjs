@@ -16,9 +16,18 @@ test('the debate has exit criteria, so the cap cannot pass a P1 by running out',
   // this, round 3 ending on an unresolved P1 let the pipeline proceed with
   // known uncertainty and no record.
   assert.match(afkSkill, /Exit criteria/);
-  assert.match(afkSkill, /blocks\s*\n?\s*implementation/);
+  assert.match(afkSkill, /\*\*do\s*\n?\s*not start implementing\*\*/);
   assert.match(afkSkill, /Never proceed past a P1 because the rounds ran out/);
-  assert.match(afkSkill, /explicit risk acceptance, recorded in\s*\n?\s*the ledger/);
+  assert.match(afkSkill, /a risk you accept explicitly and record\s*\n?\s*in the ledger/);
+});
+
+test('the exit criteria are stated as doctrine, not as a mechanism', () => {
+  // An earlier draft said an unresolved P1 "blocks implementation". Nothing in a
+  // markdown file blocks anything — the driver being governed is the same agent
+  // that would skip the step. Overclaiming here is the defect this repo keeps
+  // finding in its own designs, so the refuted wording gets a guard.
+  assert.doesNotMatch(afkSkill, /blocks\s*\n?\s*implementation/);
+  assert.match(afkSkill, /doctrine, not a guarantee/);
 });
 
 test('the critic gets a posture, never a predetermined verdict', () => {

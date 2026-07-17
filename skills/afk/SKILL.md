@@ -96,20 +96,24 @@ Repeating it in the same environment is not independent confirmation.
 **Exit criteria — the cap bounds spend, not correctness.** Reaching the round cap
 is not a pass. At the cap:
 
-- An unresolved **P1**, or an unverified claim the design depends on, **blocks
-  implementation**. Escalate to the operator, or to the external design gate if
-  one is configured. Never proceed past a P1 because the rounds ran out.
-- An unresolved **P2** proceeds only as an explicit risk acceptance, recorded in
-  the ledger with its reason.
+- With an unresolved **P1**, or an unverified claim the design depends on, **do
+  not start implementing**. Escalate to the operator, or to the external design
+  gate if one is configured. Never proceed past a P1 because the rounds ran out.
+- An unresolved **P2** proceeds only as a risk you accept explicitly and record
+  in the ledger with its reason. A helper cannot accept a risk on the operator's
+  behalf; what gets written is a decision you made and are accountable for.
+
+This is level 3 — doctrine, not a guarantee (AGENTS.md, "What this plugin can and
+cannot enforce"). Nothing stops a driver from implementing anyway. It stops if it
+follows this file, which is the same basis as every other step in the waterfall.
 
 **Record what was refuted.** A claim the design made, believed, and got wrong
 stays in the doc — but only where it links to what now prevents it: the corrected
 decision, and the test or control that pins it. A refuted-claims list with no
 such link is a diary; either give it a consumer or leave it out.
 
-Nothing here is machine-enforced: it is an instruction to the driver, like the
-rest of this waterfall. The ledger record of an accepted risk or a blocked P1 is
-the only durable artifact, and it is what the operator reads.
+The ledger record — an accepted risk, or a P1 that stopped the run — is the only
+durable artifact here, and it is what the operator reads.
 
 ## External gate (the independent check)
 
@@ -126,12 +130,15 @@ current-generation mainstream frontier model.
   logged out, out of credit, below tier); the next in priority takes its place.
 - **Declare the implementer when it is not the driver.** Pass
   `--implementer <family>` to the gate whenever another model wrote the change —
-  most often after `afk-agent-relay`. `afk-claude-review` enforces the
-  no-self-review rule in code and, absent a declaration, assumes the driver is
-  the implementer; under a Claude Code driver it therefore self-skips and the
-  next gate in `priority` takes its place. That is correct behaviour, and it is
-  why the flag matters: without it, a Codex-driven relay to Claude would let
-  Claude review its own work.
+  most often after `afk-agent-relay`. Each gate applies the no-self-review rule
+  **on the runs routed through its helper** and, absent a declaration, assumes
+  the driver is the implementer; under a Claude Code driver `afk-claude-review`
+  therefore self-skips and the next gate in `priority` takes its place. That is
+  correct behaviour, and it is why the flag matters: without it, a Codex-driven
+  relay to Claude would let Claude review its own work.
+  A helper cannot constrain a round it was never asked to run — the rule that
+  the gate runs at all is doctrine (see AGENTS.md, "What this plugin can and
+  cannot enforce").
 - **Stickiness:** a gate chosen in round 1 is locked for later rounds of the same
   PR; a mid-loop switch resets that gate's finding baseline and is recorded.
 - **`SKIPPED` is the last resort only** — when no qualifying reviewer can run.
