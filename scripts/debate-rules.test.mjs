@@ -30,6 +30,25 @@ test('the exit criteria are stated as doctrine, not as a mechanism', () => {
   assert.match(afkSkill, /doctrine, not a guarantee/);
 });
 
+test('the severities the exit criteria turn on are actually defined', () => {
+  // The exit criteria were written against P1/P2 while the critic was only ever
+  // asked for supported/refuted/unverified — so the rule keyed on a label no
+  // step produced, and each host was free to grade a defect its own way.
+  assert.match(afkSkill, /Every finding carries a severity/);
+  assert.match(afkSkill, /\*\*P1\*\* — the design is wrong/);
+  assert.match(afkSkill, /\*\*P2\*\* — a real weakness the design survives/);
+  assert.match(afkSkill, /unlabelled finding is a P1 until someone labels it/);
+});
+
+test('a supported P1 cannot end the debate before the cap is ever reached', () => {
+  // The exit criteria only governed the cap, so a round-one supported P1 let a
+  // compliant driver call the debate done and implement — the halt rule never
+  // fired. The normal exit has to be the clean round, not the cap.
+  assert.match(afkSkill, /A clean round ends the debate/);
+  assert.match(afkSkill, /Implementation starts here and nowhere earlier/);
+  assert.match(afkSkill, /only by a round that no longer finds it/);
+});
+
 test('the critic gets a posture, never a predetermined verdict', () => {
   // A critic told the answer is "refuted" invents objections and can never
   // return a clean pass on a sound design.

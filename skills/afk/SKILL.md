@@ -72,6 +72,18 @@ invents objections and can never return a clean pass on a sound design. "No
 finding" is a valid, reportable result. Reject an unsupported finding as firmly
 as an unsupported design claim.
 
+**Every finding carries a severity.** Posture says whether the finding holds;
+severity says what it costs. Every rule below turns on it, so a finding without
+one cannot be acted on:
+
+- **P1** — the design is wrong, or rests on a claim that is wrong or unverified.
+  Building it yields a defect, a rewrite, or a hole.
+- **P2** — a real weakness the design survives: a cost, a gap, or a risk worth
+  taking knowingly.
+
+An unlabelled finding is a P1 until someone labels it — the cheap error is
+debating a P2 twice, not shipping a P1 nobody graded.
+
 **Verify claims about external systems — by the cheapest SAFE means.** A design
 that asserts how a CLI behaves, what a permission model allows, what a command
 returns, or what a config does is asserting a fact, and the debate's job is to
@@ -93,6 +105,18 @@ local pass does not prove another OS, version, or configuration.
 confirms a finding by the cheapest safe means — preferably a failing test — not
 by repeating a destructive action, and never on the critic's authority alone.
 Repeating it in the same environment is not independent confirmation.
+
+**The round, and how the debate ends.** A round is: the critic reports, the author
+validates each finding independently, and the design is revised for every
+supported finding. Then one of:
+
+- **A clean round ends the debate** — no supported P1 and no unverified claim the
+  design depends on. Any P2 taken knowingly is in the ledger with its reason.
+  Implementation starts here and nowhere earlier.
+- **Otherwise, debate the revised design again.** A revision is a new design: its
+  fixes are themselves claims nobody has checked yet. A supported P1 is not
+  discharged by editing the doc — only by a round that no longer finds it.
+- **~3 rounds is the cap**, and reaching it is not an ending. See below.
 
 **Exit criteria — the cap bounds spend, not correctness.** Reaching the round cap
 is not a pass. At the cap:
