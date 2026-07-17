@@ -59,7 +59,7 @@ is optional; a blank or absent `config.md` resolves to safe defaults. Skills
 never write project specifics back into this plugin.
 
 When a skill finds `.afk/` absent it runs the `afk-init` bootstrap automatically
-(create `.afk/`, add the gitignore entry, detect commands, record `pluginRoot`)
+(create `.afk/`, add the ignore entry, detect commands, record `pluginRoot`)
 and continues — no manual step. Bundled helpers resolve via
 `${CLAUDE_PLUGIN_ROOT}` → the recorded `pluginRoot` → the skill's own directory,
 so a gate never hard-fails before the bootstrap runs. The `afk` driver also

@@ -15,7 +15,7 @@ self-contained spec.
    file areas) to touch. **No scope → stop and ask.** Never browse the tracker
    and pick work yourself; the scope fences everything you may touch.
 2. **Auto-bootstrap first.** If `.afk/` is absent, run the `afk-init` bootstrap
-   automatically (create `.afk/` from the template, add the `.gitignore` entry,
+   automatically (create `.afk/` from the template, add the ignore entry,
    detect commands, record `pluginRoot`) — idempotent — announce it, and
    continue. This runs before any config-dependent step, so a first run reads a
    populated config rather than only defaults. No manual step; `/afk-init` stays

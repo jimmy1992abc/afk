@@ -59,7 +59,7 @@ The repository ships manifests for the supported host layouts:
 
 No manual setup step is required: the first time an afk skill runs in a
 repository it bootstraps `.afk/` automatically — creating the config, adding the
-`.gitignore` entry, detecting commands, and recording the plugin root. To set it
+ignore entry, detecting commands, and recording the plugin root. To set it
 up explicitly or re-detect commands, run:
 
 ```text

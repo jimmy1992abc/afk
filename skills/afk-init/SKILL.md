@@ -1,6 +1,6 @@
 ---
 name: afk-init
-description: Part of the afk pipeline. One-time, idempotent bootstrap for a repository — detect build/test/lint commands, write .afk/config.md, add .afk/ to .gitignore, and record the plugin root. Run once per repo before the other afk skills. Triggers include "/afk-init", "set up afk", "initialise afk".
+description: Part of the afk pipeline. One-time, idempotent bootstrap for a repository — detect build/test/lint commands, write .afk/config.md, ignore .afk/, and record the plugin root. Run once per repo before the other afk skills. Triggers include "/afk-init", "set up afk", "initialise afk".
 ---
 
 # afk-init
@@ -27,10 +27,11 @@ rarely needs invoking by hand — `/afk-init` is for an explicit re-detect.
    into `.afk/config.md`, so bundled helpers resolve under a drop-in install
    where the env var is unset.
 6. **Ignore `.afk/`.** Append the line from the plugin's
-   `templates/gitignore-snippet.txt`, if absent, to the `.gitignore` of the same
-   main working tree the directory was created in — a `.gitignore` is per
-   checkout, so writing it to the invoking worktree would leave `.afk/` visible,
-   and committable, where it actually lives.
+   `templates/gitignore-snippet.txt`, if absent, to `info/exclude` under
+   `git rev-parse --path-format=absolute --git-common-dir`. That file is shared
+   by every linked worktree and is not tracked, so one write covers `.afk/`
+   wherever it is read from without dirtying a checkout that another session may
+   have mid-work on another branch.
 7. **Report** each action as created / updated / already present.
 
 ## Rules
