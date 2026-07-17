@@ -103,7 +103,10 @@ const diffText = diff;
 const context = [
   `The diff is included below (${target.command}). You have Read, Grep and Glob over the working tree and no other tools: read any file you need for context, and do not claim to have run any command.`,
   untracked.length
-    ? `IMPORTANT: ${untracked.length} file(s) in this change are new and are NOT in the diff below. The diff alone therefore does not show the whole change. Read each one before judging it:\n${untracked.map((f) => `- ${f}`).join('\n')}`
+    // JSON-encoded, one per line: a filename may legally contain a newline, and
+    // interpolating it raw would split one path across two bullets — the
+    // reviewer then reads neither, and the file is absent from the diff too.
+    ? `IMPORTANT: ${untracked.length} file(s) in this change are new and are NOT in the diff below. The diff alone therefore does not show the whole change. Read each one before judging it (paths are JSON-encoded):\n${untracked.map((f) => `- ${JSON.stringify(f)}`).join('\n')}`
     : '',
   '',
   `## Diff stat\n${stat}`,
