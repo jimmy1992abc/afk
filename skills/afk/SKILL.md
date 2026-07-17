@@ -38,8 +38,8 @@ pass). A design doc, a pushed branch, or a draft PR is a mid-waterfall
 checkpoint — never a stopping point and never an operator handoff. "Next:
 operator runs the review" is a bug, not an end state.
 
-design doc → adversarial debate (cap ~3 rounds; a repeating finding goes to the
-ledger, move on) → tests first (targeted) → implementation → adversarial sweep →
+design doc → adversarial debate (rules below; cap ~3 rounds; a repeating finding
+goes to the ledger, move on) → tests first (targeted) → implementation → adversarial sweep →
 commit → push early → open the PR as draft → deterministic CI green (fix red
 now) → **internal review** (`afk-internal-review`) → fix every finding →
 **external gate(s)** (rule below) → fix every confirmed structural finding;
@@ -54,6 +54,62 @@ than the code.
 - **Green** = deterministic CI green AND the full test suite green on the final
   commit. A green PR page alone is not green. Never mark ready before the suite
   is green.
+
+## Adversarial debate (the design-stage check)
+
+The critic is a subagent, usually the driver's own model. It is cheap, so it runs
+on every design — but being same-model, it can only test claims it *notices*, and
+it shares the author's blind spot about what was never considered at all. It is
+therefore a check on the design's **claims**, not proof of the design's
+**completeness**; an external design gate, where configured, covers omissions and
+framing that this step structurally cannot.
+
+**Posture, not verdict.** The critic is dispatched to break the design across
+named lenses, and each finding lands as `supported`, `refuted`, or `unverified`.
+Do **not** predetermine the outcome: a critic told the answer is "refuted"
+invents objections and can never return a clean pass on a sound design. "No
+finding" is a valid, reportable result. Reject an unsupported finding as firmly
+as an unsupported design claim.
+
+**Verify claims about external systems — by the cheapest SAFE means.** A design
+that asserts how a CLI behaves, what a permission model allows, what a command
+returns, or what a config does is asserting a fact, and the debate's job is to
+check it rather than reason about it. In descending preference:
+
+1. A hermetic experiment in a disposable workspace (temp dir, scratch repo,
+   fixture). Preferred — this is what catches an author and critic sharing a
+   wrong belief.
+2. Source, official documentation, or a recorded fixture.
+3. Neither available → record it in the design as an **assumption and its risk**.
+   An unverified claim is reported as unverified; it is never promoted to fact.
+
+Bounds, which override the preference order: never mutate production, never run a
+destructive action outside a disposable workspace, never paste credentials or
+secrets into a finding. Record the environment and version with any result — a
+local pass does not prove another OS, version, or configuration.
+
+**Validate a finding independently; do not re-run it blindly.** The author
+confirms a finding by the cheapest safe means — preferably a failing test — not
+by repeating a destructive action, and never on the critic's authority alone.
+Repeating it in the same environment is not independent confirmation.
+
+**Exit criteria — the cap bounds spend, not correctness.** Reaching the round cap
+is not a pass. At the cap:
+
+- An unresolved **P1**, or an unverified claim the design depends on, **blocks
+  implementation**. Escalate to the operator, or to the external design gate if
+  one is configured. Never proceed past a P1 because the rounds ran out.
+- An unresolved **P2** proceeds only as an explicit risk acceptance, recorded in
+  the ledger with its reason.
+
+**Record what was refuted.** A claim the design made, believed, and got wrong
+stays in the doc — but only where it links to what now prevents it: the corrected
+decision, and the test or control that pins it. A refuted-claims list with no
+such link is a diary; either give it a consumer or leave it out.
+
+Nothing here is machine-enforced: it is an instruction to the driver, like the
+rest of this waterfall. The ledger record of an accepted risk or a blocked P1 is
+the only durable artifact, and it is what the operator reads.
 
 ## External gate (the independent check)
 

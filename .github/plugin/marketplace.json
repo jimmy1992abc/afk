@@ -5,13 +5,13 @@
   },
   "metadata": {
     "description": "Autonomous PR-pipeline skills for AI coding agents",
-    "version": "0.2.3"
+    "version": "0.2.4"
   },
   "plugins": [
     {
       "name": "afk-skills",
       "description": "Autonomous PR pipeline: plan, implement, internal review, and independent external gates.",
-      "version": "0.2.3",
+      "version": "0.2.4",
       "source": "./"
     }
   ]
