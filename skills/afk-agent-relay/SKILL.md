@@ -34,7 +34,10 @@ simple tasks get shorter briefs). It distils; it does not just truncate.
 The bundled scripts (`brief.mjs`, `scope.mjs`, `hooks/`) sit beside this
 SKILL.md. Locate their directory as `${CLAUDE_PLUGIN_ROOT}/skills/afk-agent-relay`
 if the env var is set, else `<pluginRoot>/skills/afk-agent-relay` from
-`.afk/config.md`, else this skill's own directory. Always pass `--manual`
+`.afk/config.md`, else this skill's own directory. Resolve `.afk/` from the
+repository's main working tree — the first `worktree` line of
+`git worktree list --porcelain` — never the current directory. Always pass
+`--manual`
 (bypasses the default-off `AGENT_RELAY_ENABLED` master switch). Run in the
 background with a generous timeout and capture stdout to a file (the codex-backed
 scope can be slow); then read the marker block.

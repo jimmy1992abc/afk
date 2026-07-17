@@ -117,10 +117,18 @@ anything:
    matches yours, or whose `run-id` the operator handed you.
 4. **Otherwise allocate** `<run-id>` as `<YYYY-MM-DD>-<scope-slug>`, the slug
    sanitized for the filesystem and length-capped. Create the directory with an
-   operation that **fails if it already exists** (`mkdir` without `-p`), and on
-   failure retry the next numeric suffix: sanitizing and capping can map two
-   distinct scopes onto one slug, and testing the path before writing leaves a
-   window for a concurrent run to create it first.
+   operation that **fails if it already exists** (`mkdir` without `-p`) — testing
+   the path first and writing second leaves a window for a concurrent run to take
+   it in between. Write `ledger.md` with its header as the very next action: the
+   directory *is* the claim, so a directory with no ledger is a run still
+   starting, not a free path.
+
+   Creation failing means someone holds that path — never blindly move to the
+   next suffix, which would fork a duplicate run. Read what is there:
+   a ledger whose scope overlaps yours sends you back to step 2; a ledger whose
+   scope is disjoint is a slug collision, so retry the next suffix; no ledger yet
+   means a run is mid-claim — wait briefly, re-read, and treat it as live if it
+   stays ledgerless.
 
 The ledger opens with a header carrying `run-id`, the run's `scope` as the
 operator gave it, and the UTC `heartbeat` — written at allocation and kept

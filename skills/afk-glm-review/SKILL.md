@@ -26,8 +26,10 @@ pass, self-review, then re-run once. Defer minor items to a single final pass.
 The bundled helper `glm-gate.mjs` sits beside this SKILL.md. Locate its directory
 as `${CLAUDE_PLUGIN_ROOT}/skills/afk-glm-review` if the env var is set, else
 `<pluginRoot>/skills/afk-glm-review` from `.afk/config.md`, else this skill's own
-directory. If `.afk/` is absent, the `afk-init` bootstrap runs automatically
-first:
+directory. Resolve `.afk/` from the repository's main working tree — the first
+`worktree` line of `git worktree list --porcelain` — never the current directory,
+or a run from a linked worktree reads a different `.afk/` than the one `afk-init`
+wrote. If `.afk/` is absent, the `afk-init` bootstrap runs automatically first:
 
 ```text
 node "<helper-dir>/glm-gate.mjs"

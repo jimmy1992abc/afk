@@ -49,7 +49,9 @@ Output, in this shape:
 - **Handoff notes** — anything the implementer must know before starting.
 
 Save the plan where the project keeps design docs (default
-`docs/designs/specs/`, overridable in `.afk/config.md`).
+`docs/designs/specs/`, overridable in `.afk/config.md`). Resolve `.afk/` from the
+repository's main working tree — the first `worktree` line of
+`git worktree list --porcelain` — never the current directory.
 
 ## Hard rules
 
