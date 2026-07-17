@@ -27,7 +27,10 @@ rarely needs invoking by hand — `/afk-init` is for an explicit re-detect.
    into `.afk/config.md`, so bundled helpers resolve under a drop-in install
    where the env var is unset.
 6. **Ignore `.afk/`.** Append the line from the plugin's
-   `templates/gitignore-snippet.txt` to the repo's `.gitignore` if absent.
+   `templates/gitignore-snippet.txt`, if absent, to the `.gitignore` of the same
+   main working tree the directory was created in — a `.gitignore` is per
+   checkout, so writing it to the invoking worktree would leave `.afk/` visible,
+   and committable, where it actually lives.
 7. **Report** each action as created / updated / already present.
 
 ## Rules

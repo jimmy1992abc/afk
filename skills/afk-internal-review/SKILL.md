@@ -91,7 +91,10 @@ everything reviewed, residual risk, and the production-readiness checklist.
   allocate `.afk/runs/<YYYY-MM-DD>-pr<n>/` the same collision-safe way the `afk`
   skill allocates a run directory (create failing if it exists, retry the next
   suffix), so two standalone reviews of one PR on one date do not land in a
-  shared directory. Resolve `.afk/` against the main working tree (the first
+  shared directory. Give it a `ledger.md` header too — `run-id`, `scope` (the PR
+  you reviewed), `state`, `heartbeat` — and set `state: complete` when the review
+  ends: `afk` reads a ledgerless directory as a run mid-claim and would wait on
+  yours forever. Resolve `.afk/` against the main working tree (the first
   `worktree` line of `git worktree list --porcelain`), never the current
   directory, so a review from a linked worktree still writes to the run's one
   directory. The filename leads with `PR#<n>-<title>`;

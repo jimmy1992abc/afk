@@ -103,18 +103,21 @@ legitimately spans several worktrees, and each linked worktree has its own tree,
 so a path resolved from the current directory would split one run's state across
 trees and hide concurrent runs from each other.
 
-**Kickoff, in this order** — each check is only meaningful before you adopt
-anything:
+**Claiming your run directory** — part of kickoff, in this order; each check is
+only meaningful before you adopt anything:
 
-1. **Read every `.afk/runs/*/ledger.md`**: its `run-id`, `scope`, and heartbeat.
-   Do this first — once a directory is yours it is no longer "other", and stops
-   being checked.
-2. **A live run (heartbeat under ~20 min) whose scope overlaps yours → stop and
-   ask the operator.** Two runs would drive the same issue. This holds however
-   the scopes overlap, exact match included: a live same-scope run is a
-   collision, not an invitation to resume. Disjoint scopes proceed silently.
-3. **Resume** only a run that is not live — the directory whose ledger scope
-   matches yours, or whose `run-id` the operator handed you.
+1. **Read every `.afk/runs/*/ledger.md`**: its `run-id`, `scope`, `state`, and
+   heartbeat. Do this first — once a directory is yours it is no longer "other",
+   and stops being checked.
+2. **A live run whose scope overlaps yours → stop and ask the operator** — live
+   meaning `state: active` with a heartbeat under ~20 min. Two runs would drive
+   the same issue. This holds however the scopes overlap, exact match included: a
+   live same-scope run is a collision, not an invitation to resume. Disjoint
+   scopes proceed silently.
+3. **Resume** only a run that is `active` but not live — the directory whose
+   ledger scope matches yours, or whose `run-id` the operator handed you. A
+   `complete` run is finished history: never resume it, never count it as a
+   collision, and leave its directory untouched.
 4. **Otherwise allocate** `<run-id>` as `<YYYY-MM-DD>-<scope-slug>`, the slug
    sanitized for the filesystem and length-capped. Create the directory with an
    operation that **fails if it already exists** (`mkdir` without `-p`) — testing
@@ -124,16 +127,24 @@ anything:
    starting, not a free path.
 
    Creation failing means someone holds that path — never blindly move to the
-   next suffix, which would fork a duplicate run. Read what is there:
-   a ledger whose scope overlaps yours sends you back to step 2; a ledger whose
-   scope is disjoint is a slug collision, so retry the next suffix; no ledger yet
-   means a run is mid-claim — wait briefly, re-read, and treat it as live if it
-   stays ledgerless.
+   next suffix, which would fork a duplicate run. Read what is there: an `active`
+   ledger whose scope overlaps yours sends you back to step 2; a `complete`
+   ledger, or one whose scope is disjoint, is a spent or colliding slug, so retry
+   the next suffix; no ledger yet means a run is mid-claim — wait briefly,
+   re-read, and treat it as live if it stays ledgerless.
 
 The ledger opens with a header carrying `run-id`, the run's `scope` as the
-operator gave it, and the UTC `heartbeat` — written at allocation and kept
-current thereafter. Scope and heartbeat are what every other run reads to
+operator gave it, `state`, and the UTC `heartbeat` — written when the directory is
+claimed and kept current thereafter. These four are what every other run reads to
 identify this one, so a ledger without them is unmatchable.
+
+`state` is `active` from the claim until the queue is done, and `complete` only
+once it is. The two ways a run ends are not the same state: **finishing the queue
+sets `complete`** — its scope is spent, and a later run over that scope starts
+fresh rather than reopening it — while **auto-pausing leaves it `active`**, with
+only the heartbeat going stale, which is precisely what makes the work resumable.
+Marking a pause `complete` would strand it; never marking anything `complete`
+would leave a finished run forever resumable and its scope never free again.
 
 - **Never write into another run's directory.** Concurrent runs in one repository
   are normal; a shared ledger path is what makes them collide.
@@ -158,8 +169,10 @@ identify this one, so a ledger without them is unmatchable.
 - **Auto-pause:** track substantial new content per tick (a commit, a pushed
   branch, an opened PR, a new design doc, a resolved CI failure or finding).
   Two consecutive working ticks with none → stop the tick loop, post a status
-  report (blocking + remaining), and stop. Queue complete → stop with a final
-  report. Always tear down any scheduled tick on stop — never leave one running.
+  report (blocking + remaining), and stop, leaving `state: active` so the run can
+  be resumed. Queue complete → stop with a final report and set `state: complete`
+  in the same breath, ending the tick and the claim on your scope together.
+  Always tear down any scheduled tick on stop — never leave one running.
 
 ## End-of-run report
 
