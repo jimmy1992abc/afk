@@ -1,5 +1,5 @@
 {
   "name": "afk-skills",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Autonomous PR pipeline: plan, implement, internal review, and independent external gates."
 }

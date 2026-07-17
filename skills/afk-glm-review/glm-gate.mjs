@@ -73,7 +73,11 @@ const valid = validateTarget(target);
 if (!valid.ok) {
   emitError(`cannot review — ${valid.reason}`, 1);
 }
-const { diff, stat, changedFiles } = collectDiff(target);
+const { diff, stat, changedFiles, error: diffError } = collectDiff(target);
+if (diffError) {
+  // Never a skip: a target git cannot read is unreviewable, not unchanged.
+  emitError(`cannot review — ${diffError}`, 1);
+}
 const hasChanges = Boolean(diff.trim() || changedFiles.length);
 
 if (printArgsOnly) {
