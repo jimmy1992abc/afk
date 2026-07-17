@@ -419,3 +419,38 @@ test('the context budget is measured in bytes, not UTF-16 units', () => {
   assert.match(src, /Buffer\.byteLength\(diff, 'utf8'\)/);
   assert.doesNotMatch(src, /if \(diff\.length > maxCtx\)/);
 });
+
+test('the prompt warns when read context is a different revision than the diff', () => {
+  // --commit <old-sha> injects that commit's diff while Read/Grep/Glob see the
+  // CURRENT tree. A reviewer that believes its context matches will reason about
+  // the wrong revision and never know.
+  const dir = mkdtempSync(join(tmpdir(), 'claude-gate-drift-'));
+  try {
+    const g = (...a) => spawnSync('git', a, { cwd: dir, encoding: 'utf8' });
+    g('init', '-q', '-b', 'main');
+    g('config', 'user.email', 'test@example.com');
+    g('config', 'user.name', 'Test');
+    writeFileSync(join(dir, 'f.js'), 'const x = 1;\n');
+    g('add', '.');
+    g('commit', '-qm', 'one');
+    const old = g('rev-parse', 'HEAD').stdout.trim();
+    writeFileSync(join(dir, 'f.js'), 'const x = 999;\n');
+    g('add', '.');
+    g('commit', '-qm', 'two');
+
+    const drifted = spawnSync(process.execPath, [gatePath(), '--implementer', 'codex', '--commit', old, '--print-prompt'], {
+      cwd: dir, encoding: 'utf8', env: { ...process.env },
+    });
+    assert.equal(drifted.status, 0, drifted.stderr);
+    assert.match(drifted.stdout, /CAUTION: the files you can Read are the CURRENT working tree/);
+
+    // Reviewing HEAD of a clean tree: context does match, so no caution.
+    const atHead = spawnSync(process.execPath, [gatePath(), '--implementer', 'codex', '--commit', 'HEAD', '--print-prompt'], {
+      cwd: dir, encoding: 'utf8', env: { ...process.env },
+    });
+    assert.equal(atHead.status, 0, atHead.stderr);
+    assert.doesNotMatch(atHead.stdout, /CAUTION: the files you can Read/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
