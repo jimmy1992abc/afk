@@ -393,3 +393,29 @@ test('an over-budget diff is an error, not a truncated approval', () => {
   assert.match(result.stdout, /ERROR: .*over the 200-byte budget/);
   assert.doesNotMatch(result.stdout, /SKIPPED/);
 });
+
+test('rate-limiting is unavailability, not a failed review', () => {
+  // afk's selection rule treats an out-of-credit reviewer as unavailable, so the
+  // next gate in priority takes its place. Erroring would mark the round unclean
+  // and block the PR on a quota blip.
+  withStub({ is_error: true, api_error_status: 429, result: 'rate limit exceeded' }, (bin) => {
+    const result = runGate({
+      args: ['--implementer', 'codex', '--commit', 'HEAD'],
+      env: { CLAUDE_GATE_BIN: bin },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /SKIPPED: Claude is rate-limited or out of quota \(HTTP 429\)/);
+  });
+});
+
+test('the context budget is measured in bytes, not UTF-16 units', () => {
+  // A CJK diff is ~3 UTF-8 bytes per code unit, so counting String#length lets a
+  // ~900kB payload pass a 400kB "byte" budget and defeats the guard entirely.
+  const cjk = '你'.repeat(100);
+  assert.equal(cjk.length, 100);
+  assert.equal(Buffer.byteLength(cjk, 'utf8'), 300);
+
+  const src = readFileSync(new URL('../skills/afk-claude-review/claude-gate.mjs', import.meta.url), 'utf8');
+  assert.match(src, /Buffer\.byteLength\(diff, 'utf8'\)/);
+  assert.doesNotMatch(src, /if \(diff\.length > maxCtx\)/);
+});

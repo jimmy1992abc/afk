@@ -75,14 +75,18 @@ const hasChanges = Boolean(diff.trim() || changedFiles.length);
 
 // ── Prompt ──────────────────────────────────────────────────────────────────
 const maxCtx = Number.parseInt(process.env.CLAUDE_REVIEW_MAX_CTX_BYTES || '400000', 10) || 400000;
-if (diff.length > maxCtx) {
+// Bytes, not String#length: the prompt goes out as UTF-8 on stdin, while
+// .length counts UTF-16 code units. A CJK diff is ~3 bytes per unit, so a
+// 300k-"character" diff is ~900kB and would sail past a 400kB budget.
+const diffBytes = Buffer.byteLength(diff, 'utf8');
+if (diffBytes > maxCtx) {
   // Truncating and reviewing anyway would let a large change be APPROVED with
   // part of it never shown. The reviewer's read tools cannot recover what a
   // truncated diff drops: a deletion, or the old side of a modification, exists
   // nowhere in the current tree. So this fails closed rather than silently
   // narrowing what "reviewed" means.
   emitError(
-    `diff is ${diff.length} bytes, over the ${maxCtx}-byte budget. A truncated diff cannot be reviewed honestly — the old side of a modification and any deletion would simply be missing. Scope the review (--commit <sha>) or raise CLAUDE_REVIEW_MAX_CTX_BYTES.`,
+    `diff is ${diffBytes} bytes, over the ${maxCtx}-byte budget. A truncated diff cannot be reviewed honestly — the old side of a modification and any deletion would simply be missing. Scope the review (--commit <sha>) or raise CLAUDE_REVIEW_MAX_CTX_BYTES.`,
     1,
   );
 }
@@ -231,6 +235,12 @@ if (envelope?.is_error) {
   }
   if (status === 404) {
     emitSkip(`Configured model "${model}" is unavailable (HTTP 404) — set CLAUDE_REVIEW_MODEL to a model this account can use. ${detail}`);
+  }
+  if (status === 429) {
+    // afk's selection rule treats an out-of-credit or rate-limited reviewer as
+    // UNAVAILABLE, so the next gate in priority takes its place. Erroring here
+    // would instead mark the round unclean and block the PR on a quota blip.
+    emitSkip(`Claude is rate-limited or out of quota (HTTP 429) — this gate cannot run right now; the next gate in priority should take its place. ${detail}`);
   }
   emitError(`Claude review failed${status ? ` (HTTP ${status})` : ''}: ${detail} Transcript: ${logFile}`, res.status || 1);
 }
