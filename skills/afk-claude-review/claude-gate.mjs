@@ -75,10 +75,18 @@ const hasChanges = Boolean(diff.trim() || changedFiles.length);
 
 // ── Prompt ──────────────────────────────────────────────────────────────────
 const maxCtx = Number.parseInt(process.env.CLAUDE_REVIEW_MAX_CTX_BYTES || '400000', 10) || 400000;
-let diffText = diff;
-if (diffText.length > maxCtx) {
-  diffText = `${diffText.slice(0, maxCtx)}\n\n[diff truncated at ${maxCtx} bytes of ${diff.length}; raise CLAUDE_REVIEW_MAX_CTX_BYTES or scope the review to fewer files. Read the files directly for anything the truncated diff does not show.]\n`;
+if (diff.length > maxCtx) {
+  // Truncating and reviewing anyway would let a large change be APPROVED with
+  // part of it never shown. The reviewer's read tools cannot recover what a
+  // truncated diff drops: a deletion, or the old side of a modification, exists
+  // nowhere in the current tree. So this fails closed rather than silently
+  // narrowing what "reviewed" means.
+  emitError(
+    `diff is ${diff.length} bytes, over the ${maxCtx}-byte budget. A truncated diff cannot be reviewed honestly — the old side of a modification and any deletion would simply be missing. Scope the review (--commit <sha>) or raise CLAUDE_REVIEW_MAX_CTX_BYTES.`,
+    1,
+  );
 }
+const diffText = diff;
 
 // The context clause is this gate's own: it states what was supplied and what
 // the reviewer may do to learn more. A gate whose reviewer has no tools (glm)

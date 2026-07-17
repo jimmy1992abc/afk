@@ -9,6 +9,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -16,6 +17,9 @@ import { test } from 'node:test';
 
 const repoRoot = new URL('..', import.meta.url);
 const GATE = 'skills/afk-claude-review/claude-gate.mjs';
+
+// Absolute path, for the tests that must run the gate from INSIDE a temp repo.
+const gatePath = () => fileURLToPath(new URL(`../${GATE}`, import.meta.url));
 
 // The gate must never be blocked by THIS repo's own driver when a test means to
 // exercise a downstream path, so tests declare an implementer explicitly.
@@ -143,12 +147,9 @@ test('the prompt names untracked files, which no diff can show', () => {
     // The whole change is one brand-new file: `git diff HEAD` is empty.
     writeFileSync(join(dir, 'brand-new.mjs'), 'export const danger = 1;\n');
 
-    const result = spawnSync(
-      process.execPath,
-      [join(String(repoRoot).replace('file:///', '').replace(/\//g, '\\'), GATE.replace(/\//g, '\\')),
-        '--implementer', 'codex', '--uncommitted', '--print-prompt'],
-      { cwd: dir, encoding: 'utf8', env: { ...process.env } },
-    );
+    const result = spawnSync(process.execPath, [gatePath(), '--implementer', 'codex', '--uncommitted', '--print-prompt'], {
+      cwd: dir, encoding: 'utf8', env: { ...process.env },
+    });
 
     assert.equal(result.status, 0, result.stderr);
     const prompt = result.stdout;
@@ -160,9 +161,34 @@ test('the prompt names untracked files, which no diff can show', () => {
 });
 
 test('a diff-only change adds no untracked preamble', () => {
-  const result = runGate({ args: ['--implementer', 'codex', '--commit', 'HEAD', '--print-prompt'] });
-  assert.equal(result.status, 0, result.stderr);
-  assert.doesNotMatch(result.stdout, /NOT in the diff/i);
+  // In a CONTROLLED repo, never `--commit HEAD` of this one: the prompt embeds
+  // the diff, and this repo's own diff contains the source line carrying this
+  // phrase, so the assertion would match the code under test and fail the
+  // moment it was committed. A test whose fixture is the repo it lives in can
+  // poison itself.
+  const dir = mkdtempSync(join(tmpdir(), 'claude-gate-tracked-'));
+  try {
+    const g = (...a) => spawnSync('git', a, { cwd: dir, encoding: 'utf8' });
+    g('init', '-q', '-b', 'main');
+    g('config', 'user.email', 'test@example.com');
+    g('config', 'user.name', 'Test');
+    writeFileSync(join(dir, 'src.txt'), 'first\n');
+    g('add', '.');
+    g('commit', '-qm', 'init');
+    writeFileSync(join(dir, 'src.txt'), 'second\n');
+    g('add', '.');
+    g('commit', '-qm', 'edit an existing file only');
+
+    const result = spawnSync(process.execPath, [gatePath(), '--implementer', 'codex', '--commit', 'HEAD', '--print-prompt'], {
+      cwd: dir, encoding: 'utf8', env: { ...process.env },
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /second/, 'precondition: the real diff is present');
+    assert.doesNotMatch(result.stdout, /are new and are NOT in the diff/i);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 // ── the read-only boundary ──────────────────────────────────────────────────
@@ -353,3 +379,17 @@ function existsSyncSafe(p) {
     return false;
   }
 }
+
+test('an over-budget diff is an error, not a truncated approval', () => {
+  // Reading the current files cannot recover what truncation drops: a deletion,
+  // or the old side of a modification, is nowhere in the tree. Approving on a
+  // partial diff would quietly redefine "reviewed".
+  const result = runGate({
+    args: ['--implementer', 'codex', '--commit', 'HEAD'],
+    env: { CLAUDE_REVIEW_MAX_CTX_BYTES: '200' },
+  });
+
+  assert.notEqual(result.status, 0, 'must not exit clean');
+  assert.match(result.stdout, /ERROR: .*over the 200-byte budget/);
+  assert.doesNotMatch(result.stdout, /SKIPPED/);
+});
