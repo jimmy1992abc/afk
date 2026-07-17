@@ -14,7 +14,10 @@ rarely needs invoking by hand — `/afk-init` is for an explicit re-detect.
 
 1. **Confirm the repo.** Require a git working tree with a remote; stop with a
    clear message if either is absent.
-2. **Create `.afk/`** (with `runs/` inside) if missing.
+2. **Create `.afk/`** (with `runs/` inside) if missing, in the repository's main
+   working tree — the parent of
+   `git rev-parse --path-format=absolute --git-common-dir` — so every linked
+   worktree resolves the same `.afk/`.
 3. **Write `.afk/config.md`** from the plugin's `templates/afk-config.example.md`
    only when it does not already exist — never clobber an existing config.
 4. **Detect commands.** Fill any blank `test`/`lint`/`build` line from the

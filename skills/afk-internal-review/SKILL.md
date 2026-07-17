@@ -88,7 +88,10 @@ everything reviewed, residual risk, and the production-readiness checklist.
   `.afk/runs/<run-id>/PR#<n>-<title>.md` — a report belongs to the run that
   produced it, so it is never written to a path another run also owns. Take
   `<run-id>` from the run you are executing under; invoked outside a run, create
-  `.afk/runs/<YYYY-MM-DD>-pr<n>/`. The filename leads with `PR#<n>-<title>`;
+  `.afk/runs/<YYYY-MM-DD>-pr<n>/`. Resolve `.afk/` against the main working tree
+  (the parent of `git rev-parse --path-format=absolute --git-common-dir`), never
+  the current directory, so a review run from a linked worktree still writes to
+  the run's one directory. The filename leads with `PR#<n>-<title>`;
   sanitize the title for the filesystem (illegal characters and whitespace
   collapsed to `-`, case preserved, length-capped) and add a numeric suffix only
   to avoid clobbering an existing file.

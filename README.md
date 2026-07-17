@@ -90,7 +90,8 @@ The consuming repository may contain a local, gitignored `.afk/` directory:
 
 Each run owns one `runs/<run-id>/` directory — its ledger and its final reports
 together. Runs never share a path, so concurrent runs in one repository cannot
-overwrite each other.
+overwrite each other. `.afk/` lives in the main working tree, so a run spanning
+several linked worktrees keeps one ledger and stays visible to other runs.
 
 All fields in `.afk/config.md` are optional. Blank or absent values resolve to
 safe defaults or auto-detected commands.

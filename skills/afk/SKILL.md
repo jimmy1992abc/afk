@@ -94,9 +94,18 @@ that run produces: `ledger.md`, updated in place, and the per-PR final reports
 written beside it. At kickoff, adopt the existing directory whose ledger matches
 this run's scope; only when none matches, allocate `<run-id>` as
 `<YYYY-MM-DD>-<scope-slug>`, the slug sanitized for the filesystem and
-length-capped. The directory is per **run**, never per worktree — one run
-legitimately spans several worktrees, so its state cannot live in any one of
-them. If the ledger is missing, reconstruct it from the state checks below.
+length-capped, appending a numeric suffix while the path already exists — capping
+and sanitizing can map two distinct scopes onto one slug, and reusing the path
+would overwrite the other run's ledger. If the ledger is missing, reconstruct it
+from the state checks below.
+
+Resolve `.afk/` against the repository's **main working tree** — the parent of
+`git rev-parse --path-format=absolute --git-common-dir` — never against the
+current directory. The
+directory is per **run**, never per worktree: one run legitimately spans several
+worktrees, and each linked worktree has its own tree, so a path resolved from the
+current directory would split one run's state across trees and hide concurrent
+runs from each other's cross-run check.
 
 The ledger opens with a header carrying `run-id`, the run's `scope` as the
 operator gave it, and the UTC `heartbeat` — written at allocation and kept
@@ -121,8 +130,9 @@ identify this one, so a ledger without them is unmatchable.
 - **Never identify a run by recency.** Match the operator's scope; the newest
   ledger is as likely to belong to another run as to yours.
 - **Legacy layout:** a `.afk/afk-ledger.md` or `.afk/reports/` predates run
-  directories. Adopt one only when its scope matches this run's, by moving it
-  into your run directory; otherwise leave it untouched.
+  directories and carries no scope header, so it cannot be scope-matched. Ask the
+  operator whether it belongs to this run; adopt it on a yes by moving it into
+  your run directory, otherwise leave it untouched. Never adopt one silently.
 - **State checks** (scoped, not global): view each scoped issue; list PRs for
   your branches; check the current branch and status; resume the first
   unfinished step. One branch per issue off the default branch; push early.
