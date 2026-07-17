@@ -36,7 +36,10 @@ update tests for every changed behaviour.
 
 Run the project's checks from `.afk/config.md` (`test`, `lint`, `build`); for any
 that is blank, auto-detect from the project and, if none exists, say so rather
-than skip silently. Report results verbatim; never suppress a failure.
+than skip silently. Report results verbatim; never suppress a failure. Resolve
+`.afk/` from the repository's main working tree — the first `worktree` line of
+`git worktree list --porcelain` — never the current directory, or work in a
+linked worktree reads a different `.afk/` than the one `afk-init` wrote.
 
 ### 5 — Self-review loop
 

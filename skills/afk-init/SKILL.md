@@ -1,6 +1,6 @@
 ---
 name: afk-init
-description: Part of the afk pipeline. One-time, idempotent bootstrap for a repository — detect build/test/lint commands, write .afk/config.md, add .afk/ to .gitignore, and record the plugin root. Run once per repo before the other afk skills. Triggers include "/afk-init", "set up afk", "initialise afk".
+description: Part of the afk pipeline. One-time, idempotent bootstrap for a repository — detect build/test/lint commands, write .afk/config.md, ignore .afk/, and record the plugin root. Run once per repo before the other afk skills. Triggers include "/afk-init", "set up afk", "initialise afk".
 ---
 
 # afk-init
@@ -14,7 +14,9 @@ rarely needs invoking by hand — `/afk-init` is for an explicit re-detect.
 
 1. **Confirm the repo.** Require a git working tree with a remote; stop with a
    clear message if either is absent.
-2. **Create `.afk/`** (with `reports/` inside) if missing.
+2. **Create `.afk/`** (with `runs/` inside) if missing, in the repository's main
+   working tree — the first `worktree` line of `git worktree list --porcelain` —
+   so every linked worktree resolves the same `.afk/`.
 3. **Write `.afk/config.md`** from the plugin's `templates/afk-config.example.md`
    only when it does not already exist — never clobber an existing config.
 4. **Detect commands.** Fill any blank `test`/`lint`/`build` line from the
@@ -25,7 +27,11 @@ rarely needs invoking by hand — `/afk-init` is for an explicit re-detect.
    into `.afk/config.md`, so bundled helpers resolve under a drop-in install
    where the env var is unset.
 6. **Ignore `.afk/`.** Append the line from the plugin's
-   `templates/gitignore-snippet.txt` to the repo's `.gitignore` if absent.
+   `templates/gitignore-snippet.txt`, if absent, to `info/exclude` under
+   `git rev-parse --path-format=absolute --git-common-dir`. That file is shared
+   by every linked worktree and is not tracked, so one write covers `.afk/`
+   wherever it is read from without dirtying a checkout that another session may
+   have mid-work on another branch.
 7. **Report** each action as created / updated / already present.
 
 ## Rules

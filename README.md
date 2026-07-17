@@ -60,7 +60,7 @@ The repository ships manifests for the supported host layouts:
 
 No manual setup step is required: the first time an afk skill runs in a
 repository it bootstraps `.afk/` automatically — creating the config, adding the
-`.gitignore` entry, detecting commands, and recording the plugin root. To set it
+ignore entry, detecting commands, and recording the plugin root. To set it
 up explicitly or re-detect commands, run:
 
 ```text
@@ -83,9 +83,16 @@ The consuming repository may contain a local, gitignored `.afk/` directory:
 ```text
 .afk/
   config.md
-  reports/
-  afk-ledger.md
+  runs/
+    <run-id>/
+      ledger.md
+      PR#<n>-<title>.md
 ```
+
+Each run owns one `runs/<run-id>/` directory — its ledger and its final reports
+together. Runs never share a path, so concurrent runs in one repository cannot
+overwrite each other. `.afk/` lives in the main working tree, so a run spanning
+several linked worktrees keeps one ledger and stays visible to other runs.
 
 All fields in `.afk/config.md` are optional. Blank or absent values resolve to
 safe defaults or auto-detected commands.
@@ -99,9 +106,10 @@ lint:  <cmd>
 build: <cmd>
 
 ## external gate
-priority: codex > kimi > glm
+priority: codex > claude > kimi > glm
 min-pass: 1
 mode:     waterfall
+# implementer:   # who writes the code, if not the driver; may only block a gate
 
 ## merge
 policy: leave-open

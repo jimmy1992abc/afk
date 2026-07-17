@@ -15,7 +15,7 @@ self-contained spec.
    file areas) to touch. **No scope → stop and ask.** Never browse the tracker
    and pick work yourself; the scope fences everything you may touch.
 2. **Auto-bootstrap first.** If `.afk/` is absent, run the `afk-init` bootstrap
-   automatically (create `.afk/` from the template, add the `.gitignore` entry,
+   automatically (create `.afk/` from the template, add the ignore entry,
    detect commands, record `pluginRoot`) — idempotent — announce it, and
    continue. This runs before any config-dependent step, so a first run reads a
    populated config rather than only defaults. No manual step; `/afk-init` stays
@@ -98,26 +98,90 @@ another session's branch; never deploy (merge ≠ deploy).
 
 ## Continuity and self-pause
 
-The run's ledger lives at `.afk/afk-ledger.md` (gitignored), updated in place; if
-missing, reconstruct it from the state checks below.
+Each run owns a directory `.afk/runs/<run-id>/` (gitignored) holding everything
+that run produces: `ledger.md`, updated in place, and the per-PR final reports
+written beside it. If the ledger is missing, reconstruct it from the state checks
+below.
 
+Resolve `.afk/` against the repository's **main working tree** — the first
+`worktree` line of `git worktree list --porcelain` — never against the current
+directory, and never by taking the parent of the common git dir (under
+`--separate-git-dir`, or in a submodule, that parent is git metadata rather than
+a working tree). The directory is per **run**, never per worktree: one run
+legitimately spans several worktrees, and each linked worktree has its own tree,
+so a path resolved from the current directory would split one run's state across
+trees and hide concurrent runs from each other.
+
+**Claiming your run directory** — part of kickoff, in this order; each check is
+only meaningful before you adopt anything:
+
+1. **Read every `.afk/runs/*/ledger.md`**: its `run-id`, `scope`, `state`, and
+   heartbeat. Do this first — once a directory is yours it is no longer "other",
+   and stops being checked.
+2. **A live run whose scope overlaps yours → stop and ask the operator** — live
+   meaning `state: active` with a heartbeat under ~20 min. Two runs would drive
+   the same issue. This holds however the scopes overlap, exact match included: a
+   live same-scope run is a collision, not an invitation to resume. Disjoint
+   scopes proceed silently.
+3. **Resume** only a run that is `active` but not live — the directory whose
+   ledger scope matches yours, or whose `run-id` the operator handed you. A
+   `complete` run is finished history: never resume it, never count it as a
+   collision, and leave its directory untouched.
+4. **Otherwise allocate** `<run-id>` as `<YYYY-MM-DD>-<scope-slug>`, the slug
+   sanitized for the filesystem and length-capped. Create the directory with an
+   operation that **fails if it already exists** (`mkdir` without `-p`) — testing
+   the path first and writing second leaves a window for a concurrent run to take
+   it in between. Write `ledger.md` with its header as the very next action: the
+   directory *is* the claim, so a directory with no ledger is a run still
+   starting, not a free path.
+
+   Creation failing means someone holds that path — never blindly move to the
+   next suffix, which would fork a duplicate run. Read what is there: an `active`
+   ledger whose scope overlaps yours sends you back to step 2; a `complete`
+   ledger, or one whose scope is disjoint, is a spent or colliding slug, so retry
+   the next suffix; no ledger yet means a run is mid-claim — wait briefly,
+   re-read, and treat it as live if it stays ledgerless.
+
+The ledger opens with a header carrying `run-id`, the run's `scope` as the
+operator gave it, `state`, and the UTC `heartbeat` — written when the directory is
+claimed and kept current thereafter. These four are what every other run reads to
+identify this one, so a ledger without them is unmatchable.
+
+`state` is `active` from the claim until the queue is done, and `complete` only
+once it is. The two ways a run ends are not the same state: **finishing the queue
+sets `complete`** — its scope is spent, and a later run over that scope starts
+fresh rather than reopening it — while **auto-pausing leaves it `active`**, with
+only the heartbeat going stale, which is precisely what makes the work resumable.
+Marking a pause `complete` would strand it; never marking anything `complete`
+would leave a finished run forever resumable and its scope never free again.
+
+- **Never write into another run's directory.** Concurrent runs in one repository
+  are normal; a shared ledger path is what makes them collide.
 - **If the host supports scheduled re-invocation** (a cron or wake-up), set up a
   recurring tick that re-invokes you; the tick prompt is static (scope, order,
-  merge policy, constraints, ledger path) — never embed the ledger itself.
+  merge policy, constraints, run directory) — never embed the ledger itself.
   Otherwise run to completion in-session, checkpointing the ledger before any
   yield so a later session resumes the same issue at its next step.
-- **Overlap guard — first action each tick:** refresh a UTC heartbeat in the
+- **Overlap guard — first action each tick:** refresh a UTC heartbeat in your own
   ledger at each step and during long waits. A tick that finds a heartbeat
-  fresher than ~20 min exits immediately (another tick is working); such exits
-  do not count toward auto-pause.
+  fresher than ~20 min in **its own** ledger exits immediately (another tick of
+  this run is working); such exits do not count toward auto-pause.
+- **Never identify a run by recency.** Match the operator's scope; the newest
+  ledger is as likely to belong to another run as to yours.
+- **Legacy layout:** a `.afk/afk-ledger.md` or `.afk/reports/` predates run
+  directories and carries no scope header, so it cannot be scope-matched. Ask the
+  operator whether it belongs to this run; adopt it on a yes by moving it into
+  your run directory, otherwise leave it untouched. Never adopt one silently.
 - **State checks** (scoped, not global): view each scoped issue; list PRs for
   your branches; check the current branch and status; resume the first
   unfinished step. One branch per issue off the default branch; push early.
 - **Auto-pause:** track substantial new content per tick (a commit, a pushed
   branch, an opened PR, a new design doc, a resolved CI failure or finding).
   Two consecutive working ticks with none → stop the tick loop, post a status
-  report (blocking + remaining), and stop. Queue complete → stop with a final
-  report. Always tear down any scheduled tick on stop — never leave one running.
+  report (blocking + remaining), and stop, leaving `state: active` so the run can
+  be resumed. Queue complete → stop with a final report and set `state: complete`
+  in the same breath, ending the tick and the claim on your scope together.
+  Always tear down any scheduled tick on stop — never leave one running.
 
 ## End-of-run report
 
