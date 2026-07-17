@@ -98,6 +98,11 @@ length-capped. The directory is per **run**, never per worktree — one run
 legitimately spans several worktrees, so its state cannot live in any one of
 them. If the ledger is missing, reconstruct it from the state checks below.
 
+The ledger opens with a header carrying `run-id`, the run's `scope` as the
+operator gave it, and the UTC `heartbeat` — written at allocation and kept
+current thereafter. Scope and heartbeat are what every other run reads to
+identify this one, so a ledger without them is unmatchable.
+
 - **Never write into another run's directory.** Concurrent runs in one repository
   are normal; a shared ledger path is what makes them collide.
 - **Cross-run check at kickoff:** read the heartbeat and scope of every other

@@ -1,6 +1,6 @@
 {
   "name": "afk-skills",
-  "version": "0.3.0",
+  "version": "0.2.2",
   "description": "Autonomous PR-pipeline skills for AI coding agents",
   "license": "Apache-2.0",
   "private": true,
