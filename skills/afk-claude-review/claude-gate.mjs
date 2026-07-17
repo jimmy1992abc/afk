@@ -62,7 +62,7 @@ const valid = validateTarget(target);
 if (!valid.ok) {
   emitError(`cannot review — ${valid.reason}`, 1);
 }
-const { diff, stat, changedFiles } = collectDiff(target);
+const { diff, stat, changedFiles, untracked = [] } = collectDiff(target);
 const hasChanges = Boolean(diff.trim() || changedFiles.length);
 
 // ── Prompt ──────────────────────────────────────────────────────────────────

@@ -57,7 +57,7 @@ if (!valid.ok) {
 
 // This gate's own context clause: kimi HAS tools, so it is told to go looking —
 // the opposite of what glm must be told. See lib/gate/prompt.mjs.
-const context = `Inspect the target with \`${target.command}\` in this git repository. Use git and read surrounding files for context. Do NOT modify, stage, commit, write, or delete ANY file — review only.`;
+const context = `Inspect the target with ${target.inspect || `\`${target.command}\``} in this git repository. Use git and read surrounding files for context. Do NOT modify, stage, commit, write, or delete ANY file — review only.`;
 
 const reviewPrompt = buildReviewPrompt({ scope: target.label, context });
 
