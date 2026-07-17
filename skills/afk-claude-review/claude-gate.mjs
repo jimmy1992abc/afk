@@ -44,6 +44,10 @@ if (isGateDisabled('CLAUDE_REVIEW_GATE')) {
 
 const userArgs = process.argv.slice(2);
 const printArgsOnly = userArgs.includes('--print-args');
+// Prints the exact prompt the reviewer would receive, and calls no model. The
+// argv is not the review: asserting flags proved nothing about whether the
+// prompt actually carried the change.
+const printPromptOnly = userArgs.includes('--print-prompt');
 
 // ── Self-review guard ───────────────────────────────────────────────────────
 // A gate whose model wrote the code under review provides no independence. The
@@ -79,13 +83,21 @@ if (diffText.length > maxCtx) {
 // The context clause is this gate's own: it states what was supplied and what
 // the reviewer may do to learn more. A gate whose reviewer has no tools (glm)
 // must never be told to go looking — see lib/gate/prompt.mjs.
+//
+// Untracked files appear in NO diff (`git diff HEAD` is empty for a brand-new
+// file) and this reviewer has no git to discover them with. Without the list
+// below, an all-new-files change reaches the reviewer as an empty diff and can
+// be approved having inspected nothing.
 const context = [
   `The diff is included below (${target.command}). You have Read, Grep and Glob over the working tree and no other tools: read any file you need for context, and do not claim to have run any command.`,
+  untracked.length
+    ? `IMPORTANT: ${untracked.length} file(s) in this change are new and are NOT in the diff below. The diff alone therefore does not show the whole change. Read each one before judging it:\n${untracked.map((f) => `- ${f}`).join('\n')}`
+    : '',
   '',
   `## Diff stat\n${stat}`,
   '',
   `## Full diff\n${diffText}`,
-].join('\n');
+].filter(Boolean).join('\n');
 
 const prompt = buildReviewPrompt({ scope: target.label, context });
 
@@ -115,6 +127,11 @@ const args = [
 ];
 
 const bin = (process.env.CLAUDE_GATE_BIN || 'claude').trim();
+
+if (printPromptOnly) {
+  process.stdout.write(`${prompt}\n`);
+  process.exit(0);
+}
 
 if (printArgsOnly) {
   // Dry run: resolve everything, call no model. Reports what the gate resolved

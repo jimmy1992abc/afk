@@ -124,6 +124,47 @@ test('claude gate resolves a commit target', () => {
   assert.equal(parsed.commit, 'HEAD');
 });
 
+// ── the prompt actually sent ────────────────────────────────────────────────
+// These assert the PROMPT, not collectDiff. Testing that the lib returns
+// `untracked` passed while the gate silently dropped it, so an all-new-files
+// change still reached the reviewer as an empty diff: the test pinned the wrong
+// object. --print-args reports the real prompt text.
+
+test('the prompt names untracked files, which no diff can show', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'claude-gate-untracked-'));
+  try {
+    const g = (...a) => spawnSync('git', a, { cwd: dir, encoding: 'utf8' });
+    g('init', '-q', '-b', 'main');
+    g('config', 'user.email', 'test@example.com');
+    g('config', 'user.name', 'Test');
+    writeFileSync(join(dir, 'tracked.txt'), 'committed\n');
+    g('add', '.');
+    g('commit', '-qm', 'init');
+    // The whole change is one brand-new file: `git diff HEAD` is empty.
+    writeFileSync(join(dir, 'brand-new.mjs'), 'export const danger = 1;\n');
+
+    const result = spawnSync(
+      process.execPath,
+      [join(String(repoRoot).replace('file:///', '').replace(/\//g, '\\'), GATE.replace(/\//g, '\\')),
+        '--implementer', 'codex', '--uncommitted', '--print-prompt'],
+      { cwd: dir, encoding: 'utf8', env: { ...process.env } },
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    const prompt = result.stdout;
+    assert.match(prompt, /brand-new\.mjs/, 'the reviewer must be told the new file exists');
+    assert.match(prompt, /NOT in the diff/i, 'and that the diff does not contain it');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a diff-only change adds no untracked preamble', () => {
+  const result = runGate({ args: ['--implementer', 'codex', '--commit', 'HEAD', '--print-prompt'] });
+  assert.equal(result.status, 0, result.stderr);
+  assert.doesNotMatch(result.stdout, /NOT in the diff/i);
+});
+
 // ── the read-only boundary ──────────────────────────────────────────────────
 
 test('claude gate loads no tool that can write', () => {
