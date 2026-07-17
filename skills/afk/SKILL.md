@@ -38,8 +38,9 @@ pass). A design doc, a pushed branch, or a draft PR is a mid-waterfall
 checkpoint — never a stopping point and never an operator handoff. "Next:
 operator runs the review" is a bug, not an end state.
 
-design doc → adversarial debate (rules below; cap ~3 rounds; a repeating finding
-goes to the ledger, move on) → tests first (targeted) → implementation → adversarial sweep →
+design doc → adversarial debate (rules below; cap ~3 rounds; at the cap an
+unresolved P1 escalates instead of proceeding, an accepted P2 risk goes to the
+ledger) → tests first (targeted) → implementation → adversarial sweep →
 commit → push early → open the PR as draft → deterministic CI green (fix red
 now) → **internal review** (`afk-internal-review`) → fix every finding →
 **external gate(s)** (rule below) → fix every confirmed structural finding;

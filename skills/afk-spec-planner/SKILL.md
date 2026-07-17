@@ -40,8 +40,8 @@ Output, in this shape:
 - **Assumptions** — every assumption made where the spec was silent, **and every
   claim about an external system you did not verify**. How a CLI behaves, what a
   permission model allows, what a command returns, what a config does: if you did
-  not run it, read its source, or cite its docs, it is an assumption with a risk,
-  never a statement of fact. A confident unverified sentence is the most
+  not run it, read its source, cite its docs, or record a fixture of it, it is an
+  assumption with a risk, never a statement of fact. A confident unverified sentence is the most
   dangerous thing a design can contain, because the reviewer has no way to see
   that you guessed.
 - **Approach** — the chosen approach and why, over the obvious alternatives.

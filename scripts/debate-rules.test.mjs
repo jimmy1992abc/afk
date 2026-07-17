@@ -69,6 +69,17 @@ test('the planner treats an unverified external claim as an assumption', () => {
   assert.match(planner, /never a statement of fact/);
 });
 
+test('the planner and the debate accept the same evidence', () => {
+  // The list is written out in both files, so it can drift — and it did: the
+  // debate accepted a recorded fixture while the planner still demanded a run,
+  // source, or docs, which marks a fixture-backed claim unverified and strands
+  // the waterfall on a P1 that has evidence.
+  for (const evidence of [/run it/, /source/, /docs/, /fixture/]) {
+    assert.match(planner, evidence);
+  }
+  assert.match(afkSkill, /Source, official documentation, or a recorded fixture/);
+});
+
 test('the round-cap concept stays out of the planner, which has no such step', () => {
   // afk owns the debate; the planner produces the plan and stops.
   assert.doesNotMatch(planner, /debate|round cap|external gate/i);
