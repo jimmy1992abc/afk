@@ -18,7 +18,18 @@ test('the debate has exit criteria, so the cap cannot pass a P1 by running out',
   assert.match(afkSkill, /Exit criteria/);
   assert.match(afkSkill, /\*\*do\s*\n?\s*not start implementing\*\*/);
   assert.match(afkSkill, /Never proceed past a P1 because the rounds ran out/);
-  assert.match(afkSkill, /a risk you accept explicitly and record\s*\n?\s*in the ledger/);
+  assert.match(afkSkill, /never implement a\s*\n?\s*revision the cap left unreviewed/);
+});
+
+test('the cap asks the clean-round question rather than a parallel one', () => {
+  // The root of four gate rounds: the exit criteria restated the clean round's
+  // condition as "unresolved findings" instead of referencing it, and the two
+  // drifted every time the loop moved — undefined labels, then a P2 revision
+  // exiting clean, then a P2 revision at the cap with no defined outcome. One
+  // definition, referenced everywhere, has no seam to drift along.
+  assert.match(afkSkill, /has the design in front of you had a clean\s*\n?\s*round/);
+  assert.match(afkSkill, /revised after its last clean round/);
+  assert.match(afkSkill, /the cap changes nothing/);
 });
 
 test('the exit criteria are stated as doctrine, not as a mechanism', () => {

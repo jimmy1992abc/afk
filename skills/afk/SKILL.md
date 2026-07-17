@@ -38,9 +38,9 @@ pass). A design doc, a pushed branch, or a draft PR is a mid-waterfall
 checkpoint — never a stopping point and never an operator handoff. "Next:
 operator runs the review" is a bug, not an end state.
 
-design doc → adversarial debate (rules below; cap ~3 rounds; at the cap an
-unresolved P1 escalates instead of proceeding, an accepted P2 risk goes to the
-ledger) → tests first (targeted) → implementation → adversarial sweep →
+design doc → adversarial debate (rules below; cap ~3 rounds; implement only from a
+design version a round found clean, at the cap too, otherwise escalate) → tests
+first (targeted) → implementation → adversarial sweep →
 commit → push early → open the PR as draft → deterministic CI green (fix red
 now) → **internal review** (`afk-internal-review`) → fix every finding →
 **external gate(s)** (rule below) → fix every confirmed structural finding;
@@ -121,14 +121,22 @@ design untouched. Then one of:
 - **~3 rounds is the cap**, and reaching it is not an ending. See below.
 
 **Exit criteria — the cap bounds spend, not correctness.** Reaching the round cap
-is not a pass. At the cap:
+is not a pass, and it does not lower the bar a clean round sets. The cap asks the
+same question every other round does: has the design in front of you had a clean
+round?
 
-- With an unresolved **P1**, or an unverified claim the design depends on, **do
-  not start implementing**. Escalate to the operator, or to the external design
-  gate if one is configured. Never proceed past a P1 because the rounds ran out.
-- An unresolved **P2** proceeds only as a risk you accept explicitly and record
-  in the ledger with its reason. A helper cannot accept a risk on the operator's
-  behalf; what gets written is a decision you made and are accountable for.
+- **Yes** → implement. Same exit as any other round; the cap changes nothing.
+- **No** — a supported P1 stands, a claim the design depends on is unverified, or
+  it was revised after its last clean round — → **do not start implementing**.
+  Escalate to the operator, or to the external design gate if one is configured.
+  Never proceed past a P1 because the rounds ran out, and never implement a
+  revision the cap left unreviewed.
+
+The cap changes exactly one thing: a P2 you would have revised, you no longer
+can, because revising costs a round you do not have. Accept it knowingly instead
+— which by the definition above leaves the round clean — or escalate. A helper
+cannot accept a risk on the operator's behalf; what gets written is a decision
+you made and are accountable for.
 
 This is level 3 — doctrine, not a guarantee (AGENTS.md, "What this plugin can and
 cannot enforce"). Nothing stops a driver from implementing anyway. It stops if it
