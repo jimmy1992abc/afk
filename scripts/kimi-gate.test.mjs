@@ -6,6 +6,7 @@
 
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 
 import { test } from 'node:test';
 
@@ -59,6 +60,14 @@ test('kimi gate tells its reviewer to go looking, unlike the tool-less gate', ()
   const { promptBytes, command } = JSON.parse(result.stdout);
   assert.ok(promptBytes > 0);
   assert.equal(command, 'git show HEAD');
+});
+
+test('kimi gate never exits clean on a status it could not read', () => {
+  // A null status means kimi died on a signal. `?? 0` there would report a
+  // killed review as a clean one; the exit expression must fail closed.
+  const src = readFileSync(new URL('../skills/afk-kimi-review/kimi-gate.mjs', import.meta.url), 'utf8');
+  assert.match(src, /process\.exit\(res\.status \?\? 1\)/);
+  assert.doesNotMatch(src, /process\.exit\(res\.status \?\? 0\)/);
 });
 
 test('kimi gate opt-out short-circuits before any target resolution', () => {

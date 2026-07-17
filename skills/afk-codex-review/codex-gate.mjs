@@ -43,7 +43,6 @@ import { join } from 'node:path';
 import { isGateDisabled } from '../../lib/gate/env.mjs';
 import { detectBase, resolveBase } from '../../lib/gate/git.mjs';
 import { createProtocol } from '../../lib/gate/protocol.mjs';
-import { optVal } from '../../lib/gate/target.mjs';
 
 const isWin = process.platform === 'win32';
 const { emitSkip, emitReview, emitError } = createProtocol({ label: 'CODEX', slug: 'codex-gate' });
@@ -187,7 +186,19 @@ const hasTarget = userArgs.some((a) =>
   ['--base', '--commit', '--uncommitted'].includes(a),
 );
 const printArgsOnly = userArgs.includes('--print-args');
-const passThrough = userArgs.filter((a) => a !== '--print-args');
+
+// Promote an operator-supplied `--base` to its remote-tracking ref too, not just
+// the auto-detected default: a bare `--base main` against a stale local main is
+// the same wrong-commit-range defect, and the other three gates promote it.
+function promoteExplicitBase(argv) {
+  const i = argv.indexOf('--base');
+  if (i < 0 || i + 1 >= argv.length) return argv;
+  const next = [...argv];
+  next[i + 1] = resolveBase(argv[i + 1]);
+  return next;
+}
+
+const passThrough = promoteExplicitBase(userArgs.filter((a) => a !== '--print-args'));
 
 // Lean-context overrides (review THE DIFF, not the project doc corpus):
 //   - model_reasoning_effort: default `medium`. Override via

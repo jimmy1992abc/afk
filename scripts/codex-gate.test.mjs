@@ -91,13 +91,23 @@ test('codex gate resolves and forwards a promoted base when none is given', () =
   assert.equal(args[args.indexOf('--base') + 1], 'origin/main');
 });
 
-test('codex gate leaves an explicit target untouched', () => {
+test('codex gate leaves an explicit non-base target untouched', () => {
   const result = runGate({ args: ['--commit', 'HEAD', '--print-args'] });
 
   const { args, hasExplicitTarget } = JSON.parse(result.stdout);
   assert.equal(hasExplicitTarget, true);
   assert.equal(args.includes('--base'), false, 'must not add a base beside an explicit target');
   assert.equal(args[args.indexOf('--commit') + 1], 'HEAD');
+});
+
+test('codex gate promotes an operator-supplied base, not just the detected one', () => {
+  // Promoting only the auto-detected default would leave `--base main` bare
+  // here while the other three gates promote it — the same wrong-commit-range
+  // defect, surviving on the explicit path.
+  const result = runGate({ args: ['--base', 'main', '--print-args'] });
+
+  const { args } = JSON.parse(result.stdout);
+  assert.equal(args[args.indexOf('--base') + 1], 'origin/main');
 });
 
 test('codex gate keeps its lean-context overrides ahead of passthrough flags', () => {

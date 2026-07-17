@@ -118,4 +118,6 @@ if (!review) {
 }
 
 emitReview(review);
-process.exit(res.status ?? 0);
+// `?? 1`, never `?? 0`: a null status means kimi died on a signal, and a review
+// that was killed must not exit clean.
+process.exit(res.status ?? 1);
