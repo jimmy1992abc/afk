@@ -25,16 +25,15 @@
 // Claude.
 
 import { spawnSync } from 'node:child_process';
-import { closeSync, existsSync, mkdtempSync, openSync, writeSync } from 'node:fs';
+import { closeSync, mkdtempSync, openSync, writeSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 
 import { isGateDisabled } from '../../lib/gate/env.mjs';
-import { git } from '../../lib/gate/git.mjs';
-import { readConfigImplementer, resolveGuard } from '../../lib/gate/implementer.mjs';
+import { guardFor } from '../../lib/gate/implementer.mjs';
 import { buildReviewPrompt } from '../../lib/gate/prompt.mjs';
 import { createProtocol } from '../../lib/gate/protocol.mjs';
-import { collectDiff, optVal, parseTarget } from '../../lib/gate/target.mjs';
+import { collectDiff, parseTarget, validateTarget } from '../../lib/gate/target.mjs';
 
 const isWin = process.platform === 'win32';
 const { emitSkip, emitReview, emitError } = createProtocol({ label: 'CLAUDE', slug: 'claude-gate' });
@@ -50,28 +49,19 @@ const printArgsOnly = userArgs.includes('--print-args');
 // A gate whose model wrote the code under review provides no independence. The
 // default afk driver IS Claude Code, so this is the failure that would
 // otherwise happen silently and constantly.
-function findAfkConfig() {
-  const top = git(['rev-parse', '--show-toplevel']).trim();
-  const commonDir = git(['rev-parse', '--path-format=absolute', '--git-common-dir']).trim();
-  const candidates = [
-    join(process.cwd(), '.afk', 'config.md'),
-    top && join(top, '.afk', 'config.md'),
-    commonDir && join(dirname(commonDir), '.afk', 'config.md'),
-  ].filter(Boolean);
-  return candidates.find((p) => existsSync(p)) || '';
-}
-
-const guard = resolveGuard({
-  gateFamily: 'claude',
-  flagValue: optVal(userArgs, '--implementer') || '',
-  configValue: readConfigImplementer(findAfkConfig()),
-});
+const guard = guardFor('claude', userArgs);
 if (!guard.run) {
   emitSkip(`independence check — ${guard.reason}`);
 }
 
 // ── Target ──────────────────────────────────────────────────────────────────
 const target = parseTarget(userArgs);
+// A bad ref must not read as a clean tree: git() returns '' for a failed
+// command, so without this an unresolvable target becomes "no changes found".
+const valid = validateTarget(target);
+if (!valid.ok) {
+  emitError(`cannot review — ${valid.reason}`, 1);
+}
 const { diff, stat, changedFiles } = collectDiff(target);
 const hasChanges = Boolean(diff.trim() || changedFiles.length);
 

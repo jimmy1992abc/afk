@@ -42,6 +42,7 @@ import { join } from 'node:path';
 
 import { isGateDisabled } from '../../lib/gate/env.mjs';
 import { detectBase, resolveBase } from '../../lib/gate/git.mjs';
+import { guardFor, stripImplementer } from '../../lib/gate/implementer.mjs';
 import { createProtocol } from '../../lib/gate/protocol.mjs';
 
 const isWin = process.platform === 'win32';
@@ -198,7 +199,16 @@ function promoteExplicitBase(argv) {
   return next;
 }
 
-const passThrough = promoteExplicitBase(userArgs.filter((a) => a !== '--print-args'));
+// --implementer is an afk-level flag: strip it, or `codex exec review` rejects
+// an option it does not know and the gate cannot run at all in a relay setup.
+const passThrough = promoteExplicitBase(
+  stripImplementer(userArgs.filter((a) => a !== '--print-args')),
+);
+
+const guard = guardFor('codex', userArgs);
+if (!guard.run) {
+  emitSkip(`independence check — ${guard.reason}`);
+}
 
 // Lean-context overrides (review THE DIFF, not the project doc corpus):
 //   - model_reasoning_effort: default `medium`. Override via

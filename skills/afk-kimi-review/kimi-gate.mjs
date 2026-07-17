@@ -30,9 +30,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { isGateDisabled } from '../../lib/gate/env.mjs';
+import { guardFor } from '../../lib/gate/implementer.mjs';
 import { buildReviewPrompt } from '../../lib/gate/prompt.mjs';
 import { createProtocol } from '../../lib/gate/protocol.mjs';
-import { parseTarget } from '../../lib/gate/target.mjs';
+import { parseTarget, validateTarget } from '../../lib/gate/target.mjs';
 
 const isWin = process.platform === 'win32';
 const { emitSkip, emitReview, emitError } = createProtocol({ label: 'KIMI', slug: 'kimi-gate' });
@@ -43,7 +44,16 @@ if (isGateDisabled('KIMI_REVIEW_GATE')) {
 
 const userArgs = process.argv.slice(2);
 const printArgsOnly = userArgs.includes('--print-args');
+const guard = guardFor('kimi', userArgs);
+if (!guard.run) {
+  emitSkip(`independence check — ${guard.reason}`);
+}
+
 const target = parseTarget(userArgs);
+const valid = validateTarget(target);
+if (!valid.ok) {
+  emitError(`cannot review — ${valid.reason}`, 1);
+}
 
 // This gate's own context clause: kimi HAS tools, so it is told to go looking —
 // the opposite of what glm must be told. See lib/gate/prompt.mjs.

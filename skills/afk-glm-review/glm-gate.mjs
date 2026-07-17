@@ -21,11 +21,12 @@ import { dirname, join } from 'node:path';
 
 import { isGateDisabled } from '../../lib/gate/env.mjs';
 import { git } from '../../lib/gate/git.mjs';
+import { guardFor } from '../../lib/gate/implementer.mjs';
 import { buildReviewPrompt } from '../../lib/gate/prompt.mjs';
 import { createProtocol } from '../../lib/gate/protocol.mjs';
-import { collectDiff, parseTarget } from '../../lib/gate/target.mjs';
+import { collectDiff, parseTarget, validateTarget } from '../../lib/gate/target.mjs';
 
-const { emitSkip, emitReview } = createProtocol({ label: 'GLM', slug: 'glm-gate' });
+const { emitSkip, emitReview, emitError } = createProtocol({ label: 'GLM', slug: 'glm-gate' });
 
 if (isGateDisabled('GLM_REVIEW_GATE')) {
   emitSkip('GLM gate disabled via GLM_REVIEW_GATE.');
@@ -62,7 +63,16 @@ const model = (process.env.GLM_REVIEW_MODEL || 'glm-5.2').trim();
 const baseUrl = (process.env.GLM_REVIEW_BASE_URL || 'https://api.z.ai/api/anthropic').replace(/\/+$/, '');
 const maxCtx = Number.parseInt(process.env.GLM_REVIEW_MAX_CTX_BYTES || '400000', 10) || 400000;
 
+const guard = guardFor('glm', userArgs);
+if (!guard.run) {
+  emitSkip(`independence check — ${guard.reason}`);
+}
+
 const target = parseTarget(userArgs);
+const valid = validateTarget(target);
+if (!valid.ok) {
+  emitError(`cannot review — ${valid.reason}`, 1);
+}
 const { diff, stat, changedFiles } = collectDiff(target);
 const hasChanges = Boolean(diff.trim() || changedFiles.length);
 
