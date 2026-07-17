@@ -84,11 +84,23 @@ returned clean, write the full human report: summary, decision and rationale,
 everything reviewed, residual risk, and the production-readiness checklist.
 
 - **Auto-merge policy** (`merge-when-green` / `merge-to-unblock` in
-  `.afk/config.md`): write the final report to `.afk/reports/PR#<n>-<title>.md`.
-  The filename leads with `PR#<n>-<title>`; sanitize the title for the filesystem
-  (illegal characters and whitespace collapsed to `-`, case preserved,
-  length-capped) and add a numeric suffix only to avoid clobbering an existing
-  file.
+  `.afk/config.md`): write the final report into the run's own directory, as
+  `.afk/runs/<run-id>/PR#<n>-<title>.md` — a report belongs to the run that
+  produced it, so it is never written to a path another run also owns. Take
+  `<run-id>` from the run you are executing under; invoked outside a run,
+  allocate `.afk/runs/<YYYY-MM-DD>-pr<n>/` the same collision-safe way the `afk`
+  skill allocates a run directory (create failing if it exists, retry the next
+  suffix), so two standalone reviews of one PR on one date do not land in a
+  shared directory. Give it a `ledger.md` header too — `run-id`, `scope` (the PR
+  you reviewed), `state`, `heartbeat` — and set `state: complete` when the review
+  ends: `afk` reads a ledgerless directory as a run mid-claim and would wait on
+  yours forever. Resolve `.afk/` against the main working tree (the first
+  `worktree` line of `git worktree list --porcelain`), never the current
+  directory, so a review from a linked worktree still writes to the run's one
+  directory. The filename leads with `PR#<n>-<title>`;
+  sanitize the title for the filesystem (illegal characters and whitespace
+  collapsed to `-`, case preserved, length-capped) and add a numeric suffix only
+  to avoid clobbering an existing file.
 - **Interactive** (`leave-open`): present the report in the session, and also
   save it when the config opts in.
 

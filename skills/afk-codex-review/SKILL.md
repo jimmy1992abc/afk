@@ -26,8 +26,11 @@ to a single final pass. Never spend a round-trip on a small or doc-only edit.
 The bundled helper `codex-gate.mjs` sits beside this SKILL.md. Locate its
 directory as `${CLAUDE_PLUGIN_ROOT}/skills/afk-codex-review` if the env var is
 set, else `<pluginRoot>/skills/afk-codex-review` from `.afk/config.md`, else this
-skill's own directory (the helper is its sibling). If `.afk/` is absent, the
-`afk-init` bootstrap runs automatically first:
+skill's own directory (the helper is its sibling). Resolve `.afk/` from the
+repository's main working tree — the first `worktree` line of
+`git worktree list --porcelain` — never the current directory, or a run from a
+linked worktree reads a different `.afk/` than the one `afk-init` wrote. If
+`.afk/` is absent, the `afk-init` bootstrap runs automatically first:
 
 ```text
 node "<helper-dir>/codex-gate.mjs"
