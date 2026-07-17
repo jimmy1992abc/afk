@@ -45,8 +45,18 @@ test('a supported P1 cannot end the debate before the cap is ever reached', () =
   // compliant driver call the debate done and implement — the halt rule never
   // fired. The normal exit has to be the clean round, not the cap.
   assert.match(afkSkill, /A clean round ends the debate/);
-  assert.match(afkSkill, /Implementation starts here and nowhere earlier/);
+  assert.match(afkSkill, /Implementation starts here\s*\n?\s*and nowhere earlier/);
   assert.match(afkSkill, /only by a round that no longer finds it/);
+});
+
+test('any revision gets another round, whatever severity prompted it', () => {
+  // The loop said a revision is a new design carrying unchecked claims, then let
+  // a round go clean on a supported P2 that had just been revised for — exiting
+  // on exactly the unreviewed edit the next line warns about. A P2 is either
+  // accepted without touching the design, or it is a revision like any other.
+  assert.match(afkSkill, /no revision made this round/);
+  assert.match(afkSkill, /accept it knowingly and record it in the ledger/);
+  assert.match(afkSkill, /A revision is a new design/);
 });
 
 test('the critic gets a posture, never a predetermined verdict', () => {
