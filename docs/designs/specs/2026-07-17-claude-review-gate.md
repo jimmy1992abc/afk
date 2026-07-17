@@ -81,7 +81,7 @@ CLI wins on two counts:
 
 ## Decision 6 — Read-only by construction: no Bash
 
-*(Ordered first among the mechanism decisions because two revisions died here.)*
+Ordered first among the mechanism decisions because two revisions died here.
 
 The reviewer runs with `--tools "Read,Grep,Glob"`. There is no Bash tool, so
 there is nothing to enumerate, nothing to allowlist, and no list that can rot as
@@ -389,7 +389,7 @@ Recorded because each was believed and wrong. The design is only as good as the
 attempts to break it — and the read-only claim was broken twice, on the first
 attempt each time.
 
-**Revision 1**
+### Revision 1
 
 1. *"Read-only is enforced by the harness with `Bash(git *)`."* False — the
    reviewer ran `git checkout --` and the tree was mutated.
@@ -400,20 +400,20 @@ attempt each time.
 4. *"An unavailable model emits SKIPPED."* Unimplementable as stated; exit code is
    0 on error.
 
-**Revision 2**
+### Revision 2
 
-5. *"The verb allowlist makes the gate read-only; an unanticipated verb fails
+1. *"The verb allowlist makes the gate read-only; an unanticipated verb fails
    closed."* False, and worse than (1) — `git diff --output=<reviewed file>` was
    permitted and destroyed unrecoverable uncommitted work. Unanticipated *flags on
    allowed verbs* fail **open**. Drove Decision 6.
-6. *"Config `implementer:` is per-run, so it declares rather than disables."*
+2. *"Config `implementer:` is per-run, so it declares rather than disables."*
    False — per-repo, gitignored, written once, and it outranked the live signal:
    the sticky env var re-created one layer down.
-7. *"The extraction is behavior-preserving."* False — glm promotes the base ref,
+3. *"The extraction is behavior-preserving."* False — glm promotes the base ref,
    codex and kimi do not. Drove Decisions 7 and 8.
-8. *"Characterization tests mitigate the migration risk."* Not as written — they
+4. *"Characterization tests mitigate the migration risk."* Not as written — they
    pinned early-exit paths, not the code being extracted. Drove step 2.
-9. *"The Bash prefix matcher can be escaped with `;`, `&&`, `$( )`, or `>`."* My
+5. *"The Bash prefix matcher can be escaped with `;`, `&&`, `$( )`, or `>`."* My
    own hypothesis, **refuted** — all four were denied. The matcher parses; it is a
    sound shell-injection barrier. It simply cannot see flags, which is why
    Decision 6 removes Bash rather than constraining it.
