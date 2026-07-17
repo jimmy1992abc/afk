@@ -84,6 +84,33 @@ review and **one** independent external gate — a different model than the one
 that wrote the change. CI green is necessary but not sufficient; the owner's
 review is the merge gate.
 
+## What this plugin can and cannot enforce
+
+These skills are markdown read by a host agent. **There is no afk runtime.**
+Nothing executes the waterfall; an agent reads prose and chooses to comply. The
+agent being governed is also the orchestrator, so there is no trusted reference
+monitor — and a rule the governed party can decline to run is not enforced.
+
+Every rule here sits at one of three levels. Name the level; do not borrow a
+stronger word than the level supports.
+
+| Level | Examples | What is actually available |
+|---|---|---|
+| **1 — Epistemic** | how hard a critic tries, which lenses it picks, noticing what nobody represented | Prose and evaluation only. Not mechanisable, at all. |
+| **2 — Artifact** | a helper's output shape, a marker block, an exit code, whether a skip states a distinct reason, ledger format | Mechanically checkable **within a helper's own execution** |
+| **3 — Workflow** | "the gate must run", "an unresolved P1 blocks the merge" | **Not enforceable by this plugin.** A driver may skip the helper, ignore its exit code, or fabricate its output |
+
+**Vocabulary rule.** "Enforced", "blocked", "guaranteed" are for level 2, and
+even there they mean *enforced when invoked* — a bundled helper constrains the
+runs routed through it and nothing else. For level 3, say what is true: the
+waterfall is doctrine the driver follows. Claiming otherwise is the same defect
+this repo keeps finding in its own designs — a mechanism credited with something
+it cannot do.
+
+Real non-bypassability needs a control point outside the agent's authority: a
+required CI check, branch protection, a host hook. Where an invariant genuinely
+matters, put it there — not in a sentence.
+
 ## Engineering rules for bundled code
 
 - **No silent skips.** Every early return or skip logs a distinct reason; a

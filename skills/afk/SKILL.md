@@ -38,8 +38,9 @@ pass). A design doc, a pushed branch, or a draft PR is a mid-waterfall
 checkpoint — never a stopping point and never an operator handoff. "Next:
 operator runs the review" is a bug, not an end state.
 
-design doc → adversarial debate (cap ~3 rounds; a repeating finding goes to the
-ledger, move on) → tests first (targeted) → implementation → adversarial sweep →
+design doc → adversarial debate (rules below; cap ~3 rounds; implement only from a
+design version a round found clean, at the cap too, otherwise escalate) → tests
+first (targeted) → implementation → adversarial sweep →
 commit → push early → open the PR as draft → deterministic CI green (fix red
 now) → **internal review** (`afk-internal-review`) → fix every finding →
 **external gate(s)** (rule below) → fix every confirmed structural finding;
@@ -54,6 +55,106 @@ than the code.
 - **Green** = deterministic CI green AND the full test suite green on the final
   commit. A green PR page alone is not green. Never mark ready before the suite
   is green.
+
+## Adversarial debate (the design-stage check)
+
+The critic is a subagent, usually the driver's own model. It is cheap, so it runs
+on every design — but being same-model, it can only test claims it *notices*, and
+it shares the author's blind spot about what was never considered at all. It is
+therefore a check on the design's **claims**, not proof of the design's
+**completeness**; an external design gate, where configured, covers omissions and
+framing that this step structurally cannot.
+
+**Posture, not verdict.** The critic is dispatched to break the design across
+named lenses, and each finding lands as `supported`, `refuted`, or `unverified`.
+Do **not** predetermine the outcome: a critic told the answer is "refuted"
+invents objections and can never return a clean pass on a sound design. "No
+finding" is a valid, reportable result. Reject an unsupported finding as firmly
+as an unsupported design claim.
+
+**Every finding carries a severity.** Posture says whether the finding holds;
+severity says what it costs. Every rule below turns on it, so a finding without
+one cannot be acted on:
+
+- **P1** — the design is wrong, or rests on a claim that is wrong or unverified.
+  Building it yields a defect, a rewrite, or a hole.
+- **P2** — a real weakness the design survives: a cost, a gap, or a risk worth
+  taking knowingly.
+
+An unlabelled finding is a P1 until someone labels it — the cheap error is
+debating a P2 twice, not shipping a P1 nobody graded.
+
+**Verify claims about external systems — by the cheapest SAFE means.** A design
+that asserts how a CLI behaves, what a permission model allows, what a command
+returns, or what a config does is asserting a fact, and the debate's job is to
+check it rather than reason about it. In descending preference:
+
+1. A hermetic experiment in a disposable workspace (temp dir, scratch repo,
+   fixture). Preferred — this is what catches an author and critic sharing a
+   wrong belief.
+2. Source, official documentation, or a recorded fixture.
+3. Neither available → record it in the design as an **assumption and its risk**.
+   An unverified claim is reported as unverified; it is never promoted to fact.
+
+Bounds, which override the preference order: never mutate production, never run a
+destructive action outside a disposable workspace, never paste credentials or
+secrets into a finding. Record the environment and version with any result — a
+local pass does not prove another OS, version, or configuration.
+
+**Validate a finding independently; do not re-run it blindly.** The author
+confirms a finding by the cheapest safe means — preferably a failing test — not
+by repeating a destructive action, and never on the critic's authority alone.
+Repeating it in the same environment is not independent confirmation.
+
+**The round, and how the debate ends.** A round is: the critic reports — first
+the status of every finding still open from earlier rounds, each by name, then
+anything new — the author validates each finding independently, then resolves it.
+A supported P1 is always resolved by revising the design. A supported P2 is
+resolved one of two ways — revise, or accept it knowingly and record it in the
+ledger with its reason, design untouched. Accepting closes the finding; revising
+does not: a finding resolved by revision stays **open** until a later round
+revalidates the revised design against it, by name, and reports it resolved.
+Critics are stochastic and miss things, so silence about an open finding is not
+closure — an omitted finding is unexamined, not resolved. Then one of:
+
+- **A clean round ends the debate** — no open finding, no unverified claim the
+  design depends on, and no revision made this round. Implementation starts here
+  and nowhere earlier.
+- **Otherwise, debate the revised design again.** A revision is a new design: its
+  fixes are themselves claims nobody has checked yet. A supported P1 is not
+  discharged by editing the doc — only by a round that revalidates it by name
+  and reports it resolved.
+- **~3 rounds is the cap**, and reaching it is not an ending. See below.
+
+**Exit criteria — the cap bounds spend, not correctness.** Reaching the round cap
+is not a pass, and it does not lower the bar a clean round sets. The cap asks the
+same question every other round does: has the design in front of you had a clean
+round?
+
+- **Yes** → implement. Same exit as any other round; the cap changes nothing.
+- **No** — a finding is still open, a claim the design depends on is unverified,
+  or it was revised after its last clean round — → **do not start implementing**.
+  Escalate to the operator, or to the external design gate if one is configured.
+  Never proceed past a P1 because the rounds ran out, and never implement a
+  revision the cap left unreviewed.
+
+The cap changes exactly one thing: a P2 you would have revised, you no longer
+can, because revising costs a round you do not have. Accept it knowingly instead
+— which by the definition above leaves the round clean — or escalate. A helper
+cannot accept a risk on the operator's behalf; what gets written is a decision
+you made and are accountable for.
+
+This is level 3 — doctrine, not a guarantee (AGENTS.md, "What this plugin can and
+cannot enforce"). Nothing stops a driver from implementing anyway. It stops if it
+follows this file, which is the same basis as every other step in the waterfall.
+
+**Record what was refuted.** A claim the design made, believed, and got wrong
+stays in the doc — but only where it links to what now prevents it: the corrected
+decision, and the test or control that pins it. A refuted-claims list with no
+such link is a diary; either give it a consumer or leave it out.
+
+The ledger record — an accepted risk, or a P1 that stopped the run — is the only
+durable artifact here, and it is what the operator reads.
 
 ## External gate (the independent check)
 
@@ -70,12 +171,15 @@ current-generation mainstream frontier model.
   logged out, out of credit, below tier); the next in priority takes its place.
 - **Declare the implementer when it is not the driver.** Pass
   `--implementer <family>` to the gate whenever another model wrote the change —
-  most often after `afk-agent-relay`. `afk-claude-review` enforces the
-  no-self-review rule in code and, absent a declaration, assumes the driver is
-  the implementer; under a Claude Code driver it therefore self-skips and the
-  next gate in `priority` takes its place. That is correct behaviour, and it is
-  why the flag matters: without it, a Codex-driven relay to Claude would let
-  Claude review its own work.
+  most often after `afk-agent-relay`. Each gate applies the no-self-review rule
+  **on the runs routed through its helper** and, absent a declaration, assumes
+  the driver is the implementer; under a Claude Code driver `afk-claude-review`
+  therefore self-skips and the next gate in `priority` takes its place. That is
+  correct behaviour, and it is why the flag matters: without it, a Codex-driven
+  relay to Claude would let Claude review its own work.
+  A helper cannot constrain a round it was never asked to run — the rule that
+  the gate runs at all is doctrine (see AGENTS.md, "What this plugin can and
+  cannot enforce").
 - **Stickiness:** a gate chosen in round 1 is locked for later rounds of the same
   PR; a mid-loop switch resets that gate's finding baseline and is recorded.
 - **`SKIPPED` is the last resort only** — when no qualifying reviewer can run.
