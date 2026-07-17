@@ -84,11 +84,14 @@ returned clean, write the full human report: summary, decision and rationale,
 everything reviewed, residual risk, and the production-readiness checklist.
 
 - **Auto-merge policy** (`merge-when-green` / `merge-to-unblock` in
-  `.afk/config.md`): write the final report to `.afk/reports/PR#<n>-<title>.md`.
-  The filename leads with `PR#<n>-<title>`; sanitize the title for the filesystem
-  (illegal characters and whitespace collapsed to `-`, case preserved,
-  length-capped) and add a numeric suffix only to avoid clobbering an existing
-  file.
+  `.afk/config.md`): write the final report into the run's own directory, as
+  `.afk/runs/<run-id>/PR#<n>-<title>.md` — a report belongs to the run that
+  produced it, so it is never written to a path another run also owns. Take
+  `<run-id>` from the run you are executing under; invoked outside a run, create
+  `.afk/runs/<YYYY-MM-DD>-pr<n>/`. The filename leads with `PR#<n>-<title>`;
+  sanitize the title for the filesystem (illegal characters and whitespace
+  collapsed to `-`, case preserved, length-capped) and add a numeric suffix only
+  to avoid clobbering an existing file.
 - **Interactive** (`leave-open`): present the report in the session, and also
   save it when the config opts in.
 

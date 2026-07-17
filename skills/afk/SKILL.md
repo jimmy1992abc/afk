@@ -89,18 +89,35 @@ another session's branch; never deploy (merge ≠ deploy).
 
 ## Continuity and self-pause
 
-The run's ledger lives at `.afk/afk-ledger.md` (gitignored), updated in place; if
-missing, reconstruct it from the state checks below.
+Each run owns a directory `.afk/runs/<run-id>/` (gitignored) holding everything
+that run produces: `ledger.md`, updated in place, and the per-PR final reports
+written beside it. At kickoff, adopt the existing directory whose ledger matches
+this run's scope; only when none matches, allocate `<run-id>` as
+`<YYYY-MM-DD>-<scope-slug>`, the slug sanitized for the filesystem and
+length-capped. The directory is per **run**, never per worktree — one run
+legitimately spans several worktrees, so its state cannot live in any one of
+them. If the ledger is missing, reconstruct it from the state checks below.
 
+- **Never write into another run's directory.** Concurrent runs in one repository
+  are normal; a shared ledger path is what makes them collide.
+- **Cross-run check at kickoff:** read the heartbeat and scope of every other
+  `.afk/runs/*/ledger.md`. A live run (heartbeat under ~20 min) whose scope
+  overlaps yours means two runs would drive the same issue — stop and ask the
+  operator. Disjoint scopes proceed silently.
 - **If the host supports scheduled re-invocation** (a cron or wake-up), set up a
   recurring tick that re-invokes you; the tick prompt is static (scope, order,
-  merge policy, constraints, ledger path) — never embed the ledger itself.
+  merge policy, constraints, run directory) — never embed the ledger itself.
   Otherwise run to completion in-session, checkpointing the ledger before any
   yield so a later session resumes the same issue at its next step.
-- **Overlap guard — first action each tick:** refresh a UTC heartbeat in the
+- **Overlap guard — first action each tick:** refresh a UTC heartbeat in your own
   ledger at each step and during long waits. A tick that finds a heartbeat
-  fresher than ~20 min exits immediately (another tick is working); such exits
-  do not count toward auto-pause.
+  fresher than ~20 min in **its own** ledger exits immediately (another tick of
+  this run is working); such exits do not count toward auto-pause.
+- **Never identify a run by recency.** Match the operator's scope; the newest
+  ledger is as likely to belong to another run as to yours.
+- **Legacy layout:** a `.afk/afk-ledger.md` or `.afk/reports/` predates run
+  directories. Adopt one only when its scope matches this run's, by moving it
+  into your run directory; otherwise leave it untouched.
 - **State checks** (scoped, not global): view each scoped issue; list PRs for
   your branches; check the current branch and status; resume the first
   unfinished step. One branch per issue off the default branch; push early.

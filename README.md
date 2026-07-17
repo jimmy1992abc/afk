@@ -82,9 +82,15 @@ The consuming repository may contain a local, gitignored `.afk/` directory:
 ```text
 .afk/
   config.md
-  reports/
-  afk-ledger.md
+  runs/
+    <run-id>/
+      ledger.md
+      PR#<n>-<title>.md
 ```
+
+Each run owns one `runs/<run-id>/` directory — its ledger and its final reports
+together. Runs never share a path, so concurrent runs in one repository cannot
+overwrite each other.
 
 All fields in `.afk/config.md` are optional. Blank or absent values resolve to
 safe defaults or auto-detected commands.

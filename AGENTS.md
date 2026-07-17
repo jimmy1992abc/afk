@@ -50,9 +50,11 @@ project supplies its own via a gitignored `.afk/` directory.
 ## The `.afk/` convention (what skills read at runtime)
 
 A consuming project's per-developer preferences live in a **gitignored** `.afk/`:
-`config.md` (personal run preferences), `reports/` (saved final reports), and the
-run ledger. Everything is optional; a blank or absent `config.md` resolves to
-safe defaults. Skills never write project specifics back into this plugin.
+`config.md` (personal run preferences) and `runs/<run-id>/`, one directory per
+run holding that run's ledger and its saved final reports. Run state is keyed by
+run, never by repository or worktree, so concurrent runs cannot overwrite one
+another. Everything is optional; a blank or absent `config.md` resolves to safe
+defaults. Skills never write project specifics back into this plugin.
 
 When a skill finds `.afk/` absent it runs the `afk-init` bootstrap automatically
 (create `.afk/`, add the gitignore entry, detect commands, record `pluginRoot`)

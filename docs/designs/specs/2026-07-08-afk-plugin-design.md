@@ -180,6 +180,10 @@ consuming repo, and no project detail ever enters the plugin:
   afk-ledger.md                 # AFK run ledger
 ```
 
+> Superseded: run state moved to `.afk/runs/<run-id>/`, holding a run's ledger
+> and reports together, because a repository-wide path let concurrent runs
+> overwrite each other. See `skills/afk/SKILL.md`.
+
 `config.md` is deliberately minimal: every field is optional and defaults to
 auto-detect, so a project sets only what it overrides. Starter template:
 
@@ -277,7 +281,8 @@ Touched skills:
 - `afk-internal-review` — output split into interim handoff vs final report;
   report-save convention.
 - `afk` — waterfall's final-report step writes to `.afk/reports/` under
-  auto-merge; ledger path is `.afk/afk-ledger.md`.
+  auto-merge; ledger path is `.afk/afk-ledger.md`. (Both superseded by
+  `.afk/runs/<run-id>/`; see the layout note above.)
 
 Hard rules retained: never approve with an unresolved blocker; never merge,
 push, or deploy; always cite `file:line`; spec compliance is a first-class
