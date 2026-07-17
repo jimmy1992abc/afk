@@ -106,18 +106,24 @@ confirms a finding by the cheapest safe means — preferably a failing test — 
 by repeating a destructive action, and never on the critic's authority alone.
 Repeating it in the same environment is not independent confirmation.
 
-**The round, and how the debate ends.** A round is: the critic reports, the author
-validates each finding independently, then resolves it. A supported P1 is always
-resolved by revising the design. A supported P2 is resolved one of two ways —
-revise, or accept it knowingly and record it in the ledger with its reason,
-design untouched. Then one of:
+**The round, and how the debate ends.** A round is: the critic reports — first
+the status of every finding still open from earlier rounds, each by name, then
+anything new — the author validates each finding independently, then resolves it.
+A supported P1 is always resolved by revising the design. A supported P2 is
+resolved one of two ways — revise, or accept it knowingly and record it in the
+ledger with its reason, design untouched. Accepting closes the finding; revising
+does not: a finding resolved by revision stays **open** until a later round
+revalidates the revised design against it, by name, and reports it resolved.
+Critics are stochastic and miss things, so silence about an open finding is not
+closure — an omitted finding is unexamined, not resolved. Then one of:
 
-- **A clean round ends the debate** — no supported P1, no unverified claim the
+- **A clean round ends the debate** — no open finding, no unverified claim the
   design depends on, and no revision made this round. Implementation starts here
   and nowhere earlier.
 - **Otherwise, debate the revised design again.** A revision is a new design: its
   fixes are themselves claims nobody has checked yet. A supported P1 is not
-  discharged by editing the doc — only by a round that no longer finds it.
+  discharged by editing the doc — only by a round that revalidates it by name
+  and reports it resolved.
 - **~3 rounds is the cap**, and reaching it is not an ending. See below.
 
 **Exit criteria — the cap bounds spend, not correctness.** Reaching the round cap
@@ -126,8 +132,8 @@ same question every other round does: has the design in front of you had a clean
 round?
 
 - **Yes** → implement. Same exit as any other round; the cap changes nothing.
-- **No** — a supported P1 stands, a claim the design depends on is unverified, or
-  it was revised after its last clean round — → **do not start implementing**.
+- **No** — a finding is still open, a claim the design depends on is unverified,
+  or it was revised after its last clean round — → **do not start implementing**.
   Escalate to the operator, or to the external design gate if one is configured.
   Never proceed past a P1 because the rounds ran out, and never implement a
   revision the cap left unreviewed.

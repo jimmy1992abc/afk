@@ -57,7 +57,19 @@ test('a supported P1 cannot end the debate before the cap is ever reached', () =
   // fired. The normal exit has to be the clean round, not the cap.
   assert.match(afkSkill, /A clean round ends the debate/);
   assert.match(afkSkill, /Implementation starts here\s*\n?\s*and nowhere earlier/);
-  assert.match(afkSkill, /only by a round that no longer finds it/);
+  assert.match(afkSkill, /only by a round that revalidates it by name\s*\n?\s*and reports it resolved/);
+});
+
+test('critic silence about an open finding is not closure', () => {
+  // A clean round that only counts findings emitted in that round lets a
+  // stochastic critic close a supported P1 by omitting it — omission read as
+  // resolution ships an incomplete fix. Open findings carry forward by name
+  // until a round revalidates and closes them; an omitted finding is
+  // unexamined, not resolved.
+  assert.match(afkSkill, /every finding still open from earlier rounds/);
+  assert.match(afkSkill, /silence about an open finding is not\s*\n?\s*closure/);
+  assert.match(afkSkill, /no open finding, no unverified claim/);
+  assert.doesNotMatch(afkSkill, /only by a round that no longer finds it/);
 });
 
 test('any revision gets another round, whatever severity prompted it', () => {
@@ -66,7 +78,7 @@ test('any revision gets another round, whatever severity prompted it', () => {
   // on exactly the unreviewed edit the next line warns about. A P2 is either
   // accepted without touching the design, or it is a revision like any other.
   assert.match(afkSkill, /no revision made this round/);
-  assert.match(afkSkill, /accept it knowingly and record it in the ledger/);
+  assert.match(afkSkill, /accept it knowingly and record it in the\s*\n?\s*ledger/);
   assert.match(afkSkill, /A revision is a new design/);
 });
 
