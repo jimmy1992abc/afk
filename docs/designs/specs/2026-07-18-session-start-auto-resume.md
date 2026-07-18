@@ -106,7 +106,8 @@ standalone file is outside sync's control and stable.
       {
         "hooks": [
           { "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/afk-resume-detect.mjs\"" }
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/afk-resume-detect.mjs\"",
+            "timeout": 10 }
         ]
       }
     ]
@@ -119,6 +120,12 @@ on `startup`/`resume`, read from stdin), and matching in-code keeps one source o
 truth for that rule. The `node "<path>"` shell form matches the repo's existing
 hook convention (`afk-agent-relay/hooks/precompress-hook.mjs`) and is required on
 Windows, where a bare `.mjs` path is not executable.
+
+`timeout: 10` bounds the hook host-side. The command-hook default is 600 s, far
+longer than the "never delay session startup" promise; a stalled `git` call or a
+hung filesystem mount would otherwise block startup for up to ten minutes. Ten
+seconds is well under that and above the sub-second normal path, so a stall
+degrades to a prompt silent no-op rather than a visible hang.
 
 ### Decision 2 — Resolve the main working tree, then derive both paths
 
@@ -135,10 +142,12 @@ for the existing caller is unchanged (no `cwd` = `process.cwd()`).
 
 For each `.afk/runs/*/ledger.md` (read UTF-8): parse header `state`, `heartbeat`,
 `run-id`, and scope. Select a run iff `state === 'active'` and the heartbeat is
-**not fresher than the 20-minute guard** — i.e. an age of `STALE_MINUTES` (20) or
-more; only an age strictly under 20 minutes is skipped (`stale < STALE_MINUTES`,
-defined once in `detect.mjs`). This mirrors the afk overlap guard exactly: a
-heartbeat fresher than ~20 min means a live tick owns the run, so surfacing it
+**not fresher than the 20-minute guard**. The comparison is on the **exact age in
+milliseconds** (`staleMsOf`), skipping only an age strictly under
+`STALE_MINUTES * 60_000` — rounding to whole minutes first would surface a
+19.5-min-old (still-live) run as if it were 20 min stale. Whole minutes are
+computed (floored) for display only. This mirrors the afk overlap guard exactly:
+a heartbeat fresher than ~20 min means a live tick owns the run, so surfacing it
 would invite a second driver.
 
 Boundary rules, fail-safe:
@@ -198,6 +207,8 @@ it requires a bump regardless — the fix is for future hook-only changes.)
 | ≥2 runs never produce a single-run drive directive | `buildContext` run-count branch | test: multi-run lists, no drive verb |
 | `auto` single-run emits the conditional drive directive | `buildContext` | test: auto+1 → directive; notify+1 → no directive |
 | Any error → exit 0, no output (never crash a session) | top-level try/catch in hook | test: malformed stdin → exit 0, empty stdout |
+| Emitted JSON is flushed before exit (no pipe truncation) | awaited `stdout.write` before `process.exit` | inspection: awaited write; integration tests read valid JSON back |
+| Hook runtime is bounded (never stalls startup) | `timeout: 10` in `hooks.json` | inspection: registration carries the timeout |
 | `hooks/` change requires a version bump | `SHIPPED_DIRS` | test: `requiresBump(['hooks/…'])` |
 | Default is `notify` (absent/blank/garbled config) | `normalizeMode` | tests: absent/blank/unknown → notify |
 

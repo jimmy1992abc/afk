@@ -5,7 +5,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/afk-resume-detect.mjs\""
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/afk-resume-detect.mjs\"",
+            "timeout": 10
           }
         ]
       }

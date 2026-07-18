@@ -46,12 +46,15 @@ async function main() {
   const context = buildContext(runs, { mode });
   if (!context) return; // no resumable run
 
-  process.stdout.write(JSON.stringify({
+  const payload = JSON.stringify({
     hookSpecificOutput: {
       hookEventName: 'SessionStart',
       additionalContext: context,
     },
-  }));
+  });
+  // Await the write: a forced process.exit() can truncate a still-pending pipe
+  // write, which would silently drop the JSON the whole hook exists to emit.
+  await new Promise((resolve) => { process.stdout.write(payload, resolve); });
 }
 
 main()
