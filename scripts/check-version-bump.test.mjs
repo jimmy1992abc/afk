@@ -41,6 +41,14 @@ describe('requiresBump', () => {
     assert.equal(requiresBump(['lib/gate/protocol.mjs']), true);
   });
 
+  test('true for a hooks/ path', () => {
+    // hooks/ ships to every install as a plugin component (hooks/hooks.json and
+    // its bundled scripts), so a change there alters installed behaviour and
+    // must bump the version like skills/, scripts/, and lib/.
+    assert.equal(requiresBump(['hooks/afk-resume-detect.mjs']), true);
+    assert.equal(requiresBump(['hooks/hooks.json']), true);
+  });
+
   test('true for a manifest file', () => {
     assert.equal(requiresBump(['.claude-plugin/marketplace.json']), true);
   });
