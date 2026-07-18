@@ -44,7 +44,14 @@ linked worktree reads a different `.afk/` than the one `afk-init` wrote.
 ### 5 — Self-review loop
 
 Self-review against the checklist, fix all findings, re-run affected checks, and
-repeat until **two consecutive rounds produce no new findings**.
+repeat until **two consecutive clean rounds**. A round is **clean** only if
+every checklist lens below was applied to the full diff and reported a result —
+"lens applied, nothing found" is a statement; a skipped or silent lens voids the
+round — and every finding from an earlier round has its fix verified: by
+re-running the affected checks where one applies, otherwise by a recorded
+verification step; a fix's absence from later rounds verifies
+nothing. Two consecutive clean rounds bound the **effort**, not correctness —
+the reason internal review and the external gate still follow.
 
 - **Spec:** every acceptance criterion met; nothing out-of-scope added.
 - **Correctness:** edge cases, error paths, off-by-one, concurrency.
@@ -65,7 +72,8 @@ handoff.
 ### 6 — Handoff
 
 Summarize what was built, the acceptance-criteria status, deviations from the
-plan, files changed, tests added, and final check results. Suggest running
+plan, files changed, tests added, the lens-by-lens results of the two clean
+rounds, and final check results. Suggest running
 `afk-internal-review` next. Do not merge, push, or open a PR unless asked.
 
 ### 7 — CI watch (only when asked to push / open a PR)

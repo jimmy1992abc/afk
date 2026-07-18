@@ -43,9 +43,8 @@ design version a round found clean, at the cap too, otherwise escalate) → test
 first (targeted) → implementation → adversarial sweep →
 commit → push early → open the PR as draft → deterministic CI green (fix red
 now) → **internal review** (`afk-internal-review`) → fix every finding →
-**external gate(s)** (rule below) → fix every confirmed structural finding;
-one self-review pass between gate runs; defer minor items to a single final pass
-→ **full test suite once** (the project's test command from `.afk/config.md`) on
+**external gate(s)** (the loop, closure, and termination — rule below) →
+**full test suite once** (the project's test command from `.afk/config.md`) on
 the final commit → mark ready → merge per policy. The design doc matters more
 than the code.
 
@@ -187,6 +186,68 @@ current-generation mainstream frontier model.
   handing the gate to the operator is not a valid skip. When `min-pass` cannot be
   met, the round is not clean — do not mark ready.
 
+**The loop, and what closes a finding.** Each round the gate reviews the
+current diff. Every structural finding it returns is named at triage — a short
+id in the run's record — and every later round's findings are judged against
+that named list — same, reopening, or new — with the judgment recorded. The
+reviewers are memoryless (the helpers accept a review target and flags such as
+`--implementer`, but no findings input), so identity lives in the driver's
+record or nowhere. A named finding holds at most one **current** recorded
+disposition — closing sets it, reopening supersedes it, and the record keeps
+the history:
+
+- **Fixed** — verified against the artifact, by the check that pins it where
+  one is expressible (a test that failed before the fix and passes after it),
+  otherwise by a recorded verification step; finding → fix → how verified goes
+  in the record.
+- **Refuted** — closed by its recorded disproof. A later round re-raising it
+  with new evidence reopens it; a second refutation of the same named finding
+  escalates to the operator rather than looping.
+- **Accepted** — real, but knowingly not fixed here: an accepted cost, or out
+  of the PR's scope (the record names the follow-up issue). It lands in the
+  ledger and the end-of-run report's deferred items.
+
+A finding the driver can neither confirm nor refute is unverified: accept it
+with its risk stated when the PR does not depend on it; when the PR depends on
+it, escalate to the operator — the loop does not end around it.
+
+**Silence closes nothing.** As in the debate, a later round that does not
+mention a prior finding has not resolved it — rounds are stochastic. No critic
+revalidates by name here, so closure rests on the driver's own verification,
+with the next round's fresh review of the full diff as the independent
+backstop — weaker than the debate's closure, and named as such.
+
+**The loop ends** when a round reports no new structural finding and every
+prior structural finding is closed. The open-findings record is run-scoped: it
+survives a mid-loop gate switch — the stickiness reset changes what counts as
+*new* for the incoming gate, never the dispositions already recorded. A
+finding that only rewords the driver's last fix — naming no behavior
+difference, or for a prose artifact no consequence difference (a different
+decision, invariant, or outcome) — is not a new structural finding; one that
+names such a difference is new, or a reopening, however small. When the diff
+under review is a design doc, a remainder the tests-first step will enforce
+counts as closed only once it is recorded in the design doc as a required
+test — the record is the closure, not the future test.
+
+**Accepted findings and the merge bar.** A finding is *open* until it has a
+recorded disposition, so an Accepted finding does not hold the loop open. It
+does bar the merge: a PR whose record carries an Accepted structural finding
+is never auto-merged, whatever the merge policy — mark it ready and leave it
+open. A driver can record a risk; only the operator owns one at the merge
+boundary. The cost, accepted knowingly: under `merge-to-unblock` this stalls
+work queued behind that PR until the operator returns — a stall, never a bad
+merge.
+
+Three or more consecutive rounds with new structural findings mean the
+internal pass was too weak: stop patching finding-by-finding and re-review the
+whole diff for the shared root before spending another round. In an afk run
+the disposition record lives in the run ledger; a standalone gate invocation
+records it where that review is tracked — the PR thread, the commit message,
+or, when neither exists (an uncommitted review with no PR), a standalone run
+directory allocated the collision-safe way `../afk-internal-review/SKILL.md`
+defines; untracked is not an option. All of this is level 3 — doctrine, not a
+guarantee (AGENTS.md, "What this plugin can and cannot enforce").
+
 The gate skills (`afk-codex-review`, `afk-claude-review`, `afk-kimi-review`,
 `afk-glm-review`) carry the invocation, batching, and metering rules; they load
 when the gate runs.
@@ -197,7 +258,9 @@ Decide with best-practice defaults and record each decision; do not block on
 in-scope work. Risky changes ship safe-direction (behind a default-off flag,
 fail-safe, additive). Only stop for: out-of-scope work, a destructive or
 outward-facing action without authorization, or genuine ambiguity with no safe
-default. Never merge a PR that is not green or has an open finding; never touch
+default. Never merge a PR that is not green or has an open finding — open
+meaning no recorded disposition, and an Accepted structural finding bars
+auto-merge outright ("External gate", the merge bar); never touch
 another session's branch; never deploy (merge ≠ deploy).
 
 ## Continuity and self-pause

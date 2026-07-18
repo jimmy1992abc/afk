@@ -65,11 +65,13 @@ Apply any invariant in `.afk/config.md` as an extra must-check lens.
 
 ## Stop rule
 
-Stop when a round returns no new blocker findings — only minor or
-implementation-detail — or the findings are narrowing to your own last fix's
-wording, or it is a design-only doc whose remainder TDD will enforce in code.
-Report honestly: `CLEAN`, or `OUTSTANDING` with what remains. A clean pass is not
-authority to merge — hand back to the operator.
+Stop when the loop-termination rule in `../afk/SKILL.md` ("External gate")
+holds: a round with no new structural finding and every prior structural
+finding closed by a recorded disposition — a driver-verified fix, a
+refutation, or an accepted risk.
+
+Report honestly: `CLEAN`, or `OUTSTANDING` with what remains. A clean pass is
+not authority to merge — hand back to the operator.
 
 ## Setup (per machine, once)
 

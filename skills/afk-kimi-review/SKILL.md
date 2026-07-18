@@ -55,9 +55,13 @@ re-run once; resolve minor items in a single final pass. Apply any invariant in
 
 ## Stop rule
 
-Stop when a round returns no new blocker findings, or findings narrow to your own
-last fix, or it is a design-only doc. Report `CLEAN` or `OUTSTANDING`. A clean
-pass is not authority to merge.
+Stop when the loop-termination rule in `../afk/SKILL.md` ("External gate")
+holds: a round with no new structural finding and every prior structural
+finding closed by a recorded disposition — a driver-verified fix, a
+refutation, or an accepted risk.
+
+Report `CLEAN`, or `OUTSTANDING` with what remains. A clean pass is not
+authority to merge.
 
 ## Selection
 
