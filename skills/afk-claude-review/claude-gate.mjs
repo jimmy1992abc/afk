@@ -17,6 +17,7 @@
 //   node claude-gate.mjs --base master        # vs an explicit base
 //   node claude-gate.mjs --commit <sha>       # one commit
 //   node claude-gate.mjs --uncommitted        # staged/unstaged/untracked
+//   node claude-gate.mjs --design <path>      # review a design doc (read-only tools; doc on stdin)
 //   node claude-gate.mjs --implementer codex  # declare who wrote the change
 //   node claude-gate.mjs --print-args         # resolve and print argv; no model call
 //
@@ -32,9 +33,9 @@ import { join } from 'node:path';
 import { isGateDisabled } from '../../lib/gate/env.mjs';
 import { git } from '../../lib/gate/git.mjs';
 import { guardFor } from '../../lib/gate/implementer.mjs';
-import { buildReviewPrompt } from '../../lib/gate/prompt.mjs';
+import { buildDesignReviewPrompt, buildReviewPrompt } from '../../lib/gate/prompt.mjs';
 import { createProtocol } from '../../lib/gate/protocol.mjs';
-import { collectDiff, parseTarget, validateTarget } from '../../lib/gate/target.mjs';
+import { collectDiff, parseTarget, readDesign, validateTarget } from '../../lib/gate/target.mjs';
 
 const isWin = process.platform === 'win32';
 const { emitSkip, emitReview, emitError } = createProtocol({ label: 'CLAUDE', slug: 'claude-gate' });
@@ -67,12 +68,35 @@ const valid = validateTarget(target);
 if (!valid.ok) {
   emitError(`cannot review — ${valid.reason}`, 1);
 }
-const { diff, stat, changedFiles, untracked = [], error: diffError } = collectDiff(target);
+
+const isDesign = target.kind === 'design';
+
+// Design mode reviews a document's reasoning, not a diff, and never enters the
+// diff path. Everything below the design branch is diff-only.
+let prompt;
+let changedFiles = [];
+let hasChanges = true;
+
+if (isDesign) {
+  // The reviewer keeps its Read/Grep/Glob tools: a design cites code, so it can
+  // check whether the code says what the design claims. The doc text is injected
+  // (it may be uncommitted and is the whole subject of the review).
+  const { text } = readDesign(target);
+  const context = [
+    'The design document under review is included below. You have Read, Grep and Glob over the working tree and no other tools: read any file you need to check a claim the design makes about the code, and do not claim to have run any command.',
+    '',
+    `## Design document (${target.path})`,
+    text,
+  ].join('\n');
+  prompt = buildDesignReviewPrompt({ scope: target.label, context });
+} else {
+const { diff, stat, changedFiles: cf, untracked = [], error: diffError } = collectDiff(target);
 if (diffError) {
   // Never a skip: a target git cannot read is unreviewable, not unchanged.
   emitError(`cannot review — ${diffError}`, 1);
 }
-const hasChanges = Boolean(diff.trim() || changedFiles.length);
+changedFiles = cf;
+hasChanges = Boolean(diff.trim() || changedFiles.length);
 
 // ── Prompt ──────────────────────────────────────────────────────────────────
 const maxCtx = Number.parseInt(process.env.CLAUDE_REVIEW_MAX_CTX_BYTES || '400000', 10) || 400000;
@@ -128,7 +152,8 @@ const context = [
   `## Full diff\n${diffText}`,
 ].filter(Boolean).join('\n');
 
-const prompt = buildReviewPrompt({ scope: target.label, context });
+prompt = buildReviewPrompt({ scope: target.label, context });
+}
 
 // ── Invocation ──────────────────────────────────────────────────────────────
 const model = (process.env.CLAUDE_REVIEW_MODEL || 'opus').trim();
@@ -173,7 +198,7 @@ if (printArgsOnly) {
     base: target.base ?? null,
     commit: target.commit ?? null,
     label: target.label,
-    command: target.command,
+    command: target.command ?? null,
     hasChanges,
     changedFiles,
     promptBytes: prompt.length,

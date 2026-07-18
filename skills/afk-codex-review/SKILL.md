@@ -42,6 +42,13 @@ completes. Pass through any target flag (`--base <branch>` / `--commit <sha>` /
 `--uncommitted`; default = current branch vs the default branch). Do not poll in
 a sleep loop — wait for completion.
 
+**Design mode** (`--design <path>`) reviews a design document's reasoning instead
+of a diff — the opt-in design-stage gate (see `../afk/SKILL.md`, "Design-stage
+external gate"). Codex runs it with `exec -s read-only` and the brief + doc piped
+on stdin — never the `review` subcommand or the sandbox bypass, so it stays
+read-only on every OS. A missing or unreadable `--design` path fails loudly
+(`ERROR`, non-zero), never a skip.
+
 Read the verdict between the `===== CODEX REVIEW (final message) =====` markers.
 `SKIPPED: …` (Codex absent, logged out, or disabled via `CODEX_REVIEW_GATE=off`)
 is not a failure — report it and continue. `ERROR: …` means the review itself

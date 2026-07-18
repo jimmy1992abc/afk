@@ -19,6 +19,7 @@
 //   node kimi-gate.mjs --base master   # vs an explicit base
 //   node kimi-gate.mjs --commit <sha>  # one commit
 //   node kimi-gate.mjs --uncommitted   # staged/unstaged/untracked
+//   node kimi-gate.mjs --design <path> # review a design doc (read the doc on disk, no argv payload)
 //   node kimi-gate.mjs --print-args    # resolve and print the target; no model call
 //
 // Opt out with KIMI_REVIEW_GATE=off. Skips cleanly (exit 0) if kimi is missing
@@ -31,7 +32,7 @@ import { join } from 'node:path';
 
 import { isGateDisabled } from '../../lib/gate/env.mjs';
 import { guardFor } from '../../lib/gate/implementer.mjs';
-import { buildReviewPrompt } from '../../lib/gate/prompt.mjs';
+import { buildDesignReviewPrompt, buildReviewPrompt } from '../../lib/gate/prompt.mjs';
 import { createProtocol } from '../../lib/gate/protocol.mjs';
 import { parseTarget, validateTarget } from '../../lib/gate/target.mjs';
 
@@ -44,6 +45,9 @@ if (isGateDisabled('KIMI_REVIEW_GATE')) {
 
 const userArgs = process.argv.slice(2);
 const printArgsOnly = userArgs.includes('--print-args');
+// Prints the exact review prompt kimi would receive, and calls no model — the
+// only way to observe that design mode swapped the diff context clause.
+const printPromptOnly = userArgs.includes('--print-prompt');
 const guard = guardFor('kimi', userArgs);
 if (!guard.run) {
   emitSkip(`independence check — ${guard.reason}`);
@@ -57,11 +61,26 @@ if (!valid.ok) {
 
 // This gate's own context clause: kimi HAS tools, so it is told to go looking —
 // the opposite of what glm must be told. See lib/gate/prompt.mjs.
-const context = `Inspect the target with ${target.inspect || `\`${target.command}\``} in this git repository. Use git and read surrounding files for context. Do NOT modify, stage, commit, write, or delete ANY file — review only.`;
-
-const reviewPrompt = buildReviewPrompt({ scope: target.label, context });
+//
+// Design mode swaps the whole clause: the diff clause's `git show`/`git diff` is
+// meaningless for a design, and pointing kimi at the doc ON DISK (rather than
+// injecting its text) keeps a large doc off the argv — kimi passes its prompt as
+// a `-p` argument, which a diff-sized doc would overflow on Windows.
+let reviewPrompt;
+if (target.kind === 'design') {
+  const context = `Review the design document at ${target.path} in this git repository. Read it in full first. Use git and read surrounding files to check any claim the design makes about the code. Do NOT modify, stage, commit, write, or delete ANY file — review only.`;
+  reviewPrompt = buildDesignReviewPrompt({ scope: target.label, context });
+} else {
+  const context = `Inspect the target with ${target.inspect || `\`${target.command}\``} in this git repository. Use git and read surrounding files for context. Do NOT modify, stage, commit, write, or delete ANY file — review only.`;
+  reviewPrompt = buildReviewPrompt({ scope: target.label, context });
+}
 
 const kimi = (process.env.KIMI_GATE_BIN || 'kimi').trim();
+
+if (printPromptOnly) {
+  process.stdout.write(`${reviewPrompt}\n`);
+  process.exit(0);
+}
 
 if (printArgsOnly) {
   process.stdout.write(`${JSON.stringify({
@@ -70,7 +89,7 @@ if (printArgsOnly) {
     base: target.base ?? null,
     commit: target.commit ?? null,
     label: target.label,
-    command: target.command,
+    command: target.command ?? null,
     promptBytes: reviewPrompt.length,
   }, null, 2)}\n`);
   process.exit(0);

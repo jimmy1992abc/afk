@@ -16,6 +16,7 @@
 //   node codex-gate.mjs --base master   # review vs an explicit base branch
 //   node codex-gate.mjs --commit <sha>  # review one commit
 //   node codex-gate.mjs --uncommitted   # review staged/unstaged/untracked
+//   node codex-gate.mjs --design <path> # review a design doc (exec -s read-only, doc on stdin)
 //   node codex-gate.mjs --print-args    # resolve and print argv; no model call
 //   (any extra flags are passed through to `codex exec review`)
 //
@@ -43,7 +44,9 @@ import { join } from 'node:path';
 import { isGateDisabled } from '../../lib/gate/env.mjs';
 import { detectBase, resolveBase } from '../../lib/gate/git.mjs';
 import { guardFor, stripImplementer } from '../../lib/gate/implementer.mjs';
+import { buildDesignReviewPrompt } from '../../lib/gate/prompt.mjs';
 import { createProtocol } from '../../lib/gate/protocol.mjs';
+import { optVal, readDesign, validateTarget } from '../../lib/gate/target.mjs';
 
 const isWin = process.platform === 'win32';
 const { emitSkip, emitReview, emitError } = createProtocol({ label: 'CODEX', slug: 'codex-gate' });
@@ -224,30 +227,71 @@ const work = mkdtempSync(join(tmpdir(), 'codex-gate-'));
 const finalFile = join(work, 'review.txt');
 const logFile = join(work, 'codex.log');
 
-const reviewArgs = ['exec', 'review'];
-// Push lean defaults FIRST so an operator-supplied `-c key=...` in extra args
-// still takes precedence (codex applies later -c overrides last).
-reviewArgs.push('-c', `model_reasoning_effort=${reasoning}`);
-reviewArgs.push('-c', `project_doc_max_bytes=${projectDocMaxBytes}`);
+// Design mode is a different review of a different artifact, and here — unlike
+// diff mode — codex shares the gate lib. The design target is a trivial literal
+// (a kind, the path, a scope label; no diff to compute), so codex builds it
+// inline rather than routing through parseTarget, then uses the SAME
+// validateTarget → readDesign → buildDesignReviewPrompt as the three lib gates.
+//
+// The invocation is `exec -s read-only -o <file> -`, NEVER `review` + bypass:
+// `review` has no `-s` selector, so on Windows the bypass would make it
+// full-access. The read-only sandbox launches under a normal Windows token (a
+// hermetic probe verified this on codex 0.144.1); design mode needs no bypass.
+// The brief + doc ride on stdin (positional `-`): a real design doc overflows
+// the Windows ~8191-char argv limit as a positional.
+const designPath = optVal(userArgs, '--design');
+const isDesign = Boolean(designPath);
 
-// Resolve the base to its remote-tracking ref when one exists. A stale local
-// `main` otherwise makes the gate review the wrong commit range and report
-// findings against commits that are not in the PR.
-if (!hasTarget) reviewArgs.push('--base', resolveBase(detectBase()));
-reviewArgs.push(...passThrough);
-reviewArgs.push('-o', finalFile);
-if (isWin) reviewArgs.push('--dangerously-bypass-approvals-and-sandbox');
-// Do NOT append a positional PROMPT — codex-cli rejects combining a diff
-// selector with a PROMPT; the gate always selects a target.
+let reviewArgs;
+let designPayload = null;
+
+if (isDesign) {
+  const target = { kind: 'design', path: designPath, label: `the design document at ${designPath}` };
+  const valid = validateTarget(target);
+  if (!valid.ok) {
+    // A missing/unreadable doc is operator error — fail loudly (nonzero), never
+    // a skip. validateTarget is the sole owner of this check; without it codex
+    // would throw an uncaught ENOENT from readDesign and emit no marker block.
+    emitError(`cannot review — ${valid.reason}`, 1);
+  }
+  const { text } = readDesign(target);
+  const context = 'The design document under review is included below. You are running read-only: you may read files in this repository to check a claim the design makes about the code, but you cannot modify anything. Do not claim to have run any command you did not run.';
+  const brief = buildDesignReviewPrompt({ scope: target.label, context });
+  designPayload = `${brief}\n\n## Design document (${target.path})\n${text}`;
+
+  reviewArgs = ['exec', '-s', 'read-only'];
+  reviewArgs.push('-c', `model_reasoning_effort=${reasoning}`);
+  reviewArgs.push('-c', `project_doc_max_bytes=${projectDocMaxBytes}`);
+  reviewArgs.push('-o', finalFile, '-');
+} else {
+  reviewArgs = ['exec', 'review'];
+  // Push lean defaults FIRST so an operator-supplied `-c key=...` in extra args
+  // still takes precedence (codex applies later -c overrides last).
+  reviewArgs.push('-c', `model_reasoning_effort=${reasoning}`);
+  reviewArgs.push('-c', `project_doc_max_bytes=${projectDocMaxBytes}`);
+
+  // Resolve the base to its remote-tracking ref when one exists. A stale local
+  // `main` otherwise makes the gate review the wrong commit range and report
+  // findings against commits that are not in the PR.
+  if (!hasTarget) reviewArgs.push('--base', resolveBase(detectBase()));
+  reviewArgs.push(...passThrough);
+  reviewArgs.push('-o', finalFile);
+  if (isWin) reviewArgs.push('--dangerously-bypass-approvals-and-sandbox');
+  // Do NOT append a positional PROMPT — codex-cli rejects combining a diff
+  // selector with a PROMPT; the gate always selects a target.
+}
 
 const codex = resolveCodex();
 
 if (printArgsOnly) {
   // Dry run: resolve the argv, call no model. Makes the target/base resolution
-  // observable without spending a metered call.
+  // observable without spending a metered call. The design payload is reported by
+  // size only — it rides on stdin, never in argv, so it can never leak here.
   process.stdout.write(`${JSON.stringify({
     bin: codex,
     hasExplicitTarget: hasTarget,
+    promptOnStdin: isDesign,
+    stdinBytes: designPayload ? Buffer.byteLength(designPayload, 'utf8') : 0,
     args: reviewArgs.map((a) => (a === finalFile ? '<review-file>' : a)),
   }, null, 2)}\n`);
   process.exit(0);
@@ -272,11 +316,13 @@ process.stderr.write(`[codex-gate] transcript -> ${logFile}\n`);
 const codexLock = acquireCodexLock();
 
 // Codex's transcript -> log file; stdout stays clean (final verdict only).
+// Design mode pipes the brief+doc to stdin (positional `-`): if stdin stayed
+// 'ignore', `input` would be discarded and codex would read EOF on `-` and
+// review an empty prompt — a silent no-review. Diff mode has no stdin payload.
 const fd = openSync(logFile, 'w');
-const res = spawnSync(codex, reviewArgs, {
-  stdio: ['ignore', fd, fd], // no stdin (no custom prompt); stdout/stderr -> log file
-  shell: isWin, // needed to launch the .cmd shim on Windows
-});
+const res = spawnSync(codex, reviewArgs, isDesign
+  ? { input: designPayload, stdio: ['pipe', fd, fd], shell: isWin }
+  : { stdio: ['ignore', fd, fd], shell: isWin });
 releaseCodexLock(codexLock);
 
 if (res.error) {
