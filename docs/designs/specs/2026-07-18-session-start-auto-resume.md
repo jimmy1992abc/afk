@@ -157,6 +157,11 @@ Boundary rules, fail-safe:
 - `heartbeat` missing or unparseable → treat as **stale** (surface it). An
   active run with no readable heartbeat is not owned by a live tick; the safe
   direction is to surface, not hide. Its staleness renders as `unknown`.
+- `heartbeat` implausibly in the **future** (beyond a `FUTURE_SKEW_MINUTES`
+  jitter tolerance — e.g. the clock moved back after sleep, or a bad write) →
+  treated like a missing heartbeat (surface). Otherwise a negative age would read
+  as "fresh/live" and hide a paused run until wall time caught up. A heartbeat
+  only slightly ahead (within tolerance) is still a live tick and stays skipped.
 - A garbled ledger that throws → skipped, not fatal.
 
 ### Decision 4 — Output by mode and run count
@@ -215,6 +220,8 @@ it requires a bump regardless — the fix is for future hook-only changes.)
 | `.afk/` resolved from the **main** worktree, not cwd/toplevel | `mainWorktree({cwd})` from `git.mjs` | test: porcelain call present; existing implementer guard test |
 | Only `active` + heartbeat-age ≥ 20 min surfaced (age < 20 skipped) | `collectResumable` | tests: active+stale surfaced; active+fresh skipped; complete skipped; boundary at/under 20 |
 | Missing/garbled heartbeat → surfaced (fail-safe), staleness `unknown` | `staleMinutesOf` + `collectResumable` | test: missing/garbled heartbeat |
+| Implausibly-future heartbeat → surfaced (not hidden); small skew still skipped | `staleMsOf` future-skew bound | tests: far-future surfaced; within-skew skipped |
+| `auto` fails safe on ownership doubt (concurrent start → surface, not drive) | `buildContext` auto branch wording | test: directive carries the "only session / cannot confirm" clause |
 | ≥2 runs never produce a single-run drive directive; each lists its scope | `buildContext` run-count branch | test: multi-run lists each scope, no drive verb |
 | `auto` single-run emits the conditional drive directive | `buildContext` | test: auto+1 → directive; notify+1 → no directive |
 | `auto` directive re-validates the run before claiming (no detect→turn TOCTOU) | `buildContext` auto branch wording | test: directive requires re-read + confirm active/stale + "do NOT drive" |
@@ -255,6 +262,30 @@ against temp `.afk/runs/` fixtures:
 - **Env opt-out (like the gates' `*_REVIEW_GATE`)** — unnecessary; the
   `auto-resume: off` knob already gives a first-class disable, and a second
   mechanism would be a second source of truth.
+
+## Why not a hard atomic claim for `auto`
+
+A stronger proposal is to have `auto` acquire an exclusive lock / CAS-claim on the
+run so two concurrent session-starts can never both drive it. It is deliberately
+not done, for two reasons:
+
+1. **The hook cannot claim anything.** It injects *context*; the claim and the
+   drive are performed later by the agent following afk doctrine. There is no
+   point in this hook's execution at which it holds the run — so an atomic claim
+   would have to live in the afk skill, not here.
+2. **afk's concurrency model is heartbeat-advisory, by design.** `skills/afk/SKILL.md`
+   governs concurrent runs with a UTC heartbeat and a ~20-min overlap guard plus
+   kickoff collision detection ("a live run whose scope overlaps yours → stop and
+   ask"), not a lock. Inventing a lock primitive here would contradict that model
+   and overstate what a context-injection hook enforces (AGENTS.md level honesty).
+
+What is done instead is **fail-safe on doubt**: the directive tells the agent to
+re-validate ownership and, if it cannot confirm it is the sole resumer, to *not*
+auto-drive but surface for the operator. The residual narrow race (two auto
+sessions reading stale in the same sub-second window) therefore degrades to a
+possible missed auto-resume with the operator notified — never a silent
+double-drive. Closing it fully is afk-skill work (an atomic resume-claim), out of
+scope for this hook.
 
 ## Level honesty (per AGENTS.md)
 
