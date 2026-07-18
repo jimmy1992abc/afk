@@ -1,24 +1,102 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { test } from 'node:test';
 
+const repoRoot = new URL('..', import.meta.url);
+const GATE = 'skills/afk-glm-review/glm-gate.mjs';
+
+function runGate({ args = [], env = {} } = {}) {
+  return spawnSync(process.execPath, [GATE, ...args], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    env: { ...process.env, ...env },
+  });
+}
+
+function withDesignDoc(text, fn) {
+  const dir = mkdtempSync(join(tmpdir(), 'glm-gate-design-'));
+  try {
+    const path = join(dir, 'spec.md');
+    writeFileSync(path, text);
+    return fn(path);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 test('glm gate disabled flag emits a clean skipped review', () => {
-  const result = spawnSync(
-    process.execPath,
-    ['skills/afk-glm-review/glm-gate.mjs', '--base', 'main'],
-    {
-      cwd: new URL('..', import.meta.url),
-      encoding: 'utf8',
-      env: { ...process.env, GLM_REVIEW_GATE: 'off' },
-    },
-  );
+  const result = runGate({ args: ['--base', 'main'], env: { GLM_REVIEW_GATE: 'off' } });
 
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /===== GLM REVIEW \(final message\) =====/);
   assert.match(result.stdout, /SKIPPED: GLM gate disabled via GLM_REVIEW_GATE\./);
   assert.match(result.stdout, /===== END GLM REVIEW =====/);
+});
+
+// ── design mode ─────────────────────────────────────────────────────────────
+
+test('glm design mode resolves the design kind, not a diff selector', () => {
+  withDesignDoc('# Spec\n', (path) => {
+    const result = runGate({ args: ['--design', path, '--print-args'] });
+    assert.equal(result.status, 0, result.stderr);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.kind, 'design');
+    assert.equal(parsed.base, null);
+    assert.equal(parsed.commit, null);
+  });
+});
+
+test('glm design mode sends the doc text as the payload, not a diff+files snapshot', () => {
+  const body = '# Title\n\nA DESIGN-ONLY claim GLM must review.\n';
+  withDesignDoc(body, (path) => {
+    const result = runGate({ args: ['--design', path, '--print-prompt'] });
+    assert.equal(result.status, 0, result.stderr);
+    const out = result.stdout;
+    // The document text is the payload GLM receives...
+    assert.match(out, /A DESIGN-ONLY claim GLM must review\./);
+    // ...under a design system prompt, not a code-diff one.
+    assert.match(out, /SOUND WITH CONCERNS/);
+    assert.doesNotMatch(out, /file:line/);
+    // The diff-mode payload sections must be absent.
+    assert.doesNotMatch(out, /## Full diff/);
+    assert.doesNotMatch(out, /## Full current contents of changed files/);
+  });
+});
+
+test('glm design mode fails loudly on a missing doc, never a skip', () => {
+  const missing = join(tmpdir(), 'glm-gate-no-such-design-xyz.md');
+  const result = runGate({ args: ['--design', missing] });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stdout, /ERROR: cannot review/);
+  assert.match(result.stdout, /--design/);
+  assert.doesNotMatch(result.stdout, /SKIPPED/);
+});
+
+test('glm rejects an over-budget design doc loudly, not a masked skip', () => {
+  // The design stage runs exactly one gate. Sending an oversized doc whole lets
+  // Z.ai reject it and glm report that as SKIPPED — the design stage then
+  // proceeds with no review. An over-budget doc is operator/config error: fail
+  // loud (ERROR) so the operator scopes it or raises the budget.
+  const big = `# Spec\n${'x'.repeat(5000)}\n`;
+  withDesignDoc(big, (path) => {
+    const result = runGate({ args: ['--design', path], env: { GLM_REVIEW_MAX_CTX_BYTES: '500' } });
+    assert.notEqual(result.status, 0, 'an over-budget design doc must ERROR, not skip');
+    assert.match(result.stdout, /ERROR/);
+    assert.doesNotMatch(result.stdout, /SKIPPED/);
+  });
+});
+
+test('glm design mode: an unavailable reviewer skips and proceeds (Decision 6 asymmetry)', () => {
+  withDesignDoc('# Spec\n', (path) => {
+    const result = runGate({ args: ['--design', path], env: { GLM_REVIEW_GATE: 'off' } });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /SKIPPED: GLM gate disabled/);
+    assert.doesNotMatch(result.stdout, /ERROR/);
+  });
 });
 
 test('every external gate is listed on every plugin surface', () => {

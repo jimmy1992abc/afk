@@ -41,6 +41,12 @@ Run it in the **background** with a generous timeout; redirect stdout to a file
 and read it when it completes. Pass through any target flag (`--base <branch>` /
 `--commit <sha>` / `--uncommitted`). Do not poll in a sleep loop.
 
+**Design mode** (`--design <path>`) reviews a design document's reasoning instead
+of a diff — the opt-in design-stage gate (see `../afk/SKILL.md`, "Design-stage
+external gate"). Kimi is pointed at the document on disk and reads it with its own
+tools (keeping a large doc off the argv). A missing or unreadable `--design` path
+fails loudly (`ERROR`, non-zero), never a skip.
+
 Read the verdict between the `===== KIMI REVIEW (final message) =====` markers.
 `SKIPPED: …` (Kimi absent, logged out, or disabled via `KIMI_REVIEW_GATE=off`)
 is not a failure — report it and continue.

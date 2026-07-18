@@ -17,6 +17,7 @@
 //   node claude-gate.mjs --base master        # vs an explicit base
 //   node claude-gate.mjs --commit <sha>       # one commit
 //   node claude-gate.mjs --uncommitted        # staged/unstaged/untracked
+//   node claude-gate.mjs --design <path>      # review a design doc (read-only tools; doc on stdin)
 //   node claude-gate.mjs --implementer codex  # declare who wrote the change
 //   node claude-gate.mjs --print-args         # resolve and print argv; no model call
 //
@@ -32,9 +33,9 @@ import { join } from 'node:path';
 import { isGateDisabled } from '../../lib/gate/env.mjs';
 import { git } from '../../lib/gate/git.mjs';
 import { guardFor } from '../../lib/gate/implementer.mjs';
-import { buildReviewPrompt } from '../../lib/gate/prompt.mjs';
+import { buildDesignReviewPrompt, buildReviewPrompt } from '../../lib/gate/prompt.mjs';
 import { createProtocol } from '../../lib/gate/protocol.mjs';
-import { collectDiff, parseTarget, validateTarget } from '../../lib/gate/target.mjs';
+import { collectDiff, parseTarget, readDesign, validateTarget } from '../../lib/gate/target.mjs';
 
 const isWin = process.platform === 'win32';
 const { emitSkip, emitReview, emitError } = createProtocol({ label: 'CLAUDE', slug: 'claude-gate' });
@@ -50,6 +51,21 @@ const printArgsOnly = userArgs.includes('--print-args');
 // prompt actually carried the change.
 const printPromptOnly = userArgs.includes('--print-prompt');
 
+// ── Target ──────────────────────────────────────────────────────────────────
+const target = parseTarget(userArgs);
+const isDesign = target.kind === 'design';
+
+// A malformed --design is operator error that must fail loud on EVERY gate, even
+// one about to self-skip, so a design target validates BEFORE the independence
+// guard. A diff target validates after it — a self-skipping gate need not
+// resolve a ref it will never review.
+if (isDesign) {
+  const valid = validateTarget(target);
+  if (!valid.ok) {
+    emitError(`cannot review — ${valid.reason}`, 1);
+  }
+}
+
 // ── Self-review guard ───────────────────────────────────────────────────────
 // A gate whose model wrote the code under review provides no independence. The
 // default afk driver IS Claude Code, so this is the failure that would
@@ -59,76 +75,104 @@ if (!guard.run) {
   emitSkip(`independence check — ${guard.reason}`);
 }
 
-// ── Target ──────────────────────────────────────────────────────────────────
-const target = parseTarget(userArgs);
 // A bad ref must not read as a clean tree: git() returns '' for a failed
 // command, so without this an unresolvable target becomes "no changes found".
-const valid = validateTarget(target);
-if (!valid.ok) {
-  emitError(`cannot review — ${valid.reason}`, 1);
+if (!isDesign) {
+  const valid = validateTarget(target);
+  if (!valid.ok) {
+    emitError(`cannot review — ${valid.reason}`, 1);
+  }
 }
-const { diff, stat, changedFiles, untracked = [], error: diffError } = collectDiff(target);
-if (diffError) {
-  // Never a skip: a target git cannot read is unreviewable, not unchanged.
-  emitError(`cannot review — ${diffError}`, 1);
+
+// Design mode reviews a document's reasoning, not a diff, and never enters the
+// diff path. Everything below the design branch is diff-only.
+let prompt;
+let changedFiles = [];
+let hasChanges = true;
+
+if (isDesign) {
+  // The reviewer keeps its Read/Grep/Glob tools: a design cites code, so it can
+  // check whether the code says what the design claims. The doc text is injected
+  // (it may be uncommitted and is the whole subject of the review).
+  const doc = readDesign(target);
+  if (doc.error) {
+    // A read that failed after validateTarget passed (TOCTOU) is still an
+    // unreviewable target, not a clean tree — fail loud, never skip.
+    emitError(`cannot review — ${doc.error}`, 1);
+  }
+  const { text } = doc;
+  const context = [
+    'The design document under review is included below. You have Read, Grep and Glob over the working tree and no other tools: read any file you need to check a claim the design makes about the code, and do not claim to have run any command.',
+    '',
+    `## Design document (${target.path})`,
+    text,
+  ].join('\n');
+  prompt = buildDesignReviewPrompt({ scope: target.label, context });
+} else {
+  const { diff, stat, changedFiles: cf, untracked = [], error: diffError } = collectDiff(target);
+  if (diffError) {
+    // Never a skip: a target git cannot read is unreviewable, not unchanged.
+    emitError(`cannot review — ${diffError}`, 1);
+  }
+  changedFiles = cf;
+  hasChanges = Boolean(diff.trim() || changedFiles.length);
+
+  // ── Prompt ──────────────────────────────────────────────────────────────────
+  const maxCtx = Number.parseInt(process.env.CLAUDE_REVIEW_MAX_CTX_BYTES || '400000', 10) || 400000;
+  // Bytes, not String#length: the prompt goes out as UTF-8 on stdin, while
+  // .length counts UTF-16 code units. A CJK diff is ~3 bytes per unit, so a
+  // 300k-"character" diff is ~900kB and would sail past a 400kB budget.
+  const diffBytes = Buffer.byteLength(diff, 'utf8');
+  if (diffBytes > maxCtx) {
+    // Truncating and reviewing anyway would let a large change be APPROVED with
+    // part of it never shown. The reviewer's read tools cannot recover what a
+    // truncated diff drops: a deletion, or the old side of a modification, exists
+    // nowhere in the current tree. So this fails closed rather than silently
+    // narrowing what "reviewed" means.
+    emitError(
+      `diff is ${diffBytes} bytes, over the ${maxCtx}-byte budget. A truncated diff cannot be reviewed honestly — the old side of a modification and any deletion would simply be missing. Scope the review (--commit <sha>) or raise CLAUDE_REVIEW_MAX_CTX_BYTES.`,
+      1,
+    );
+  }
+  const diffText = diff;
+
+  // The context clause is this gate's own: it states what was supplied and what
+  // the reviewer may do to learn more. A gate whose reviewer has no tools (glm)
+  // must never be told to go looking — see lib/gate/prompt.mjs.
+  //
+  // Untracked files appear in NO diff (`git diff HEAD` is empty for a brand-new
+  // file) and this reviewer has no git to discover them with. Without the list
+  // below, an all-new-files change reaches the reviewer as an empty diff and can
+  // be approved having inspected nothing.
+  // The read tools see the working tree as it is NOW, which is not necessarily the
+  // revision the diff describes: `--commit <old-sha>` reviews history, and a
+  // branch review may run over a dirty tree. Saying so is the honest fix — a
+  // reviewer told its context is authoritative will reason about the wrong
+  // revision and never know. (The structural fix is a temp worktree checked out at
+  // the target; recorded as a follow-up rather than bolted on here.)
+  const contextMayDrift = target.kind === 'commit'
+    ? git(['rev-parse', target.commit]).trim() !== git(['rev-parse', 'HEAD']).trim()
+    : Boolean(git(['status', '--porcelain']).trim());
+
+  const context = [
+    `The diff is included below (${target.command}). You have Read, Grep and Glob over the working tree and no other tools: read any file you need for context, and do not claim to have run any command.`,
+    contextMayDrift
+      ? 'CAUTION: the files you can Read are the CURRENT working tree, which is not the revision this diff describes — a file may have changed since, or carry uncommitted edits. The diff is authoritative for what changed; treat file contents as background only, and say so if a judgement depends on the difference.'
+      : '',
+    untracked.length
+      // JSON-encoded, one per line: a filename may legally contain a newline, and
+      // interpolating it raw would split one path across two bullets — the
+      // reviewer then reads neither, and the file is absent from the diff too.
+      ? `IMPORTANT: ${untracked.length} file(s) in this change are new and are NOT in the diff below. The diff alone therefore does not show the whole change. Read each one before judging it (paths are JSON-encoded):\n${untracked.map((f) => `- ${JSON.stringify(f)}`).join('\n')}`
+      : '',
+    '',
+    `## Diff stat\n${stat}`,
+    '',
+    `## Full diff\n${diffText}`,
+  ].filter(Boolean).join('\n');
+
+  prompt = buildReviewPrompt({ scope: target.label, context });
 }
-const hasChanges = Boolean(diff.trim() || changedFiles.length);
-
-// ── Prompt ──────────────────────────────────────────────────────────────────
-const maxCtx = Number.parseInt(process.env.CLAUDE_REVIEW_MAX_CTX_BYTES || '400000', 10) || 400000;
-// Bytes, not String#length: the prompt goes out as UTF-8 on stdin, while
-// .length counts UTF-16 code units. A CJK diff is ~3 bytes per unit, so a
-// 300k-"character" diff is ~900kB and would sail past a 400kB budget.
-const diffBytes = Buffer.byteLength(diff, 'utf8');
-if (diffBytes > maxCtx) {
-  // Truncating and reviewing anyway would let a large change be APPROVED with
-  // part of it never shown. The reviewer's read tools cannot recover what a
-  // truncated diff drops: a deletion, or the old side of a modification, exists
-  // nowhere in the current tree. So this fails closed rather than silently
-  // narrowing what "reviewed" means.
-  emitError(
-    `diff is ${diffBytes} bytes, over the ${maxCtx}-byte budget. A truncated diff cannot be reviewed honestly — the old side of a modification and any deletion would simply be missing. Scope the review (--commit <sha>) or raise CLAUDE_REVIEW_MAX_CTX_BYTES.`,
-    1,
-  );
-}
-const diffText = diff;
-
-// The context clause is this gate's own: it states what was supplied and what
-// the reviewer may do to learn more. A gate whose reviewer has no tools (glm)
-// must never be told to go looking — see lib/gate/prompt.mjs.
-//
-// Untracked files appear in NO diff (`git diff HEAD` is empty for a brand-new
-// file) and this reviewer has no git to discover them with. Without the list
-// below, an all-new-files change reaches the reviewer as an empty diff and can
-// be approved having inspected nothing.
-// The read tools see the working tree as it is NOW, which is not necessarily the
-// revision the diff describes: `--commit <old-sha>` reviews history, and a
-// branch review may run over a dirty tree. Saying so is the honest fix — a
-// reviewer told its context is authoritative will reason about the wrong
-// revision and never know. (The structural fix is a temp worktree checked out at
-// the target; recorded as a follow-up rather than bolted on here.)
-const contextMayDrift = target.kind === 'commit'
-  ? git(['rev-parse', target.commit]).trim() !== git(['rev-parse', 'HEAD']).trim()
-  : Boolean(git(['status', '--porcelain']).trim());
-
-const context = [
-  `The diff is included below (${target.command}). You have Read, Grep and Glob over the working tree and no other tools: read any file you need for context, and do not claim to have run any command.`,
-  contextMayDrift
-    ? 'CAUTION: the files you can Read are the CURRENT working tree, which is not the revision this diff describes — a file may have changed since, or carry uncommitted edits. The diff is authoritative for what changed; treat file contents as background only, and say so if a judgement depends on the difference.'
-    : '',
-  untracked.length
-    // JSON-encoded, one per line: a filename may legally contain a newline, and
-    // interpolating it raw would split one path across two bullets — the
-    // reviewer then reads neither, and the file is absent from the diff too.
-    ? `IMPORTANT: ${untracked.length} file(s) in this change are new and are NOT in the diff below. The diff alone therefore does not show the whole change. Read each one before judging it (paths are JSON-encoded):\n${untracked.map((f) => `- ${JSON.stringify(f)}`).join('\n')}`
-    : '',
-  '',
-  `## Diff stat\n${stat}`,
-  '',
-  `## Full diff\n${diffText}`,
-].filter(Boolean).join('\n');
-
-const prompt = buildReviewPrompt({ scope: target.label, context });
 
 // ── Invocation ──────────────────────────────────────────────────────────────
 const model = (process.env.CLAUDE_REVIEW_MODEL || 'opus').trim();
@@ -173,7 +217,7 @@ if (printArgsOnly) {
     base: target.base ?? null,
     commit: target.commit ?? null,
     label: target.label,
-    command: target.command,
+    command: target.command ?? null,
     hasChanges,
     changedFiles,
     promptBytes: prompt.length,
