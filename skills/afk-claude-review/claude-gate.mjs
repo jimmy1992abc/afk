@@ -81,7 +81,13 @@ if (isDesign) {
   // The reviewer keeps its Read/Grep/Glob tools: a design cites code, so it can
   // check whether the code says what the design claims. The doc text is injected
   // (it may be uncommitted and is the whole subject of the review).
-  const { text } = readDesign(target);
+  const doc = readDesign(target);
+  if (doc.error) {
+    // A read that failed after validateTarget passed (TOCTOU) is still an
+    // unreviewable target, not a clean tree — fail loud, never skip.
+    emitError(`cannot review — ${doc.error}`, 1);
+  }
+  const { text } = doc;
   const context = [
     'The design document under review is included below. You have Read, Grep and Glob over the working tree and no other tools: read any file you need to check a claim the design makes about the code, and do not claim to have run any command.',
     '',

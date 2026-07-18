@@ -122,8 +122,13 @@ let systemPrompt;
 if (isDesign) {
   // Design mode replaces the whole payload builder: send the document text, not
   // the diff + per-file contents + byte budget a code review needs.
-  const { text } = readDesign(target);
-  payload = `## Design document (${target.path})\n${text}\n`;
+  const doc = readDesign(target);
+  if (doc.error) {
+    // A read that failed after validateTarget passed (TOCTOU) is unreviewable,
+    // not unchanged — fail loud, never skip.
+    emitError(`cannot review — ${doc.error}`, 1);
+  }
+  payload = `## Design document (${target.path})\n${doc.text}\n`;
   const context = 'You are given the full text of a design document. That document is everything you have: you cannot run commands or open other files, so never claim to have done either. Where a judgement would require a file you were not given, say so rather than assume.';
   systemPrompt = buildDesignReviewPrompt({ scope: target.label, context });
 } else {

@@ -258,7 +258,13 @@ if (isDesign) {
     // would throw an uncaught ENOENT from readDesign and emit no marker block.
     emitError(`cannot review — ${valid.reason}`, 1);
   }
-  const { text } = readDesign(target);
+  const doc = readDesign(target);
+  if (doc.error) {
+    // A read that failed after validateTarget passed (TOCTOU) is unreviewable —
+    // fail loud with a marker block, never throw uncaught.
+    emitError(`cannot review — ${doc.error}`, 1);
+  }
+  const { text } = doc;
   const context = 'The design document under review is included below. You are running read-only: you may read files in this repository to check a claim the design makes about the code, but you cannot modify anything. Do not claim to have run any command you did not run.';
   const brief = buildDesignReviewPrompt({ scope: target.label, context });
   designPayload = `${brief}\n\n## Design document (${target.path})\n${text}`;
