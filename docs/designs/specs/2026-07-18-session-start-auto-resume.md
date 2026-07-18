@@ -135,9 +135,11 @@ for the existing caller is unchanged (no `cwd` = `process.cwd()`).
 
 For each `.afk/runs/*/ledger.md` (read UTF-8): parse header `state`, `heartbeat`,
 `run-id`, and scope. Select a run iff `state === 'active'` and the heartbeat is
-older than **20 minutes** (`STALE_MINUTES`, defined once in `detect.mjs`). This
-mirrors the afk overlap guard: a heartbeat fresher than ~20 min means a live tick
-owns the run, so surfacing it would invite a second driver.
+**not fresher than the 20-minute guard** — i.e. an age of `STALE_MINUTES` (20) or
+more; only an age strictly under 20 minutes is skipped (`stale < STALE_MINUTES`,
+defined once in `detect.mjs`). This mirrors the afk overlap guard exactly: a
+heartbeat fresher than ~20 min means a live tick owns the run, so surfacing it
+would invite a second driver.
 
 Boundary rules, fail-safe:
 
@@ -191,11 +193,11 @@ it requires a bump regardless — the fix is for future hook-only changes.)
 | No output & exit 0 outside an afk repo (no `.afk/runs/`) | hook early return | test: non-afk tmp dir → empty stdout |
 | `off` and no-run → empty stdout, exit 0 | mode gate / empty selection | tests: off mode; zero-run |
 | `.afk/` resolved from the **main** worktree, not cwd/toplevel | `mainWorktree({cwd})` from `git.mjs` | test: porcelain call present; existing implementer guard test |
-| Only `active` + heartbeat-stale > 20 min surfaced | `selectResumable` | tests: active+stale surfaced; active+fresh skipped; complete skipped |
-| Missing/garbled heartbeat → surfaced (fail-safe), staleness `unknown` | `selectResumable` | test: missing/garbled heartbeat |
+| Only `active` + heartbeat-age ≥ 20 min surfaced (age < 20 skipped) | `collectResumable` | tests: active+stale surfaced; active+fresh skipped; complete skipped; boundary at/under 20 |
+| Missing/garbled heartbeat → surfaced (fail-safe), staleness `unknown` | `staleMinutesOf` + `collectResumable` | test: missing/garbled heartbeat |
 | ≥2 runs never produce a single-run drive directive | `buildContext` run-count branch | test: multi-run lists, no drive verb |
 | `auto` single-run emits the conditional drive directive | `buildContext` | test: auto+1 → directive; notify+1 → no directive |
-| Any error → exit 0, no output (never crash a session) | top-level try/catch in hook | test/inspection: wrapped main; unreadable inputs |
+| Any error → exit 0, no output (never crash a session) | top-level try/catch in hook | test: malformed stdin → exit 0, empty stdout |
 | `hooks/` change requires a version bump | `SHIPPED_DIRS` | test: `requiresBump(['hooks/…'])` |
 | Default is `notify` (absent/blank/garbled config) | `normalizeMode` | tests: absent/blank/unknown → notify |
 
