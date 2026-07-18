@@ -178,8 +178,9 @@ condition already uses:
 - A round is **clean** only if every checklist lens was applied to the full
   diff and reported a result — "lens applied, nothing found" is a statement;
   a skipped or silent lens voids the round — and every finding from earlier
-  rounds has its fix verified by re-running the affected checks. A fix's
-  absence from later rounds verifies nothing.
+  rounds has its fix verified: by re-running the affected checks where one
+  applies, otherwise by a recorded verification step (the gate loop's own
+  fallback). A fix's absence from later rounds verifies nothing.
 - Two consecutive clean rounds bound the **effort**, not correctness — the
   reason internal review and the external gate still follow.
 

@@ -39,7 +39,7 @@ test('the driver defines finding closure once, as recorded dispositions', () => 
   // triage and closed by exactly one recorded disposition.
   for (const phrase of [
     /named at triage/,
-    /closed by exactly one recorded\s+disposition/,
+    /at most one \*\*current\*\* recorded\s+disposition/,
     /Silence closes nothing/,
     /run-scoped/,
     /the record is the closure, not the\s+future test/,

@@ -192,8 +192,9 @@ id in the run's record — and every later round's findings are judged against
 that named list — same, reopening, or new — with the judgment recorded. The
 reviewers are memoryless (the helpers accept a review target and flags such as
 `--implementer`, but no findings input), so identity lives in the driver's
-record or nowhere. Every named finding is closed by exactly one recorded
-disposition:
+record or nowhere. A named finding holds at most one **current** recorded
+disposition — closing sets it, reopening supersedes it, and the record keeps
+the history:
 
 - **Fixed** — verified against the artifact, by the check that pins it where
   one is expressible (a test that failed before the fix and passes after it),
