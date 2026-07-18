@@ -239,14 +239,18 @@ const logFile = join(work, 'codex.log');
 // hermetic probe verified this on codex 0.144.1); design mode needs no bypass.
 // The brief + doc ride on stdin (positional `-`): a real design doc overflows
 // the Windows ~8191-char argv limit as a positional.
+// Detect PRESENCE, not just a value: a valueless `--design` must not fall
+// through to `codex exec review` of the branch diff — that ships a clean
+// design-stage gate with no design reviewed. validateTarget rejects the empty
+// path loudly.
+const isDesign = userArgs.includes('--design');
 const designPath = optVal(userArgs, '--design');
-const isDesign = Boolean(designPath);
 
 let reviewArgs;
 let designPayload = null;
 
 if (isDesign) {
-  const target = { kind: 'design', path: designPath, label: `the design document at ${designPath}` };
+  const target = { kind: 'design', path: designPath, label: designPath ? `the design document at ${designPath}` : 'a design document (no --design path given)' };
   const valid = validateTarget(target);
   if (!valid.ok) {
     // A missing/unreadable doc is operator error — fail loudly (nonzero), never

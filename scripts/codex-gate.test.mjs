@@ -198,6 +198,15 @@ test('codex design mode fails loudly on a missing doc, never a skip', () => {
   assert.doesNotMatch(result.stdout, /SKIPPED/);
 });
 
+test('codex a valueless --design fails loudly, never a review of the wrong target', () => {
+  // `--design` with no value must not fall through to `codex exec review` of the
+  // branch diff — that ships a clean design-stage gate with no design reviewed.
+  const result = runGate({ args: ['--base', 'main', '--design'] });
+  assert.notEqual(result.status, 0, 'a valueless --design must fail, not silently review the diff');
+  assert.match(result.stdout, /ERROR: cannot review/);
+  assert.doesNotMatch(result.stdout, /SKIPPED/);
+});
+
 test('codex design mode: an unavailable reviewer skips and proceeds (Decision 6 asymmetry)', () => {
   // The other half of the asymmetry: a missing doc is operator error (fails
   // loud), but an unavailable reviewer degrades through — a skipped design gate
