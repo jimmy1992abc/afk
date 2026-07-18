@@ -169,7 +169,7 @@ Read `auto-resume` from `<root>/.afk/config.md` (absent/blank/unrecognized →
 | `off` (any) | none; exit 0 |
 | no resumable run (any mode) | none; exit 0 |
 | `notify`, ≥1 run | Surface each run — run-id, ledger path, scope, staleness — and state it is resumable. **No** autonomous-drive directive. |
-| `auto`, exactly one run | Same info **plus** a directive: unless the operator's first message redirects, resume the full waterfall autonomously per the afk skill — refresh the heartbeat first (overlap guard) and honor the run's merge policy. |
+| `auto`, exactly one run | Same info **plus** a directive: unless the operator's first message redirects, resume autonomously per the afk skill — but **re-read the ledger first and confirm the run is still `active` with a still-stale heartbeat** (abort if another session has since claimed it or it is `complete`), then refresh the heartbeat, drive the full waterfall, and honor the run's merge policy. |
 | ≥2 runs (any mode, incl. `auto`) | **List** them; drive none. One session must not drive two runs — each needs its own worktree/session. Confirm with the operator which to resume. |
 
 Output shape (JSON to stdout, exit 0):
@@ -185,6 +185,17 @@ first message redirects"): injected context must not override an operator who
 opened the window to do something else. `notify` never injects a drive
 instruction at all — it is the safe default precisely because a false positive
 costs only a few lines of context, never an unwanted autonomous run.
+
+The directive also **re-validates before claiming**. The hook reads the ledger at
+session start, but the agent acts on the injected context one or more turns later;
+in that window another session can claim the run and write a fresh heartbeat.
+Refreshing this session's heartbeat first would overwrite that claim and put two
+drivers on one run — the exact collision the design prevents. So the directive
+requires re-reading the ledger and confirming the run is still `active` and stale
+before refreshing and driving, matching the afk skill's overlap guard (a tick that
+finds a fresh heartbeat in its own ledger exits). This is level-3 doctrine — the
+directive instructs the agent; the hook cannot enforce it — so the wording is the
+control, and it is pinned by a test on the emitted directive.
 
 ### Decision 5 — `hooks/` is shipped code (version-bump invariant)
 
@@ -206,6 +217,7 @@ it requires a bump regardless — the fix is for future hook-only changes.)
 | Missing/garbled heartbeat → surfaced (fail-safe), staleness `unknown` | `staleMinutesOf` + `collectResumable` | test: missing/garbled heartbeat |
 | ≥2 runs never produce a single-run drive directive | `buildContext` run-count branch | test: multi-run lists, no drive verb |
 | `auto` single-run emits the conditional drive directive | `buildContext` | test: auto+1 → directive; notify+1 → no directive |
+| `auto` directive re-validates the run before claiming (no detect→turn TOCTOU) | `buildContext` auto branch wording | test: directive requires re-read + confirm active/stale + "do NOT drive" |
 | Any error → exit 0, no output (never crash a session) | top-level try/catch in hook | test: malformed stdin → exit 0, empty stdout |
 | Emitted JSON is flushed before exit (no pipe truncation) | awaited `stdout.write` before `process.exit` | inspection: awaited write; integration tests read valid JSON back |
 | Hook runtime is bounded (never stalls startup) | `timeout: 10` in `hooks.json` | inspection: registration carries the timeout |
