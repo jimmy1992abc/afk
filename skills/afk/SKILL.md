@@ -171,9 +171,20 @@ never-scale-down-gates rule, which governs PR gates only.
 
 - **Invocation.** The same gate helpers, selected the same way (`priority`), with
   a design target: `--design <path>` in place of a diff selector. The gate reviews
-  the document, not a diff, and is read-only by construction. A missing or
-  unreadable `--design` path is operator error → the gate errors (nonzero), never
-  a skip — skipping here would mean no independent review happened at all.
+  the document, not a diff. It is read-only **by construction** for `codex`
+  (`exec -s read-only`), `claude` (`Read,Grep,Glob` only), and `glm` (a tool-less
+  API call); `kimi` is the exception — its read-only is only *requested in the
+  prompt* (the same weaker guarantee it carries for diff reviews), so prefer
+  another gate for design when one qualifies. A missing or unreadable `--design`
+  path is operator error → the gate errors (nonzero), never a skip — skipping here
+  would mean no independent review happened at all.
+- **Independence is from the design's AUTHOR.** The guard's `--implementer` here
+  identifies whoever wrote the *design*, not the code implementer a PR-gate
+  `--implementer` names. In the usual case the driver authors the design, so it is
+  omitted (the driver is assumed) and a same-model gate self-skips. Only when
+  another model authored the design (a design relay) declare that model — do NOT
+  pass the eventual code implementer, or a driver-authored design could be
+  reviewed by the driver's own model, defeating this step.
 - **Exactly one gate, regardless of `min-pass`.** `min-pass` governs the PR gate;
   one round is the whole point here. **One gate per design version, hard cap 2 per
   issue** — a design-invalidating finding restarts the design step, and the
