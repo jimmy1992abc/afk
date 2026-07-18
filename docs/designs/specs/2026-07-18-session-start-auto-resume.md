@@ -170,7 +170,7 @@ Read `auto-resume` from `<root>/.afk/config.md` (absent/blank/unrecognized →
 | no resumable run (any mode) | none; exit 0 |
 | `notify`, ≥1 run | Surface each run — run-id, ledger path, scope, staleness — and state it is resumable. **No** autonomous-drive directive. |
 | `auto`, exactly one run | Same info **plus** a directive: unless the operator's first message redirects, resume autonomously per the afk skill — but **re-read the ledger first and confirm the run is still `active` with a still-stale heartbeat** (abort if another session has since claimed it or it is `complete`), then refresh the heartbeat, drive the full waterfall, and honor the run's merge policy. |
-| ≥2 runs (any mode, incl. `auto`) | **List** them; drive none. One session must not drive two runs — each needs its own worktree/session. Confirm with the operator which to resume. |
+| ≥2 runs (any mode, incl. `auto`) | **List** them — run-id, ledger path, staleness, and each run's scope so the operator can tell them apart; drive none. One session must not drive two runs — each needs its own worktree/session. Confirm with the operator which to resume. |
 
 Output shape (JSON to stdout, exit 0):
 
@@ -215,7 +215,7 @@ it requires a bump regardless — the fix is for future hook-only changes.)
 | `.afk/` resolved from the **main** worktree, not cwd/toplevel | `mainWorktree({cwd})` from `git.mjs` | test: porcelain call present; existing implementer guard test |
 | Only `active` + heartbeat-age ≥ 20 min surfaced (age < 20 skipped) | `collectResumable` | tests: active+stale surfaced; active+fresh skipped; complete skipped; boundary at/under 20 |
 | Missing/garbled heartbeat → surfaced (fail-safe), staleness `unknown` | `staleMinutesOf` + `collectResumable` | test: missing/garbled heartbeat |
-| ≥2 runs never produce a single-run drive directive | `buildContext` run-count branch | test: multi-run lists, no drive verb |
+| ≥2 runs never produce a single-run drive directive; each lists its scope | `buildContext` run-count branch | test: multi-run lists each scope, no drive verb |
 | `auto` single-run emits the conditional drive directive | `buildContext` | test: auto+1 → directive; notify+1 → no directive |
 | `auto` directive re-validates the run before claiming (no detect→turn TOCTOU) | `buildContext` auto branch wording | test: directive requires re-read + confirm active/stale + "do NOT drive" |
 | Any error → exit 0, no output (never crash a session) | top-level try/catch in hook | test: malformed stdin → exit 0, empty stdout |

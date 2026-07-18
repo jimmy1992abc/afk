@@ -176,12 +176,14 @@ test('auto mode with one stale run directs an autonomous resume', () => {
 test('multiple stale runs are listed and none is driven, even in auto mode', () => {
   const root = initRepo();
   try {
-    writeRun(root, 'run-a');
-    writeRun(root, 'run-b');
+    writeRun(root, 'run-a', { scope: 'alpha work' });
+    writeRun(root, 'run-b', { scope: 'beta work' });
     writeConfig(root, 'auto');
     const ctx = parseOut(runHook({ source: 'startup', cwd: root }).stdout).hookSpecificOutput.additionalContext;
     assert.match(ctx, /run-a/);
     assert.match(ctx, /run-b/);
+    assert.match(ctx, /alpha work/);
+    assert.match(ctx, /beta work/);
     assert.match(ctx, /Do NOT auto-drive/i);
     assert.doesNotMatch(ctx, /resume this run autonomously/i);
   } finally {
