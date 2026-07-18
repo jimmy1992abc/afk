@@ -150,13 +150,24 @@ computed (floored) for display only. This mirrors the afk overlap guard exactly:
 a heartbeat fresher than ~20 min means a live tick owns the run, so surfacing it
 would invite a second driver.
 
-Each ledger is read as a **bounded prefix** (`LEDGER_READ_BYTES`, 16 KiB), not in
-full: the header (`run-id`, `state`, `heartbeat`, `scope:`) sits at the top, so
-the prefix is enough to select, and startup cost stays flat as `complete` run
-directories accumulate. Every run directory is still visited — no run is dropped;
-only a `## scope` block past the bound would truncate, and scope is cosmetic. The
-host-side `timeout: 10` is the outer bound; the prefix read keeps the normal path
-far under it.
+Startup cost is bounded on two axes, because the hook runs on every session start
+and `complete` run directories accumulate:
+
+- **Per ledger:** each is read as a **bounded prefix** (`LEDGER_READ_BYTES`,
+  16 KiB), not in full — the header (`run-id`, `state`, `heartbeat`, `scope:`)
+  sits at the top, so the prefix is enough to select. Only a `## scope` block past
+  the bound truncates, and scope is cosmetic.
+- **Across ledgers:** at most `MAX_LEDGER_SCAN` (512) ledgers are read per start.
+  Reading every ledger would be O(runs); above the bound, only the most-recently-
+  written ledgers are read (`statSync` mtime, far cheaper than the read it
+  gates), so a resumable run — whose heartbeat writes keep its ledger mtime recent
+  — is still found while old completed runs sort last. When the cap truncates, the
+  skipped count is written to **stderr** (never a silent cap; it does not touch the
+  stdout contract). Pruning old run directories is afk-lifecycle scope; this hook
+  only bounds its own read cost.
+
+The host-side `timeout: 10` is the outer bound; these two keep the normal path far
+under it.
 
 Boundary rules, fail-safe:
 
@@ -230,7 +241,8 @@ it requires a bump regardless — the fix is for future hook-only changes.)
 | Missing/garbled heartbeat → surfaced (fail-safe), staleness `unknown` | `staleMinutesOf` + `collectResumable` | test: missing/garbled heartbeat |
 | Implausibly-future heartbeat → surfaced (not hidden); small skew still skipped | `staleMsOf` future-skew bound | tests: far-future surfaced; within-skew skipped |
 | `auto` defers to afk's kickoff collision check and fails safe on doubt | `buildContext` auto branch wording | test: directive carries the "kickoff collision" + "when in doubt / prefer surfacing" clauses |
-| Startup cost is flat as run history grows (bounded per-ledger read) | `readPrefix` / `LEDGER_READ_BYTES` | test: a ledger larger than the bound still selects from its header |
+| Per-ledger read is bounded (header prefix only) | `readPrefix` / `LEDGER_READ_BYTES` | test: a ledger larger than the bound still selects from its header |
+| Ledgers read per start are capped (newest-first); skips logged, not silent | `MAX_LEDGER_SCAN` cap + stderr note | test: cap drops the oldest-mtime ledger, keeps the newest |
 | ≥2 runs never produce a single-run drive directive; each lists its scope | `buildContext` run-count branch | test: multi-run lists each scope, no drive verb |
 | `auto` single-run emits the conditional drive directive | `buildContext` | test: auto+1 → directive; notify+1 → no directive |
 | `auto` directive re-validates the run before claiming (no detect→turn TOCTOU) | `buildContext` auto branch wording | test: directive requires re-read + confirm active/stale + "do NOT drive" |
