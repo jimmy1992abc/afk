@@ -103,6 +103,16 @@ Same discipline as the other gate skills:
 
 Apply any invariant in `.afk/config.md` as an extra lens.
 
+## Stop rule
+
+Stop when the loop-termination rule in `../afk/SKILL.md` ("External gate")
+holds: a round with no new structural finding and every prior structural
+finding closed by a recorded disposition — a driver-verified fix, a
+refutation, or an accepted risk.
+
+Report `CLEAN`, or `OUTSTANDING` with what remains. A clean pass is not
+authority to merge.
+
 ## Setup
 
 Optional and self-skipping. Needs the Claude Code CLI installed and logged in,
