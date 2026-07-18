@@ -76,6 +76,15 @@ test('glm design mode fails loudly on a missing doc, never a skip', () => {
   assert.doesNotMatch(result.stdout, /SKIPPED/);
 });
 
+test('glm design mode: an unavailable reviewer skips and proceeds (Decision 6 asymmetry)', () => {
+  withDesignDoc('# Spec\n', (path) => {
+    const result = runGate({ args: ['--design', path], env: { GLM_REVIEW_GATE: 'off' } });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /SKIPPED: GLM gate disabled/);
+    assert.doesNotMatch(result.stdout, /ERROR/);
+  });
+});
+
 test('every external gate is listed on every plugin surface', () => {
   // A gate nobody can discover is a gate that never runs, so each surface that
   // advertises the set must advertise all of it.

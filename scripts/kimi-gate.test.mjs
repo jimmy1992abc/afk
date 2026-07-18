@@ -120,6 +120,15 @@ test('kimi design mode fails loudly on a missing doc, never a skip', () => {
   assert.doesNotMatch(result.stdout, /SKIPPED/);
 });
 
+test('kimi design mode: an unavailable reviewer skips and proceeds (Decision 6 asymmetry)', () => {
+  withDesignDoc('# Spec\n', (path) => {
+    const result = runGate({ args: ['--design', path], env: { KIMI_REVIEW_GATE: 'off' } });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /SKIPPED: Kimi gate disabled/);
+    assert.doesNotMatch(result.stdout, /ERROR/);
+  });
+});
+
 test('kimi gate opt-out short-circuits before any target resolution', () => {
   // An unresolvable target must not turn a disabled gate into an error: the
   // opt-out is checked first, so the operator pays nothing.
