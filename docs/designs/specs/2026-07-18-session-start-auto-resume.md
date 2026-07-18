@@ -150,6 +150,14 @@ computed (floored) for display only. This mirrors the afk overlap guard exactly:
 a heartbeat fresher than ~20 min means a live tick owns the run, so surfacing it
 would invite a second driver.
 
+Each ledger is read as a **bounded prefix** (`LEDGER_READ_BYTES`, 16 KiB), not in
+full: the header (`run-id`, `state`, `heartbeat`, `scope:`) sits at the top, so
+the prefix is enough to select, and startup cost stays flat as `complete` run
+directories accumulate. Every run directory is still visited — no run is dropped;
+only a `## scope` block past the bound would truncate, and scope is cosmetic. The
+host-side `timeout: 10` is the outer bound; the prefix read keeps the normal path
+far under it.
+
 Boundary rules, fail-safe:
 
 - `state` missing or not `active` → skip (only a paused *active* run is
@@ -221,7 +229,8 @@ it requires a bump regardless — the fix is for future hook-only changes.)
 | Only `active` + heartbeat-age ≥ 20 min surfaced (age < 20 skipped) | `collectResumable` | tests: active+stale surfaced; active+fresh skipped; complete skipped; boundary at/under 20 |
 | Missing/garbled heartbeat → surfaced (fail-safe), staleness `unknown` | `staleMinutesOf` + `collectResumable` | test: missing/garbled heartbeat |
 | Implausibly-future heartbeat → surfaced (not hidden); small skew still skipped | `staleMsOf` future-skew bound | tests: far-future surfaced; within-skew skipped |
-| `auto` fails safe on ownership doubt (concurrent start → surface, not drive) | `buildContext` auto branch wording | test: directive carries the "only session / cannot confirm" clause |
+| `auto` defers to afk's kickoff collision check and fails safe on doubt | `buildContext` auto branch wording | test: directive carries the "kickoff collision" + "when in doubt / prefer surfacing" clauses |
+| Startup cost is flat as run history grows (bounded per-ledger read) | `readPrefix` / `LEDGER_READ_BYTES` | test: a ledger larger than the bound still selects from its header |
 | ≥2 runs never produce a single-run drive directive; each lists its scope | `buildContext` run-count branch | test: multi-run lists each scope, no drive verb |
 | `auto` single-run emits the conditional drive directive | `buildContext` | test: auto+1 → directive; notify+1 → no directive |
 | `auto` directive re-validates the run before claiming (no detect→turn TOCTOU) | `buildContext` auto branch wording | test: directive requires re-read + confirm active/stale + "do NOT drive" |
@@ -279,13 +288,19 @@ not done, for two reasons:
    ask"), not a lock. Inventing a lock primitive here would contradict that model
    and overstate what a context-injection hook enforces (AGENTS.md level honesty).
 
-What is done instead is **fail-safe on doubt**: the directive tells the agent to
-re-validate ownership and, if it cannot confirm it is the sole resumer, to *not*
-auto-drive but surface for the operator. The residual narrow race (two auto
-sessions reading stale in the same sub-second window) therefore degrades to a
-possible missed auto-resume with the operator notified — never a silent
-double-drive. Closing it fully is afk-skill work (an atomic resume-claim), out of
-scope for this hook.
+What is done instead is **defer to afk's kickoff collision check and fail safe on
+doubt**. "Confirm you are the only session" is not a mechanically satisfiable
+instruction, so the directive does not ask for it. It tells the agent to run
+afk's kickoff collision check — re-read this run's ledger and the others, and not
+drive if the run is now `complete`, its heartbeat is fresh, or another live run
+holds the scope — and, because that check is advisory rather than a lock, to
+prefer surfacing over driving when in doubt. `auto` is therefore **best-effort**
+under truly concurrent same-repo starts: the worst case is a missed auto-resume
+with the operator notified, never a silent double-drive. It also introduces no
+race afk does not already have — two manual `resume`s collide the same way, and
+afk resolves both with the same advisory check. Eliminating the residual race
+needs an atomic resume-claim in the afk skill itself; adding a divergent lockfile
+here was rejected as a second, inconsistent concurrency mechanism.
 
 ## Level honesty (per AGENTS.md)
 
