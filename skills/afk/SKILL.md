@@ -242,9 +242,11 @@ Three or more consecutive rounds with new structural findings mean the
 internal pass was too weak: stop patching finding-by-finding and re-review the
 whole diff for the shared root before spending another round. In an afk run
 the disposition record lives in the run ledger; a standalone gate invocation
-records it where that review is tracked — the PR thread or the commit message;
-untracked is not an option. All of this is level 3 — doctrine, not a guarantee
-(AGENTS.md, "What this plugin can and cannot enforce").
+records it where that review is tracked — the PR thread, the commit message,
+or, when neither exists (an uncommitted review with no PR), a standalone run
+directory allocated the collision-safe way `../afk-internal-review/SKILL.md`
+defines; untracked is not an option. All of this is level 3 — doctrine, not a
+guarantee (AGENTS.md, "What this plugin can and cannot enforce").
 
 The gate skills (`afk-codex-review`, `afk-claude-review`, `afk-kimi-review`,
 `afk-glm-review`) carry the invocation, batching, and metering rules; they load

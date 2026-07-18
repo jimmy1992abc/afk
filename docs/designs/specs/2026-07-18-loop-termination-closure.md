@@ -112,8 +112,10 @@ normatively:
   weaker than the debate's closure and is said so in the skill text.
 - **Records live with the run.** In an afk run, the disposition record goes in
   the run ledger. A standalone gate invocation has no run directory; the
-  record goes wherever that review is tracked (the PR thread or commit
-  message) — untracked is not an option.
+  record goes wherever that review is tracked — the PR thread, the commit
+  message, or, for an uncommitted review with no PR (where neither exists), a
+  standalone run directory allocated the collision-safe way
+  `afk-internal-review` already defines. Untracked is not an option.
 - **The loop ends** when a round reports no new structural finding and every
   prior structural finding is closed (fixed, refuted, or accepted). The
   open-findings record is **run-scoped**: it survives a mid-loop gate switch —
