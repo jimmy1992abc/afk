@@ -16,4 +16,7 @@ mode:     waterfall      # waterfall: try in order, stop at min-pass · parallel
 ## merge
 policy: leave-open       # leave-open · merge-to-unblock · merge-when-green
 
+## resume
+auto-resume: notify      # off: silent · notify (default): surface a paused run · auto: resume one
+
 ## invariants            # must-check rules a reviewer applies — one per line

@@ -27,9 +27,10 @@ export function semverGt(a, b) {
 }
 
 // Directories whose contents ship to an installed plugin. `lib/` is shared
-// runtime imported by every gate helper, so a change there alters installed
-// behaviour exactly as a change under skills/ does.
-const SHIPPED_DIRS = ['skills/', 'scripts/', 'lib/'];
+// runtime imported by every gate helper, and `hooks/` is a plugin component
+// (hooks/hooks.json plus its bundled scripts), so a change under either alters
+// installed behaviour exactly as a change under skills/ does.
+const SHIPPED_DIRS = ['skills/', 'scripts/', 'lib/', 'hooks/'];
 
 export function requiresBump(changedPaths) {
   return changedPaths.some(

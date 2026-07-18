@@ -76,6 +76,28 @@ silently keeps old skills. On each `afk` run the driver checks whether a newer
 version is published and prints a one-line notice when you are behind. The check
 is read-only, bounded, degrades silently offline, and never blocks.
 
+## Resuming a Paused Run
+
+An overnight run's wake-up tick is in-session and not durable: a rate limit,
+window restart, or the host sleeping ends it silently, leaving the run
+`state: active` with a going-stale heartbeat. A bundled `SessionStart` hook
+(`hooks/afk-resume-detect.mjs`) closes the common recovery path — when you reopen
+a window on the repo, it detects a paused, resumable run and surfaces its
+run-id, ledger path, and scope so you do not have to hunt for it. It is a pure
+no-op outside an afk repo, never blocks a session, and only ever surfaces a run
+whose heartbeat is stale (a fresh heartbeat means a live tick still owns it).
+
+The `auto-resume` knob in `.afk/config.md` sets the behaviour:
+
+- `off` — silent; the hook does nothing.
+- `notify` (default) — surface the paused run; you decide whether to resume.
+- `auto` — for a single unambiguous run, also direct an autonomous resume unless
+  your first message redirects. Two or more paused runs are only ever listed,
+  never auto-driven (each needs its own session).
+
+The hook is not a scheduler — it cannot start a turn on its own, so it does not
+replace a durable external scheduler.
+
 ## Project Configuration
 
 The consuming repository may contain a local, gitignored `.afk/` directory:
@@ -113,6 +135,9 @@ mode:     waterfall
 
 ## merge
 policy: leave-open
+
+## resume
+auto-resume: notify   # off · notify (default) · auto
 
 ## invariants
 ```
@@ -170,6 +195,8 @@ manifests. Host install caches use the version as the update key.
 ```text
 skills/       Source skills shipped by the plugin.
 scripts/      Manifest sync, lint, link, provenance, and version checks.
+lib/          Shared runtime imported by bundled scripts and hooks.
+hooks/        Plugin-level hooks (SessionStart auto-resume) and their config.
 templates/    Starter `.afk/` files for consuming repositories.
 docs/         Design and operating notes.
 ```
