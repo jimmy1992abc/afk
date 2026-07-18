@@ -74,6 +74,12 @@ Run it in the **background** with a generous timeout; redirect stdout to a file
 and read it when it completes. Pass through any target flag (`--base <branch>` /
 `--commit <sha>` / `--uncommitted`). Do not poll in a sleep loop.
 
+**Design mode** (`--design <path>`) reviews a design document's reasoning instead
+of a diff — the opt-in design-stage gate (see `../afk/SKILL.md`, "Design-stage
+external gate"). The reviewer keeps its read-only `Read,Grep,Glob` tools, so it
+can check whether the code says what the design claims. A missing or unreadable
+`--design` path fails loudly (`ERROR`, non-zero), never a skip.
+
 Read the verdict between the `===== CLAUDE REVIEW (final message) =====` markers.
 A `SKIPPED: …` line is not a failure — record it and continue per the `afk`
 gate-selection rule. The reasons are distinct on purpose, so the ledger can tell

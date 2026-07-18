@@ -12,6 +12,7 @@
 //   node glm-gate.mjs --base master   # vs an explicit base
 //   node glm-gate.mjs --commit <sha>  # one commit
 //   node glm-gate.mjs --uncommitted   # staged/unstaged/untracked
+//   node glm-gate.mjs --design <path> # review a design doc (sends the doc text, not a diff)
 //   node glm-gate.mjs --print-args    # resolve and print the target; no API call
 //
 // Opt out with GLM_REVIEW_GATE=off.
@@ -22,9 +23,9 @@ import { dirname, join } from 'node:path';
 import { isGateDisabled } from '../../lib/gate/env.mjs';
 import { git } from '../../lib/gate/git.mjs';
 import { guardFor } from '../../lib/gate/implementer.mjs';
-import { buildReviewPrompt } from '../../lib/gate/prompt.mjs';
+import { buildDesignReviewPrompt, buildReviewPrompt } from '../../lib/gate/prompt.mjs';
 import { createProtocol } from '../../lib/gate/protocol.mjs';
-import { collectDiff, parseTarget, validateTarget } from '../../lib/gate/target.mjs';
+import { collectDiff, parseTarget, readDesign, validateTarget } from '../../lib/gate/target.mjs';
 
 const { emitSkip, emitReview, emitError } = createProtocol({ label: 'GLM', slug: 'glm-gate' });
 
@@ -58,27 +59,54 @@ function keyFromDotenv() {
 
 const userArgs = process.argv.slice(2);
 const printArgsOnly = userArgs.includes('--print-args');
+// Prints the exact system + user prompt GLM would receive, and calls no API. In
+// design mode the argv is not the review — only the prompt reveals whether the
+// document text (not a diff) is what got sent.
+const printPromptOnly = userArgs.includes('--print-prompt');
 
 const model = (process.env.GLM_REVIEW_MODEL || 'glm-5.2').trim();
 const baseUrl = (process.env.GLM_REVIEW_BASE_URL || 'https://api.z.ai/api/anthropic').replace(/\/+$/, '');
 const maxCtx = Number.parseInt(process.env.GLM_REVIEW_MAX_CTX_BYTES || '400000', 10) || 400000;
+
+const target = parseTarget(userArgs);
+const isDesign = target.kind === 'design';
+
+// A malformed --design is operator error that must fail loud on EVERY gate, even
+// one about to self-skip, so a design target validates BEFORE the independence
+// guard. A diff target validates after it.
+if (isDesign) {
+  const valid = validateTarget(target);
+  if (!valid.ok) {
+    emitError(`cannot review — ${valid.reason}`, 1);
+  }
+}
 
 const guard = guardFor('glm', userArgs);
 if (!guard.run) {
   emitSkip(`independence check — ${guard.reason}`);
 }
 
-const target = parseTarget(userArgs);
-const valid = validateTarget(target);
-if (!valid.ok) {
-  emitError(`cannot review — ${valid.reason}`, 1);
+if (!isDesign) {
+  const valid = validateTarget(target);
+  if (!valid.ok) {
+    emitError(`cannot review — ${valid.reason}`, 1);
+  }
 }
-const { diff, stat, changedFiles, error: diffError } = collectDiff(target);
-if (diffError) {
-  // Never a skip: a target git cannot read is unreviewable, not unchanged.
-  emitError(`cannot review — ${diffError}`, 1);
+
+// A design target never touches the diff path: collectDiff has no design branch,
+// so a leaked design kind would diff `undefined...HEAD`.
+let diff = '';
+let stat = '';
+let changedFiles = [];
+if (!isDesign) {
+  const collected = collectDiff(target);
+  if (collected.error) {
+    // Never a skip: a target git cannot read is unreviewable, not unchanged.
+    emitError(`cannot review — ${collected.error}`, 1);
+  }
+  ({ diff, stat, changedFiles } = collected);
 }
-const hasChanges = Boolean(diff.trim() || changedFiles.length);
+const hasChanges = isDesign ? true : Boolean(diff.trim() || changedFiles.length);
 
 if (printArgsOnly) {
   // Dry run: resolve the target, call nothing. Runs before every skip so a dry
@@ -88,12 +116,91 @@ if (printArgsOnly) {
     base: target.base ?? null,
     commit: target.commit ?? null,
     label: target.label,
-    command: target.command,
+    command: target.command ?? null,
     hasChanges,
     changedFiles,
     model,
     baseUrl,
   }, null, 2)}\n`);
+  process.exit(0);
+}
+
+// Build the payload and the mode-specific context clause. GLM has NO tools in
+// either mode: it must be told the snapshot is all it has, and never told to
+// "inspect" or "run" anything — that invites a fabricated "I checked X" from a
+// reviewer that cannot check. See lib/gate/prompt.mjs for why this is not shared.
+let payload;
+let systemPrompt;
+if (isDesign) {
+  // Design mode replaces the whole payload builder: send the document text, not
+  // the diff + per-file contents + byte budget a code review needs.
+  const doc = readDesign(target);
+  if (doc.error) {
+    // A read that failed after validateTarget passed (TOCTOU) is unreviewable,
+    // not unchanged — fail loud, never skip.
+    emitError(`cannot review — ${doc.error}`, 1);
+  }
+  // Enforce the context bound: the design stage runs exactly ONE gate, so
+  // sending an oversized doc whole (letting Z.ai reject it and reporting that as
+  // a SKIP) leaves the design unreviewed. Truncating a design is worse than a
+  // diff — a partial design reads as whole. Over budget is operator/config error:
+  // fail loud so the operator scopes it or raises GLM_REVIEW_MAX_CTX_BYTES.
+  const docBytes = Buffer.byteLength(doc.text, 'utf8');
+  if (docBytes > maxCtx) {
+    emitError(`--design doc is ${docBytes} bytes, over the ${maxCtx}-byte budget. A design cannot be truncated and reviewed honestly — scope it or raise GLM_REVIEW_MAX_CTX_BYTES.`, 1);
+  }
+  payload = `## Design document (${target.path})\n${doc.text}\n`;
+  const context = 'You are given the full text of a design document. That document is everything you have: you cannot run commands or open other files, so never claim to have done either. Where a judgement would require a file you were not given, say so rather than assume.';
+  systemPrompt = buildDesignReviewPrompt({ scope: target.label, context });
+} else {
+  const diffCap = Math.floor(maxCtx * 0.6);
+  let diffText = diff;
+  if (diffText.length > diffCap) {
+    diffText = `${diffText.slice(0, diffCap)}\n\n[diff truncated at ${diffCap} bytes of ${diff.length}; raise GLM_REVIEW_MAX_CTX_BYTES or scope the review to fewer files]\n`;
+  }
+
+  payload = `## Diff stat\n${stat}\n\n## Full diff\n${diffText}\n`;
+  let budget = maxCtx - payload.length;
+  let filesBlock = '\n## Full current contents of changed files\n';
+
+  for (const file of changedFiles) {
+    if (budget <= 0) {
+      filesBlock += '\n[omitted remaining files; context budget reached]\n';
+      break;
+    }
+
+    let content = '';
+    try {
+      const fileStat = statSync(file);
+      if (!fileStat.isFile()) continue;
+      if (fileStat.size > 200000) {
+        filesBlock += `\n### ${file}\n[skipped; file >200KB]\n`;
+        continue;
+      }
+      content = readFileSync(file, 'utf8');
+    } catch {
+      continue;
+    }
+
+    const block = `\n### ${file}\n\`\`\`\n${content}\n\`\`\`\n`;
+    if (block.length > budget) {
+      filesBlock += `\n### ${file}\n[truncated; context budget reached]\n`;
+      break;
+    }
+    filesBlock += block;
+    budget -= block.length;
+  }
+
+  payload += filesBlock;
+
+  const context = 'You are given the diff and the full current contents of the changed files. That snapshot is everything you have: you cannot run commands or open other files, so never claim to have done either. Where a judgement would require a file you were not given, say so rather than assume.';
+  systemPrompt = buildReviewPrompt({ scope: target.label, context });
+}
+
+const userPrompt = `Review ${target.label}.\n\n${payload}`;
+
+if (printPromptOnly) {
+  process.stdout.write(`${systemPrompt}\n\n----- user -----\n${userPrompt}\n`);
   process.exit(0);
 }
 
@@ -105,55 +212,6 @@ if (!apiKey) {
 if (!hasChanges) {
   emitSkip(`No changes found for ${target.label}.`);
 }
-
-const diffCap = Math.floor(maxCtx * 0.6);
-let diffText = diff;
-if (diffText.length > diffCap) {
-  diffText = `${diffText.slice(0, diffCap)}\n\n[diff truncated at ${diffCap} bytes of ${diff.length}; raise GLM_REVIEW_MAX_CTX_BYTES or scope the review to fewer files]\n`;
-}
-
-let payload = `## Diff stat\n${stat}\n\n## Full diff\n${diffText}\n`;
-let budget = maxCtx - payload.length;
-let filesBlock = '\n## Full current contents of changed files\n';
-
-for (const file of changedFiles) {
-  if (budget <= 0) {
-    filesBlock += '\n[omitted remaining files; context budget reached]\n';
-    break;
-  }
-
-  let content = '';
-  try {
-    const fileStat = statSync(file);
-    if (!fileStat.isFile()) continue;
-    if (fileStat.size > 200000) {
-      filesBlock += `\n### ${file}\n[skipped; file >200KB]\n`;
-      continue;
-    }
-    content = readFileSync(file, 'utf8');
-  } catch {
-    continue;
-  }
-
-  const block = `\n### ${file}\n\`\`\`\n${content}\n\`\`\`\n`;
-  if (block.length > budget) {
-    filesBlock += `\n### ${file}\n[truncated; context budget reached]\n`;
-    break;
-  }
-  filesBlock += block;
-  budget -= block.length;
-}
-
-payload += filesBlock;
-
-// This gate's own context clause. GLM has NO tools: it must be told that the
-// snapshot is all it has, and must never be told to "inspect" or "run" anything
-// — that invites a fabricated "I checked X and found Y" from a reviewer that
-// cannot check. See lib/gate/prompt.mjs for why this clause is not shared.
-const context = 'You are given the diff and the full current contents of the changed files. That snapshot is everything you have: you cannot run commands or open other files, so never claim to have done either. Where a judgement would require a file you were not given, say so rather than assume.';
-
-const systemPrompt = buildReviewPrompt({ scope: target.label, context });
-const userPrompt = `Review ${target.label}.\n\n${payload}`;
 
 const isAnthropic = /\/anthropic(\/|$)/.test(baseUrl);
 const url = isAnthropic ? `${baseUrl}/v1/messages` : `${baseUrl}/chat/completions`;

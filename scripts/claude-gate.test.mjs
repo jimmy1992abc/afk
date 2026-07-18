@@ -191,6 +191,80 @@ test('a diff-only change adds no untracked preamble', () => {
   }
 });
 
+// ── design mode ─────────────────────────────────────────────────────────────
+// A design gate reviews a document's reasoning, not a diff, and must never touch
+// the diff path. Every check terminates locally (--print-args / --print-prompt).
+
+function withDesignDoc(text, fn) {
+  const dir = mkdtempSync(join(tmpdir(), 'claude-gate-design-'));
+  try {
+    const path = join(dir, 'spec.md');
+    writeFileSync(path, text);
+    return fn(path);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test('claude design mode resolves the design kind and keeps the read-only tools', () => {
+  withDesignDoc('# Spec\n\nA claim.\n', (path) => {
+    const result = runGate({ args: ['--implementer', 'codex', '--design', path, '--print-args'] });
+    assert.equal(result.status, 0, result.stderr);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.kind, 'design');
+    // The read-only boundary is unchanged in design mode: a design cites code,
+    // so the reviewer keeps its read tools to check the citation.
+    assert.equal(parsed.args[parsed.args.indexOf('--tools') + 1], 'Read,Grep,Glob');
+    // No diff selector is invented for a design target.
+    assert.equal(parsed.base, null);
+    assert.equal(parsed.commit, null);
+  });
+});
+
+test('claude design mode sends the doc text under a design brief, not a code brief', () => {
+  const body = '# Title\n\nA LOAD-BEARING claim that must reach the reviewer verbatim.\n';
+  withDesignDoc(body, (path) => {
+    const result = runGate({ args: ['--implementer', 'codex', '--design', path, '--print-prompt'] });
+    assert.equal(result.status, 0, result.stderr);
+    const prompt = result.stdout;
+    // The document text is what gets reviewed.
+    assert.match(prompt, /A LOAD-BEARING claim that must reach the reviewer verbatim\./);
+    // A design brief, not a diff brief: design verdicts, design lenses, no file:line.
+    assert.match(prompt, /SOUND WITH CONCERNS/);
+    assert.doesNotMatch(prompt, /file:line/);
+    assert.doesNotMatch(prompt, /No changes found/);
+  });
+});
+
+test('claude design mode fails loudly on a missing doc, never a skip', () => {
+  const missing = join(tmpdir(), 'claude-gate-no-such-design-xyz.md');
+  const result = runGate({ args: ['--implementer', 'codex', '--design', missing] });
+  assert.notEqual(result.status, 0, 'a typo\'d design path must fail, not skip');
+  assert.match(result.stdout, /ERROR: cannot review/);
+  assert.match(result.stdout, /--design/);
+  assert.doesNotMatch(result.stdout, /SKIPPED/);
+});
+
+test('claude validates the design path before the independence guard can mask it', () => {
+  // `--implementer claude` makes claude self-skip. A missing --design must still
+  // ERROR, not hide behind that SKIP.
+  const missing = join(tmpdir(), 'claude-guard-order-nope-xyz.md');
+  const result = runGate({ args: ['--implementer', 'claude', '--design', missing] });
+  assert.notEqual(result.status, 0, 'operator error must not be masked by a self-skip');
+  assert.match(result.stdout, /ERROR: cannot review/);
+  assert.doesNotMatch(result.stdout, /SKIPPED/);
+});
+
+test('claude design mode: an unavailable reviewer skips and proceeds (Decision 6 asymmetry)', () => {
+  // Missing doc fails loud (above); an unavailable reviewer degrades through.
+  withDesignDoc('# Spec\n', (path) => {
+    const result = runGate({ args: ['--implementer', 'codex', '--design', path], env: { CLAUDE_REVIEW_GATE: 'off' } });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /SKIPPED: Claude gate disabled/);
+    assert.doesNotMatch(result.stdout, /ERROR/);
+  });
+});
+
 // ── the read-only boundary ──────────────────────────────────────────────────
 
 test('claude gate loads no tool that can write', () => {

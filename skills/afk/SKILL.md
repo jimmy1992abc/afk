@@ -39,7 +39,9 @@ checkpoint — never a stopping point and never an operator handoff. "Next:
 operator runs the review" is a bug, not an end state.
 
 design doc → adversarial debate (rules below; cap ~3 rounds; implement only from a
-design version a round found clean, at the cap too, otherwise escalate) → tests
+design version a round found clean, at the cap too, otherwise escalate) →
+design-stage external gate (opt-in pilot, default off; one round when enabled —
+"Design-stage external gate" below) → tests
 first (targeted) → implementation → adversarial sweep →
 commit → push early → open the PR as draft → deterministic CI green (fix red
 now) → **internal review** (`afk-internal-review`) → fix every finding →
@@ -155,6 +157,65 @@ such link is a diary; either give it a consumer or leave it out.
 The ledger record — an accepted risk, or a P1 that stopped the run — is the only
 durable artifact here, and it is what the operator reads.
 
+## Design-stage external gate (opt-in pilot)
+
+A pilot step, **default off**. When enabled it runs **one** external gate over the
+design doc, after the adversarial debate and before tests: the debate is a
+same-model check on the design's *claims*, and an independent model adds the one
+thing it structurally cannot — a less-correlated search for *omissions and wrong
+framing*. Configured in `.afk/config.md`:
+`design-gate: off` (default, never) · `risky` (design-heavy or high-blast-radius
+issues only) · `on` (every issue). `risky` follows the design **scaling** rule —
+an external review of a three-paragraph design is waste — and is NOT the
+never-scale-down-gates rule, which governs PR gates only.
+
+- **Invocation.** The same gate helpers, selected the same way (`priority`), with
+  a design target: `--design <path>` in place of a diff selector. The gate reviews
+  the document, not a diff. It is read-only **by construction** for `codex`
+  (`exec -s read-only`), `claude` (`Read,Grep,Glob` only), and `glm` (a tool-less
+  API call); `kimi` is the exception — its read-only is only *requested in the
+  prompt* (the same weaker guarantee it carries for diff reviews), so prefer
+  another gate for design when one qualifies. A missing or unreadable `--design`
+  path is operator error → the gate errors (nonzero), never a skip — skipping here
+  would mean no independent review happened at all.
+- **Independence is from the design's AUTHOR.** The guard's `--implementer` here
+  identifies whoever wrote the *design*, not the code implementer a PR-gate
+  `--implementer` names. In the usual case the driver authors the design, so it is
+  omitted (the driver is assumed) and a same-model gate self-skips. Only when
+  another model authored the design (a design relay) declare that model — do NOT
+  pass the eventual code implementer, or a driver-authored design could be
+  reviewed by the driver's own model, defeating this step.
+- **Exactly one gate, regardless of `min-pass`.** `min-pass` governs the PR gate;
+  one round is the whole point here. **One gate per design version, hard cap 2 per
+  issue** — a design-invalidating finding restarts the design step, and the
+  rewrite gets exactly one more gate.
+- **At the cap, the debate's P1/P2 rule applies** — not "record and proceed". A
+  still-open design **P1** escalates to the operator, exactly as the debate does;
+  only a **P2** may be accepted knowingly and recorded, design untouched.
+- **Findings close under the same vocabulary** the PR gate uses ("External gate":
+  fixed / refuted / accepted); no design-stage finding is closed by silence. A
+  `fixed` whose fix is "a test the implementation must carry" is recorded in the
+  design doc as a required test, which the tests-first step then consumes.
+- **A distinct `design-gate` ledger section.** Design-gate findings are recorded
+  under their own section of `.afk/runs/<run-id>/ledger.md`, keyed by issue +
+  design version, **separate from the PR-gate finding record**. The merge bar
+  ("External gate") reads the PR-gate section only, so a design-stage `accepted`
+  never bars the PR merge — if that risk is still real in the shipped code, the PR
+  gate raises it against the code, where the bar applies.
+- **Baseline before the gate.** Before the gate runs, the driver pre-registers the
+  debate's findings for this design version into the ledger, timestamped and
+  closed before the gate is invoked, so a gate finding cannot be retro-labelled
+  "the debate already had it". This is **self-reported evidence the operator
+  adjudicates** — the same driver records both sets — not a plugin measurement:
+  the operator, not the driver, decides whether a gate finding was genuinely new
+  and whether the pilot is promoted toward `on` or retired.
+- **A skipped design gate proceeds.** Unlike the PR gate — whose `SKIPPED` round
+  is not clean — an environmental skip (no qualifying reviewer available) is
+  recorded and the waterfall continues; the mandatory PR gate still follows.
+
+All of this is level 3 — doctrine, not a guarantee (AGENTS.md, "What this plugin
+can and cannot enforce").
+
 ## External gate (the independent check)
 
 An external gate is **mandatory**: run the number set by `min-pass` in
@@ -233,7 +294,9 @@ test — the record is the closure, not the future test.
 recorded disposition, so an Accepted finding does not hold the loop open. It
 does bar the merge: a PR whose record carries an Accepted structural finding
 is never auto-merged, whatever the merge policy — mark it ready and leave it
-open. A driver can record a risk; only the operator owns one at the merge
+open. This bar reads the **PR-gate** finding record only; design-stage findings
+live in their own `design-gate` ledger section ("Design-stage external gate") and
+never trip it. A driver can record a risk; only the operator owns one at the merge
 boundary. The cost, accepted knowingly: under `merge-to-unblock` this stalls
 work queued behind that PR until the operator returns — a stall, never a bad
 merge.

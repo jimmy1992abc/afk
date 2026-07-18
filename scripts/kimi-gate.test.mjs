@@ -6,7 +6,9 @@
 
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { test } from 'node:test';
 
@@ -19,6 +21,17 @@ function runGate({ args = [], env = {} } = {}) {
     encoding: 'utf8',
     env: { ...process.env, ...env },
   });
+}
+
+function withDesignDoc(text, fn) {
+  const dir = mkdtempSync(join(tmpdir(), 'kimi-gate-design-'));
+  try {
+    const path = join(dir, 'spec.md');
+    writeFileSync(path, text);
+    return fn(path);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 test('kimi gate disabled flag emits a clean skipped review', () => {
@@ -68,6 +81,52 @@ test('kimi gate never exits clean on a status it could not read', () => {
   const src = readFileSync(new URL('../skills/afk-kimi-review/kimi-gate.mjs', import.meta.url), 'utf8');
   assert.match(src, /process\.exit\(res\.status \?\? 1\)/);
   assert.doesNotMatch(src, /process\.exit\(res\.status \?\? 0\)/);
+});
+
+// ── design mode ─────────────────────────────────────────────────────────────
+
+test('kimi design mode resolves the design kind, not a diff selector', () => {
+  withDesignDoc('# Spec\n', (path) => {
+    const result = runGate({ args: ['--design', path, '--print-args'] });
+    assert.equal(result.status, 0, result.stderr);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.kind, 'design');
+    assert.equal(parsed.base, null);
+    assert.equal(parsed.commit, null);
+  });
+});
+
+test('kimi design mode swaps the diff "Inspect the target" clause for a design one', () => {
+  withDesignDoc('# Spec\n', (path) => {
+    const result = runGate({ args: ['--design', path, '--print-prompt'] });
+    assert.equal(result.status, 0, result.stderr);
+    const prompt = result.stdout;
+    // A design brief: design verdicts and no file:line locator.
+    assert.match(prompt, /SOUND WITH CONCERNS/);
+    assert.doesNotMatch(prompt, /file:line/);
+    // kimi HAS tools, so it is pointed at the doc on disk (reading it itself
+    // keeps the large doc off the argv, unlike the diff clause's `git show`).
+    assert.match(prompt, new RegExp(path.replace(/[.\\/]/g, '\\$&')));
+    assert.doesNotMatch(prompt, /Inspect the target with/);
+  });
+});
+
+test('kimi design mode fails loudly on a missing doc, never a skip', () => {
+  const missing = join(tmpdir(), 'kimi-gate-no-such-design-xyz.md');
+  const result = runGate({ args: ['--design', missing] });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stdout, /ERROR: cannot review/);
+  assert.match(result.stdout, /--design/);
+  assert.doesNotMatch(result.stdout, /SKIPPED/);
+});
+
+test('kimi design mode: an unavailable reviewer skips and proceeds (Decision 6 asymmetry)', () => {
+  withDesignDoc('# Spec\n', (path) => {
+    const result = runGate({ args: ['--design', path], env: { KIMI_REVIEW_GATE: 'off' } });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /SKIPPED: Kimi gate disabled/);
+    assert.doesNotMatch(result.stdout, /ERROR/);
+  });
 });
 
 test('kimi gate opt-out short-circuits before any target resolution', () => {
