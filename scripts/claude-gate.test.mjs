@@ -245,6 +245,16 @@ test('claude design mode fails loudly on a missing doc, never a skip', () => {
   assert.doesNotMatch(result.stdout, /SKIPPED/);
 });
 
+test('claude validates the design path before the independence guard can mask it', () => {
+  // `--implementer claude` makes claude self-skip. A missing --design must still
+  // ERROR, not hide behind that SKIP.
+  const missing = join(tmpdir(), 'claude-guard-order-nope-xyz.md');
+  const result = runGate({ args: ['--implementer', 'claude', '--design', missing] });
+  assert.notEqual(result.status, 0, 'operator error must not be masked by a self-skip');
+  assert.match(result.stdout, /ERROR: cannot review/);
+  assert.doesNotMatch(result.stdout, /SKIPPED/);
+});
+
 test('claude design mode: an unavailable reviewer skips and proceeds (Decision 6 asymmetry)', () => {
   // Missing doc fails loud (above); an unavailable reviewer degrades through.
   withDesignDoc('# Spec\n', (path) => {

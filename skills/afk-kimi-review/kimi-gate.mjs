@@ -48,15 +48,29 @@ const printArgsOnly = userArgs.includes('--print-args');
 // Prints the exact review prompt kimi would receive, and calls no model — the
 // only way to observe that design mode swapped the diff context clause.
 const printPromptOnly = userArgs.includes('--print-prompt');
+const target = parseTarget(userArgs);
+const isDesign = target.kind === 'design';
+
+// A malformed --design is operator error that must fail loud on EVERY gate, even
+// one about to self-skip, so a design target validates BEFORE the independence
+// guard. A diff target validates after it.
+if (isDesign) {
+  const valid = validateTarget(target);
+  if (!valid.ok) {
+    emitError(`cannot review — ${valid.reason}`, 1);
+  }
+}
+
 const guard = guardFor('kimi', userArgs);
 if (!guard.run) {
   emitSkip(`independence check — ${guard.reason}`);
 }
 
-const target = parseTarget(userArgs);
-const valid = validateTarget(target);
-if (!valid.ok) {
-  emitError(`cannot review — ${valid.reason}`, 1);
+if (!isDesign) {
+  const valid = validateTarget(target);
+  if (!valid.ok) {
+    emitError(`cannot review — ${valid.reason}`, 1);
+  }
 }
 
 // This gate's own context clause: kimi HAS tools, so it is told to go looking —

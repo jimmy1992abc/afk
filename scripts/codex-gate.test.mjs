@@ -207,6 +207,17 @@ test('codex a valueless --design fails loudly, never a review of the wrong targe
   assert.doesNotMatch(result.stdout, /SKIPPED/);
 });
 
+test('codex validates the design path before the independence guard can mask it', () => {
+  // `--implementer codex` makes codex self-skip. A missing --design must still
+  // ERROR loudly, not hide behind that SKIP — the invariant is "a missing design
+  // doc fails loudly on EVERY gate", including one about to decline.
+  const missing = join(tmpdir(), 'codex-guard-order-nope-xyz.md');
+  const result = runGate({ args: ['--implementer', 'codex', '--design', missing] });
+  assert.notEqual(result.status, 0, 'operator error must not be masked by a self-skip');
+  assert.match(result.stdout, /ERROR: cannot review/);
+  assert.doesNotMatch(result.stdout, /SKIPPED/);
+});
+
 test('codex design mode: an unavailable reviewer skips and proceeds (Decision 6 asymmetry)', () => {
   // The other half of the asymmetry: a missing doc is operator error (fails
   // loud), but an unavailable reviewer degrades through — a skipped design gate

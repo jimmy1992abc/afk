@@ -68,18 +68,30 @@ const model = (process.env.GLM_REVIEW_MODEL || 'glm-5.2').trim();
 const baseUrl = (process.env.GLM_REVIEW_BASE_URL || 'https://api.z.ai/api/anthropic').replace(/\/+$/, '');
 const maxCtx = Number.parseInt(process.env.GLM_REVIEW_MAX_CTX_BYTES || '400000', 10) || 400000;
 
+const target = parseTarget(userArgs);
+const isDesign = target.kind === 'design';
+
+// A malformed --design is operator error that must fail loud on EVERY gate, even
+// one about to self-skip, so a design target validates BEFORE the independence
+// guard. A diff target validates after it.
+if (isDesign) {
+  const valid = validateTarget(target);
+  if (!valid.ok) {
+    emitError(`cannot review — ${valid.reason}`, 1);
+  }
+}
+
 const guard = guardFor('glm', userArgs);
 if (!guard.run) {
   emitSkip(`independence check — ${guard.reason}`);
 }
 
-const target = parseTarget(userArgs);
-const valid = validateTarget(target);
-if (!valid.ok) {
-  emitError(`cannot review — ${valid.reason}`, 1);
+if (!isDesign) {
+  const valid = validateTarget(target);
+  if (!valid.ok) {
+    emitError(`cannot review — ${valid.reason}`, 1);
+  }
 }
-
-const isDesign = target.kind === 'design';
 
 // A design target never touches the diff path: collectDiff has no design branch,
 // so a leaked design kind would diff `undefined...HEAD`.
@@ -127,6 +139,15 @@ if (isDesign) {
     // A read that failed after validateTarget passed (TOCTOU) is unreviewable,
     // not unchanged — fail loud, never skip.
     emitError(`cannot review — ${doc.error}`, 1);
+  }
+  // Enforce the context bound: the design stage runs exactly ONE gate, so
+  // sending an oversized doc whole (letting Z.ai reject it and reporting that as
+  // a SKIP) leaves the design unreviewed. Truncating a design is worse than a
+  // diff — a partial design reads as whole. Over budget is operator/config error:
+  // fail loud so the operator scopes it or raises GLM_REVIEW_MAX_CTX_BYTES.
+  const docBytes = Buffer.byteLength(doc.text, 'utf8');
+  if (docBytes > maxCtx) {
+    emitError(`--design doc is ${docBytes} bytes, over the ${maxCtx}-byte budget. A design cannot be truncated and reviewed honestly — scope it or raise GLM_REVIEW_MAX_CTX_BYTES.`, 1);
   }
   payload = `## Design document (${target.path})\n${doc.text}\n`;
   const context = 'You are given the full text of a design document. That document is everything you have: you cannot run commands or open other files, so never claim to have done either. Where a judgement would require a file you were not given, say so rather than assume.';

@@ -208,6 +208,22 @@ const passThrough = promoteExplicitBase(
   stripImplementer(userArgs.filter((a) => a !== '--print-args')),
 );
 
+// Detect and validate a design target BEFORE the independence guard: a malformed
+// --design is operator error that must ERROR even when codex would self-skip as
+// the implementer. Detect by PRESENCE (a valueless --design must still select
+// the design kind, then fail loud), not by optVal's value alone.
+const isDesign = userArgs.includes('--design');
+const designPath = optVal(userArgs, '--design');
+const designTarget = isDesign
+  ? { kind: 'design', path: designPath, label: designPath ? `the design document at ${designPath}` : 'a design document (no --design path given)' }
+  : null;
+if (isDesign) {
+  const valid = validateTarget(designTarget);
+  if (!valid.ok) {
+    emitError(`cannot review — ${valid.reason}`, 1);
+  }
+}
+
 const guard = guardFor('codex', userArgs);
 if (!guard.run) {
   emitSkip(`independence check — ${guard.reason}`);
@@ -239,26 +255,13 @@ const logFile = join(work, 'codex.log');
 // hermetic probe verified this on codex 0.144.1); design mode needs no bypass.
 // The brief + doc ride on stdin (positional `-`): a real design doc overflows
 // the Windows ~8191-char argv limit as a positional.
-// Detect PRESENCE, not just a value: a valueless `--design` must not fall
-// through to `codex exec review` of the branch diff — that ships a clean
-// design-stage gate with no design reviewed. validateTarget rejects the empty
-// path loudly.
-const isDesign = userArgs.includes('--design');
-const designPath = optVal(userArgs, '--design');
-
+// The design target was detected and validated before the guard (above). Load
+// it now that the lean-context vars and the output file exist.
 let reviewArgs;
 let designPayload = null;
 
 if (isDesign) {
-  const target = { kind: 'design', path: designPath, label: designPath ? `the design document at ${designPath}` : 'a design document (no --design path given)' };
-  const valid = validateTarget(target);
-  if (!valid.ok) {
-    // A missing/unreadable doc is operator error — fail loudly (nonzero), never
-    // a skip. validateTarget is the sole owner of this check; without it codex
-    // would throw an uncaught ENOENT from readDesign and emit no marker block.
-    emitError(`cannot review — ${valid.reason}`, 1);
-  }
-  const doc = readDesign(target);
+  const doc = readDesign(designTarget);
   if (doc.error) {
     // A read that failed after validateTarget passed (TOCTOU) is unreviewable —
     // fail loud with a marker block, never throw uncaught.
@@ -266,8 +269,8 @@ if (isDesign) {
   }
   const { text } = doc;
   const context = 'The design document under review is included below. You are running read-only: you may read files in this repository to check a claim the design makes about the code, but you cannot modify anything. Do not claim to have run any command you did not run.';
-  const brief = buildDesignReviewPrompt({ scope: target.label, context });
-  designPayload = `${brief}\n\n## Design document (${target.path})\n${text}`;
+  const brief = buildDesignReviewPrompt({ scope: designTarget.label, context });
+  designPayload = `${brief}\n\n## Design document (${designTarget.path})\n${text}`;
 
   reviewArgs = ['exec', '-s', 'read-only'];
   reviewArgs.push('-c', `model_reasoning_effort=${reasoning}`);

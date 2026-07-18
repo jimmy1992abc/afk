@@ -76,6 +76,20 @@ test('glm design mode fails loudly on a missing doc, never a skip', () => {
   assert.doesNotMatch(result.stdout, /SKIPPED/);
 });
 
+test('glm rejects an over-budget design doc loudly, not a masked skip', () => {
+  // The design stage runs exactly one gate. Sending an oversized doc whole lets
+  // Z.ai reject it and glm report that as SKIPPED — the design stage then
+  // proceeds with no review. An over-budget doc is operator/config error: fail
+  // loud (ERROR) so the operator scopes it or raises the budget.
+  const big = `# Spec\n${'x'.repeat(5000)}\n`;
+  withDesignDoc(big, (path) => {
+    const result = runGate({ args: ['--design', path], env: { GLM_REVIEW_MAX_CTX_BYTES: '500' } });
+    assert.notEqual(result.status, 0, 'an over-budget design doc must ERROR, not skip');
+    assert.match(result.stdout, /ERROR/);
+    assert.doesNotMatch(result.stdout, /SKIPPED/);
+  });
+});
+
 test('glm design mode: an unavailable reviewer skips and proceeds (Decision 6 asymmetry)', () => {
   withDesignDoc('# Spec\n', (path) => {
     const result = runGate({ args: ['--design', path], env: { GLM_REVIEW_GATE: 'off' } });

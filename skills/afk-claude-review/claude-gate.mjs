@@ -51,6 +51,21 @@ const printArgsOnly = userArgs.includes('--print-args');
 // prompt actually carried the change.
 const printPromptOnly = userArgs.includes('--print-prompt');
 
+// ── Target ──────────────────────────────────────────────────────────────────
+const target = parseTarget(userArgs);
+const isDesign = target.kind === 'design';
+
+// A malformed --design is operator error that must fail loud on EVERY gate, even
+// one about to self-skip, so a design target validates BEFORE the independence
+// guard. A diff target validates after it — a self-skipping gate need not
+// resolve a ref it will never review.
+if (isDesign) {
+  const valid = validateTarget(target);
+  if (!valid.ok) {
+    emitError(`cannot review — ${valid.reason}`, 1);
+  }
+}
+
 // ── Self-review guard ───────────────────────────────────────────────────────
 // A gate whose model wrote the code under review provides no independence. The
 // default afk driver IS Claude Code, so this is the failure that would
@@ -60,16 +75,14 @@ if (!guard.run) {
   emitSkip(`independence check — ${guard.reason}`);
 }
 
-// ── Target ──────────────────────────────────────────────────────────────────
-const target = parseTarget(userArgs);
 // A bad ref must not read as a clean tree: git() returns '' for a failed
 // command, so without this an unresolvable target becomes "no changes found".
-const valid = validateTarget(target);
-if (!valid.ok) {
-  emitError(`cannot review — ${valid.reason}`, 1);
+if (!isDesign) {
+  const valid = validateTarget(target);
+  if (!valid.ok) {
+    emitError(`cannot review — ${valid.reason}`, 1);
+  }
 }
-
-const isDesign = target.kind === 'design';
 
 // Design mode reviews a document's reasoning, not a diff, and never enters the
 // diff path. Everything below the design branch is diff-only.
