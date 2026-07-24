@@ -96,7 +96,11 @@ role with `AGENT_RELAY_SCOPE_MODEL` / `AGENT_RELAY_BRIEF_MODEL`.
   `DEV_DEEPSEEK_API_KEY` for the default provider — as a shell env var, or in a
   gitignored `.env` a host loads before invoking these scripts. Never commit a
   key, and never reuse a production key's name for a dev key.
-- **Scope (codex):** `npm i -g @openai/codex && codex login` (no API key).
+- **Scope (codex):** `npm i -g @openai/codex && codex login` (no API key). To
+  hand a dev key to a sandboxed codex run that can't inherit it from the shell,
+  set it in Codex's `.codex/config.toml` (`[shell_environment_policy.set]`) and
+  gitignore `.codex/` first — that file is not a `.env`, so no default rule keeps
+  its key out of `git add -A`.
 - Self-skips cleanly if its key/tool is absent (dormant until configured). Set
   `AGENT_RELAY_STRICT=on` to make a missing key a hard error instead of a skip.
 
