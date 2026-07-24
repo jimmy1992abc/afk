@@ -95,12 +95,12 @@ role with `AGENT_RELAY_SCOPE_MODEL` / `AGENT_RELAY_BRIEF_MODEL`.
 - **Compressor:** set the provider's dedicated **dev** key — e.g.
   `DEV_DEEPSEEK_API_KEY` for the default provider — as a shell env var, or in a
   gitignored `.env` a host loads before invoking these scripts. Never commit a
-  key, and never reuse a production key's name for a dev key.
-- **Scope (codex):** `npm i -g @openai/codex && codex login` (no API key). To
-  hand a dev key to a sandboxed codex run that can't inherit it from the shell,
-  set it in Codex's `.codex/config.toml` (`[shell_environment_policy.set]`) and
-  gitignore `.codex/` first — that file is not a `.env`, so no default rule keeps
-  its key out of `git add -A`.
+  key, and never reuse a production key's name for a dev key. If the host harness
+  sandboxes the scripts' environment (e.g. Codex with `inherit = "core"`) and
+  strips the key, inject it through that harness's own config instead — but that
+  file is not a `.env`, so gitignore its path first (e.g. `.codex/`); no default
+  rule keeps a key there out of `git add -A`.
+- **Scope (codex):** `npm i -g @openai/codex && codex login` (no API key).
 - Self-skips cleanly if its key/tool is absent (dormant until configured). Set
   `AGENT_RELAY_STRICT=on` to make a missing key a hard error instead of a skip.
 
