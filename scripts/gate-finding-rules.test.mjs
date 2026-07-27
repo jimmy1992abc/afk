@@ -25,8 +25,8 @@ const gates = {
 // full rules; a gate skill is loadable standalone, so the summary sits where
 // findings are handled and must not drift the way the old stop rules did.
 const TRIAGE_SENTENCE = [
-  'A finding claims both that the code is as described and that it goes wrong;',
-  'reading the cited `file:line` settles only the first. Demonstrate the',
+  'A structural finding claims both that the code is as described and that it goes',
+  'wrong; reading the cited `file:line` settles only the first. Demonstrate the',
   'consequence before fixing, and account for every consumer of what you change',
   'that lives outside the diff — `../afk/SKILL.md` ("External gate") holds both',
   'rules.',
@@ -54,6 +54,11 @@ test('an undemonstrated consequence is recorded, not fixed', () => {
   // consequence never was, and the fix landed anyway.
   assert.match(afkSkill, /evidence against the finding, not\s+licence to fix it anyway/);
   assert.match(afkSkill, /leave the code as it is/);
+  // Refuted is closed by a recorded disproof, so failing to demonstrate must
+  // not reach it — that exit would close a load-bearing finding without the
+  // operator escalation the unverified path carries.
+  assert.match(afkSkill, /An affirmative disproof records it Refuted/);
+  assert.match(afkSkill, /keeps\s+a load-bearing finding on the escalation path/);
 });
 
 test('an unaccountable consumer narrows or defers the fix, and never blocks', () => {
@@ -80,5 +85,9 @@ test('the retired shape-only verification standard does not return', () => {
   for (const [name, text] of Object.entries(gates)) {
     assert.doesNotMatch(text, /against the cited/, `shape-only standard back in ${name}`);
     assert.doesNotMatch(text, /read the cited/, `shape-only standard back in ${name}`);
+    // The summary sits under a list that sorts minor items out and defers
+    // them; an unscoped opener would demand a demonstrated consequence for a
+    // cosmetic item, which no such item can supply.
+    assert.doesNotMatch(text, /^A finding claims both/m, `unscoped opener back in ${name}`);
   }
 });

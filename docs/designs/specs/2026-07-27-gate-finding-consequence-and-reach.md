@@ -1,7 +1,8 @@
 # Gate Findings — Demonstrated Consequence and Accounted Reach — Design Spec
 
 - **Date:** 2026-07-27
-- **Status:** Proposed
+- **Status:** Proposed (revision 2; round 1 gate findings and their resolutions
+  are in the Appendix)
 - **Scope:** The external gate's triage step only. Raise the bar a gate finding
   must clear before the driver edits code, and require the reach of that edit
   to be accounted for. No change to gate selection, metering, closure
@@ -108,13 +109,15 @@ of this is level 3 — doctrine, not a guarantee") continues to cover them.
   the outcome naming the condition that triggers it. Restating the finding is
   not a demonstration.
 - Failing to demonstrate the consequence is evidence against the finding, not
-  licence to fix it anyway. It is recorded Refuted, or carried into the
-  existing unverified handling, and the code is left as it is. The new text
-  references that handling rather than restating it: the existing rule splits
-  on whether the PR depends on the finding — Accepted with its risk stated when
-  it does not, escalated to the operator when it does — and a partial restatement
-  here would drop the escalation branch for exactly the load-bearing case that
-  needs it.
+  licence to fix it anyway, and the code is left as it is either way. The two
+  exits are not interchangeable: an **affirmative disproof** records it Refuted,
+  and **anything short of one** carries it into the existing unverified
+  handling. Non-demonstration is not disproof, and Refuted is defined by its
+  recorded disproof — routing a merely-undemonstrated finding there would close
+  it outright, skipping the operator escalation that the unverified path
+  carries when the PR depends on it. The new text references that handling
+  rather than restating it, for the same reason: a partial restatement drops
+  the escalation branch for exactly the load-bearing case that needs it.
 - Why the undemonstrated fix is the more dangerous branch, stated in the text:
   the finding's authorship carries the edit past the scrutiny the same edit
   would draw unprompted.
@@ -143,11 +146,17 @@ Following the precedent set for the stop sentence, each of the four gate skills
 carries this paragraph verbatim, as a plain paragraph after its finding-handling
 list, using the repo's backtick cross-reference convention:
 
-> A finding claims both that the code is as described and that it goes wrong;
-> reading the cited `file:line` settles only the first. Demonstrate the
+> A structural finding claims both that the code is as described and that it goes
+> wrong; reading the cited `file:line` settles only the first. Demonstrate the
 > consequence before fixing, and account for every consumer of what you change
 > that lives outside the diff — `../afk/SKILL.md` ("External gate") holds both
 > rules.
+
+It opens on **structural** findings, matching the flagship rule. The paragraph
+lands directly under a list whose first step sorts minor items out and whose
+last defers them; an unscoped opener would demand a demonstrated consequence
+from a naming or cosmetic item, which no such item can supply, and an
+unsatisfiable rule is one a driver learns to step over.
 
 Each skill's own verification step is reduced to a reference to that standard,
 so no file states a weaker one beside it:
@@ -173,12 +182,15 @@ driver applies the rules.
 1. The driver states each rule exactly once — unique-phrase pins with an
    exactly-once count, so a duplicate copy creeping back fails.
 2. The undemonstrated-consequence branch is pinned specifically: the finding is
-   recorded, not fixed.
+   recorded, not fixed, and the Refuted exit is pinned to affirmative disproof
+   so a merely-undemonstrated finding cannot take it.
 3. The four gate skills each carry the D2 paragraph, extracted and asserted
    byte-identical across the four.
 4. The retired shape-only wording does not return: `doesNotMatch` on
    "against the cited `file:line`" and on codex's "read the cited" in all four
-   gate skills.
+   gate skills, plus on the unscoped "A finding claims both" opener. The
+   guards are worded so the pinned paragraph's own "reading the cited" does not
+   trip them.
 
 The D2 paragraph names `../afk/SKILL.md`, which `check-links.mjs` does not
 validate (it checks markdown links only). This test file reads
@@ -240,3 +252,20 @@ rule freezes the flagship path.
   shape" to "name the trigger" and from "did not think of it" to "must account
   for each"; neither is a guarantee, and no control point in this plugin can
   make one. Real non-bypassability needs a check outside the agent's authority.
+
+## Appendix — gate findings and their resolutions
+
+Round 1 (Codex) reviewed revision 1 and returned two findings, both confirmed
+against the cited text and both fixed in revision 2. Each row names what now
+prevents the defect.
+
+| # | Finding (severity) | Disposition |
+|---|---|---|
+| 1 | The triage block offered Refuted as an exit for merely failing to demonstrate a consequence, while the disposition list defines Refuted as closed by a recorded disproof. A load-bearing finding could close there, skipping the operator escalation and the Accepted merge bar (P1) | **Fixed.** D1 splits the exits: an affirmative disproof records Refuted, anything short of one enters the unverified handling. Verified by reading the two texts together — the Refuted exit is no longer reachable from non-demonstration. D3 item 2 pins both halves |
+| 2 | The paragraph copied into the four gate skills opened on "A finding", not "A structural finding", so it demanded a demonstrated consequence from the naming and cosmetic items the list immediately above sorts out and defers — a requirement no such item can satisfy (P2) | **Fixed.** The copied paragraph opens on "A structural finding" in all four skills, matching the flagship; D3 item 3 pins the four copies byte-identical and item 4 guards the unscoped opener |
+
+The same-class defect caught in the driver's own self-review before this round —
+the first draft restated only the Accepted half of the unverified rule, dropping
+the escalation branch — is recorded in commit `fd1a2bc`'s body. Finding 1 is that
+defect surviving in the other half of the same sentence, which is why the fix
+now names both exits rather than removing one.

@@ -254,10 +254,12 @@ the second is demonstrated — a check that fails now and passes after, an
 executed trace, or a stated path from the shape to the outcome naming the
 condition that triggers it; restating the finding is not a demonstration.
 Failing to demonstrate the consequence is evidence against the finding, not
-licence to fix it anyway: record it Refuted, or carry it into the unverified
-handling below, and leave the code as it is. Fixing on an undemonstrated
-consequence is the more dangerous branch, because the finding's authorship
-carries the edit past the scrutiny the same edit would draw unprompted.
+licence to fix it anyway. An affirmative disproof records it Refuted; anything
+short of one carries it into the unverified handling below, which is what keeps
+a load-bearing finding on the escalation path instead of closing it. Either way,
+leave the code as it is. Fixing on an undemonstrated consequence is the more
+dangerous branch, because the finding's authorship carries the edit past the
+scrutiny the same edit would draw unprompted.
 
 **Account for the fix's reach before it lands.** The gate reads a diff and the
 next round reads that diff again, so consumers outside it are invisible to

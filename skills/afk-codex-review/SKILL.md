@@ -68,8 +68,8 @@ failed — read the transcript it names; never report an errored run as clean.
 6. **Deferred pass once, at the end** for the minor items — do not re-run the
    gate to confirm doc edits.
 
-A finding claims both that the code is as described and that it goes wrong;
-reading the cited `file:line` settles only the first. Demonstrate the
+A structural finding claims both that the code is as described and that it goes
+wrong; reading the cited `file:line` settles only the first. Demonstrate the
 consequence before fixing, and account for every consumer of what you change
 that lives outside the diff — `../afk/SKILL.md` ("External gate") holds both
 rules.

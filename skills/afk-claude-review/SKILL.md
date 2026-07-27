@@ -107,8 +107,8 @@ Same discipline as the other gate skills:
 5. Re-run the gate once if structural findings were fixed.
 6. Resolve minor items in a single final pass without another gate round.
 
-A finding claims both that the code is as described and that it goes wrong;
-reading the cited `file:line` settles only the first. Demonstrate the
+A structural finding claims both that the code is as described and that it goes
+wrong; reading the cited `file:line` settles only the first. Demonstrate the
 consequence before fixing, and account for every consumer of what you change
 that lives outside the diff — `../afk/SKILL.md` ("External gate") holds both
 rules.
