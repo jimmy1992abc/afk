@@ -247,6 +247,27 @@ current-generation mainstream frontier model.
   handing the gate to the operator is not a valid skip. When `min-pass` cannot be
   met, the round is not clean — do not mark ready.
 
+**A finding asserts two things; reading settles one.** Every structural finding
+claims both that the code is as described and that this shape produces a wrong
+outcome. Reading the cited `file:line` settles the first only. A fix lands once
+the second is demonstrated — a check that fails now and passes after, an
+executed trace, or a stated path from the shape to the outcome naming the
+condition that triggers it; restating the finding is not a demonstration.
+Failing to demonstrate the consequence is evidence against the finding, not
+licence to fix it anyway: record it Refuted, or carry it into the unverified
+handling below, and leave the code as it is. Fixing on an undemonstrated
+consequence is the more dangerous branch, because the finding's authorship
+carries the edit past the scrutiny the same edit would draw unprompted.
+
+**Account for the fix's reach before it lands.** The gate reads a diff and the
+next round reads that diff again, so consumers outside it are invisible to
+every reviewer in the loop. Before applying a fix that changes the behaviour of
+a symbol used outside the diff, enumerate those consumers and state what the
+change does to each. A consumer you cannot account for is not licence to
+proceed: narrow the fix to the caller inside the diff, or record the finding
+Accepted with a follow-up issue. The enumeration and the per-consumer statement
+go in the finding's record beside the fix, so a wide edit is auditable as one.
+
 **The loop, and what closes a finding.** Each round the gate reviews the
 current diff. Every structural finding it returns is named at triage — a short
 id in the run's record — and every later round's findings are judged against

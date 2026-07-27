@@ -59,14 +59,20 @@ failed — read the transcript it names; never report an errored run as clean.
 1. **Sort by kind.** Structural (architecture, correctness, security, missed
    edge cases) — act on these. Minor (naming, cosmetics) — defer to one final
    pass.
-2. **Verify before trusting.** Each finding is a hypothesis; read the cited
-   `file:line`. Push back with evidence on anything you can disprove.
+2. **Verify before trusting.** Each finding is a hypothesis; the verification
+   standard is below. Push back with evidence on anything you can disprove.
 3. **Fix every confirmed structural finding in one batch**, and sweep for the
    same pattern elsewhere; keep specs in sync in the same change.
 4. **Self-review once** over your fixes.
 5. **Re-run the gate once.** Repeat until the stop rule holds.
 6. **Deferred pass once, at the end** for the minor items — do not re-run the
    gate to confirm doc edits.
+
+A finding claims both that the code is as described and that it goes wrong;
+reading the cited `file:line` settles only the first. Demonstrate the
+consequence before fixing, and account for every consumer of what you change
+that lives outside the diff — `../afk/SKILL.md` ("External gate") holds both
+rules.
 
 Apply any invariant in `.afk/config.md` as an extra must-check lens.
 

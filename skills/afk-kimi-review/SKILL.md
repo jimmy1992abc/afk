@@ -54,10 +54,17 @@ is not a failure — report it and continue.
 ## Handle findings (batch — minimise calls)
 
 Identical discipline to `afk-codex-review`: sort structural vs minor; verify each
-finding against the cited `file:line` before trusting it; fix confirmed
-structural findings in one batch and sweep for the pattern; self-review once;
-re-run once; resolve minor items in a single final pass. Apply any invariant in
-`.afk/config.md` as an extra lens.
+finding to the standard below before trusting it; fix confirmed structural
+findings in one batch and sweep for the pattern; self-review once; re-run once;
+resolve minor items in a single final pass.
+
+A finding claims both that the code is as described and that it goes wrong;
+reading the cited `file:line` settles only the first. Demonstrate the
+consequence before fixing, and account for every consumer of what you change
+that lives outside the diff — `../afk/SKILL.md` ("External gate") holds both
+rules.
+
+Apply any invariant in `.afk/config.md` as an extra lens.
 
 ## Stop rule
 
