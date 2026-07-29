@@ -133,10 +133,27 @@ no API key. Disable with `CLAUDE_REVIEW_GATE=off`.
 
 Config knobs:
 
-- `CLAUDE_REVIEW_MODEL` (default `opus`)
+- `CLAUDE_REVIEW_MODEL` (default `claude-opus-5`)
 - `CLAUDE_REVIEW_EFFORT` (default `medium`)
 - `CLAUDE_REVIEW_MAX_CTX_BYTES` (default `400000`)
 - `CLAUDE_GATE_BIN` — override the resolved `claude` binary
 
 No fallback model is passed: a quiet downgrade to a weaker reviewer is a quality
 regression with no visible symptom, so an unavailable model surfaces as a skip.
+
+## The reviewer model is pinned, and checked against what answered
+
+`CLAUDE_REVIEW_MODEL` must be a full model ID. An alias (`opus`, `sonnet`) is
+resolved by the host and can select an older generation without a symptom —
+`--model opus` answered as `claude-opus-4-8` while the pipeline required a
+current generation — so an alias is refused before any call is spent.
+
+The gate then reads `modelUsage` in the result envelope and requires the
+requested identity to be present; a dated snapshot of the same model satisfies
+it, and the auxiliary models a normal run also bills are ignored. A review whose
+envelope names another generation, or names nothing, is discarded with an
+`ERROR` rather than attributed to a model that may not have run. Neither case is
+a clean round:
+
+- `ERROR: cannot review — CLAUDE_REVIEW_MODEL "…" is an alias …`
+- `ERROR: reviewer identity unverified — requested "…" but …`

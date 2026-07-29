@@ -2,6 +2,10 @@
 
 - **Date:** 2026-07-17
 - **Status:** Proposed (revision 3; revisions 1 and 2 were refuted — see Appendix)
+- **Superseded in part** by
+  [2026-07-29-reviewer-model-identity-and-stale-install.md](2026-07-29-reviewer-model-identity-and-stale-install.md):
+  the reviewer model is now a pinned full ID rather than the `opus` alias, and
+  the result envelope's `modelUsage` decides whether the gate ran.
 - **Scope:** Add `afk-claude-review`, a fourth external review gate driven by the
   Claude Code CLI, and extract the logic the existing gates share into a lib the
   four of them import.

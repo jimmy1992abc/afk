@@ -15,6 +15,8 @@ import { join } from 'node:path';
 
 import { test } from 'node:test';
 
+import { verifyReviewerIdentity } from '../lib/gate/model-identity.mjs';
+
 const repoRoot = new URL('..', import.meta.url);
 const GATE = 'skills/afk-claude-review/claude-gate.mjs';
 
@@ -52,6 +54,11 @@ function withStub(envelope, fn) {
     rmSync(dir, { recursive: true, force: true });
   }
 }
+
+// The identity the gate demands by default, and the envelope field it reads it
+// from. A real run also bills an auxiliary model, so a usage map is a map.
+const PINNED = 'claude-opus-5';
+const usage = (...models) => Object.fromEntries(models.map((m) => [m, { outputTokens: 1 }]));
 
 // ── opt-out and the independence guard ──────────────────────────────────────
 
@@ -295,19 +302,37 @@ test('claude gate never passes a fallback model', () => {
   assert.equal(args.includes('--fallback-model'), false);
 });
 
-test('model and effort are configurable and default sanely', () => {
+test('the default reviewer is a pinned full model ID, not an alias', () => {
+  // `--model opus` resolved to claude-opus-4-8 on CLI 2.1.214 while the pipeline
+  // required a current generation. An alias is resolved host-side, so only a
+  // full ID states which generation the gate asked for.
   const base = runGate({ args: ['--implementer', 'codex', '--commit', 'HEAD', '--print-args'] });
   const dflt = JSON.parse(base.stdout).args;
-  assert.equal(dflt[dflt.indexOf('--model') + 1], 'opus');
+  assert.equal(dflt[dflt.indexOf('--model') + 1], 'claude-opus-5');
   assert.equal(dflt[dflt.indexOf('--effort') + 1], 'medium');
 
   const custom = runGate({
     args: ['--implementer', 'codex', '--commit', 'HEAD', '--print-args'],
-    env: { CLAUDE_REVIEW_MODEL: 'sonnet', CLAUDE_REVIEW_EFFORT: 'high' },
+    env: { CLAUDE_REVIEW_MODEL: 'claude-sonnet-5', CLAUDE_REVIEW_EFFORT: 'high' },
   });
   const set = JSON.parse(custom.stdout).args;
-  assert.equal(set[set.indexOf('--model') + 1], 'sonnet');
+  assert.equal(set[set.indexOf('--model') + 1], 'claude-sonnet-5');
   assert.equal(set[set.indexOf('--effort') + 1], 'high');
+});
+
+test('an alias model is refused before any call is spent', () => {
+  // --print-args calls no model, so an error here proves the refusal happens
+  // during resolution rather than after a metered call.
+  for (const alias of ['opus', 'sonnet', 'claude-opus-latest']) {
+    const result = runGate({
+      args: ['--implementer', 'codex', '--commit', 'HEAD', '--print-args'],
+      env: { CLAUDE_REVIEW_MODEL: alias },
+    });
+    assert.notEqual(result.status, 0, `"${alias}" must not be accepted`);
+    assert.match(result.stdout, /ERROR: .*alias/);
+    assert.match(result.stdout, /claude-opus-5/, 'the message must name a usable value');
+    assert.doesNotMatch(result.stdout, /SKIPPED/);
+  }
 });
 
 // ── the JSON envelope: a failed review must never read as a clean one ───────
@@ -327,10 +352,12 @@ test('an is_error envelope with 404 skips as model-unavailable', () => {
   withStub({ is_error: true, api_error_status: 404, result: 'no such model' }, (bin) => {
     const result = runGate({
       args: ['--implementer', 'codex', '--commit', 'HEAD'],
-      env: { CLAUDE_GATE_BIN: bin, CLAUDE_REVIEW_MODEL: 'nope' },
+      // Pinned in shape, absent in fact: unavailability is the host's answer,
+      // not a malformed request.
+      env: { CLAUDE_GATE_BIN: bin, CLAUDE_REVIEW_MODEL: 'claude-nonesuch-9' },
     });
     assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, /SKIPPED: Configured model "nope" is unavailable/);
+    assert.match(result.stdout, /SKIPPED: Configured model "claude-nonesuch-9" is unavailable/);
   });
 });
 
@@ -349,7 +376,7 @@ test('an is_error envelope with exit code 0 is still never a review', () => {
 });
 
 test('an empty result is an error, not an empty approval', () => {
-  withStub({ is_error: false, result: '   ' }, (bin) => {
+  withStub({ is_error: false, result: '   ', modelUsage: usage(PINNED) }, (bin) => {
     const result = runGate({
       args: ['--implementer', 'codex', '--commit', 'HEAD'],
       env: { CLAUDE_GATE_BIN: bin },
@@ -371,7 +398,7 @@ test('unparseable output is an error, not silence', () => {
 });
 
 test('a successful envelope is emitted as the review', () => {
-  withStub({ is_error: false, result: '[P1] lib/x.mjs:1 boom\nREQUEST CHANGES' }, (bin) => {
+  withStub({ is_error: false, result: '[P1] lib/x.mjs:1 boom\nREQUEST CHANGES', modelUsage: usage(PINNED) }, (bin) => {
     const result = runGate({
       args: ['--implementer', 'codex', '--commit', 'HEAD'],
       env: { CLAUDE_GATE_BIN: bin },
@@ -381,6 +408,92 @@ test('a successful envelope is emitted as the review', () => {
     assert.match(result.stdout, /\[P1\] lib\/x\.mjs:1 boom/);
     assert.match(result.stdout, /REQUEST CHANGES/);
     assert.match(result.stdout, /===== END CLAUDE REVIEW =====/);
+  });
+});
+
+// ── the reviewer that actually ran ──────────────────────────────────────────
+// argv states intent; modelUsage states outcome. A gate that checks only the
+// first approves reviews written by a model it never asked for.
+
+test('an auxiliary model alongside the pinned reviewer is not a mismatch', () => {
+  // A correct `--model claude-opus-5` run bills a background haiku too, so
+  // "the pinned model is the only key" would fail every real review.
+  withStub({
+    is_error: false,
+    result: 'LGTM',
+    modelUsage: usage('claude-haiku-4-5-20251001', PINNED),
+  }, (bin) => {
+    const result = runGate({
+      args: ['--implementer', 'codex', '--commit', 'HEAD'],
+      env: { CLAUDE_GATE_BIN: bin },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /LGTM/);
+  });
+});
+
+test('a dated snapshot of the pinned model satisfies the request', () => {
+  withStub({ is_error: false, result: 'LGTM', modelUsage: usage(`${PINNED}-20260115`) }, (bin) => {
+    const result = runGate({
+      args: ['--implementer', 'codex', '--commit', 'HEAD'],
+      env: { CLAUDE_GATE_BIN: bin },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /LGTM/);
+  });
+});
+
+test('a request pinned to a snapshot is satisfied by the family identity', () => {
+  // The reverse direction of the same lineage: an operator who pins a snapshot
+  // must not be blocked because the host reports the undated identity.
+  withStub({ is_error: false, result: 'LGTM', modelUsage: usage(PINNED) }, (bin) => {
+    const result = runGate({
+      args: ['--implementer', 'codex', '--commit', 'HEAD'],
+      env: { CLAUDE_GATE_BIN: bin, CLAUDE_REVIEW_MODEL: `${PINNED}-20260115` },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /LGTM/);
+  });
+});
+
+test('a review produced by another generation is an error, never a verdict', () => {
+  // The reported defect: the request said Opus 5 and claude-opus-4-8 answered.
+  withStub({ is_error: false, result: 'LGTM', modelUsage: usage('claude-opus-4-8') }, (bin) => {
+    const result = runGate({
+      args: ['--implementer', 'codex', '--commit', 'HEAD'],
+      env: { CLAUDE_GATE_BIN: bin },
+    });
+    assert.notEqual(result.status, 0, 'an unpinned reviewer must not exit clean');
+    assert.match(result.stdout, /ERROR: /);
+    assert.match(result.stdout, /claude-opus-4-8/, 'the model that did answer must be named');
+    assert.match(result.stdout, new RegExp(PINNED));
+    assert.doesNotMatch(result.stdout, /LGTM/, 'the review text must not be emitted');
+    assert.doesNotMatch(result.stdout, /SKIPPED/);
+  });
+});
+
+test('a near-miss identity does not pass on a shared prefix', () => {
+  // Lineage matches at a segment boundary; claude-opus-50 is a different model.
+  withStub({ is_error: false, result: 'LGTM', modelUsage: usage('claude-opus-50') }, (bin) => {
+    const result = runGate({
+      args: ['--implementer', 'codex', '--commit', 'HEAD'],
+      env: { CLAUDE_GATE_BIN: bin },
+    });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stdout, /ERROR: /);
+  });
+});
+
+test('an envelope with no modelUsage is unverifiable, not clean', () => {
+  withStub({ is_error: false, result: 'LGTM' }, (bin) => {
+    const result = runGate({
+      args: ['--implementer', 'codex', '--commit', 'HEAD'],
+      env: { CLAUDE_GATE_BIN: bin },
+    });
+    assert.notEqual(result.status, 0, 'an unverifiable review must not exit clean');
+    assert.match(result.stdout, /ERROR: /);
+    assert.match(result.stdout, /modelUsage/);
+    assert.doesNotMatch(result.stdout, /LGTM/);
   });
 });
 
@@ -443,6 +556,34 @@ test('the reviewer cannot mutate the tree it reviews', { skip: haveCli ? false :
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('the real CLI reports the model that ran, keyed by full ID', { skip: haveCli ? false : 'claude CLI not installed' }, () => {
+  // The identity check parses a field of someone else's envelope. A stub can
+  // only prove that this test and the gate agree on a field name, so the field
+  // itself is pinned against the real CLI — with the cheapest model there is.
+  const model = 'claude-haiku-4-5-20251001';
+  const res = spawnSync('claude', [
+    '-p', 'Reply with just: ok',
+    '--model', model,
+    '--effort', 'low',
+    '--output-format', 'json',
+    '--tools', 'Read',
+    '--safe-mode',
+    '--no-session-persistence',
+  ], { encoding: 'utf8', shell: process.platform === 'win32', timeout: 240000 });
+
+  const envelope = JSON.parse(res.stdout);
+  // An auth/quota failure is not a contract violation; only assert when a
+  // review actually ran.
+  if (envelope.is_error) return;
+
+  assert.ok(envelope.modelUsage, 'the envelope must report modelUsage');
+  const verdict = verifyReviewerIdentity(envelope.modelUsage, model);
+  assert.equal(verdict.ok, true, `requested ${model}, envelope reported ${JSON.stringify(verdict.observed)}`);
+
+  // And the check has teeth against the same real envelope.
+  assert.equal(verifyReviewerIdentity(envelope.modelUsage, 'claude-opus-4-8').ok, false);
 });
 
 function existsSyncSafe(p) {

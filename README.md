@@ -89,7 +89,7 @@ whose heartbeat is stale (a fresh heartbeat means a live tick still owns it).
 
 The `auto-resume` knob in `.afk/config.md` sets the behaviour:
 
-- `off` — silent; the hook does nothing.
+- `off` — no resume detection (the stale-install notice below is separate).
 - `notify` (default) — surface the paused run; you decide whether to resume.
 - `auto` — for a single unambiguous run, also direct an autonomous resume unless
   your first message redirects. Two or more paused runs are only ever listed,
@@ -97,6 +97,14 @@ The `auto-resume` knob in `.afk/config.md` sets the behaviour:
 
 The hook is not a scheduler — it cannot start a turn on its own, so it does not
 replace a durable external scheduler.
+
+The same hook reports when the installed plugin is behind the canonical repo.
+The plugin's install cache is version-keyed, so an old install keeps serving old
+skills with nothing to show for it — and invoking a skill directly runs no
+kickoff check that would say so. The answer is cached in
+`.afk/update-check.json` (checked at most once a day), never blocks, and is
+silenced with `AFK_UPDATE_CHECK=off`. Installing the update stays yours to do
+from your agent host; no skill updates itself.
 
 ## Project Configuration
 
@@ -196,7 +204,7 @@ manifests. Host install caches use the version as the update key.
 skills/       Source skills shipped by the plugin.
 scripts/      Manifest sync, lint, link, provenance, and version checks.
 lib/          Shared runtime imported by bundled scripts and hooks.
-hooks/        Plugin-level hooks (SessionStart auto-resume) and their config.
+hooks/        Plugin-level hooks (SessionStart auto-resume, update notice).
 templates/    Starter `.afk/` files for consuming repositories.
 docs/         Design and operating notes.
 ```

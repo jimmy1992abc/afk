@@ -62,9 +62,16 @@ When a skill finds `.afk/` absent it runs the `afk-init` bootstrap automatically
 (create `.afk/`, add the ignore entry, detect commands, record `pluginRoot`)
 and continues — no manual step. Bundled helpers resolve via
 `${CLAUDE_PLUGIN_ROOT}` → the recorded `pluginRoot` → the skill's own directory,
-so a gate never hard-fails before the bootstrap runs. The `afk` driver also
-checks at kickoff whether the installed plugin is behind the canonical repo's
-latest version and surfaces a one-line update notice (never blocking).
+so a gate never hard-fails before the bootstrap runs. A recorded `pluginRoot`
+that names a superseded version of the install now running is refreshed on
+re-init (`lib/plugin-root.mjs`); a custom root is preserved.
+
+Whether the installed plugin is behind the canonical repo's latest version is
+surfaced as a one-line notice, never blocking: by the `afk` driver at kickoff,
+by `afk-init`, and by the SessionStart hook — the last so that invoking a
+satellite skill directly, which runs no driver, still shows a stale install.
+The hook caches the answer in `.afk/update-check.json` (at most one check a
+day) and is silenced by `AFK_UPDATE_CHECK=off`.
 
 ## Local checks (mirror CI)
 

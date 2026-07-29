@@ -46,12 +46,25 @@ function writeConfig(root, autoResume) {
   writeFileSync(join(root, '.afk', 'config.md'), `## resume\nauto-resume: ${autoResume}\n`, 'utf8');
 }
 
-function runHook({ source = 'startup', cwd }) {
+// The update notice is off unless a test is about it: leaving it on would put a
+// network fetch inside every resume assertion.
+function runHook({ source = 'startup', cwd, env = { AFK_UPDATE_CHECK: 'off' } }) {
   const r = spawnSync(process.execPath, [HOOK], {
     input: JSON.stringify({ hook_event_name: 'SessionStart', source, cwd }),
     encoding: 'utf8',
+    env: { ...process.env, ...env },
   });
   return r;
+}
+
+// A fresh cache entry, so the notice path resolves without any network call.
+function writeUpdateCache(root, latest) {
+  mkdirSync(join(root, '.afk'), { recursive: true });
+  writeFileSync(
+    join(root, '.afk', 'update-check.json'),
+    JSON.stringify({ checkedAt: new Date().toISOString(), latest }),
+    'utf8',
+  );
 }
 
 function parseOut(stdout) {
@@ -206,5 +219,81 @@ test('a run in the MAIN tree is found when the hook fires from a LINKED worktree
     // remove the worktree registration before deleting dirs
     try { git(root, 'worktree', 'remove', '--force', linked); } catch { /* best effort */ }
     cleanup(root, join(linked, '..'));
+  }
+});
+
+// ── the stale-install notice ──────────────────────────────────────────────────
+// A direct /afk-codex-review never runs the driver's kickoff check, so the
+// SessionStart hook is where a stale install becomes visible at all.
+
+const NOTICE_ON = { AFK_UPDATE_CHECK: '' };
+
+test('a stale install is surfaced even when auto-resume is off', () => {
+  // The two knobs govern different facts: silencing resume prompts is not a
+  // request to be kept on old code.
+  const root = initRepo();
+  try {
+    writeUpdateCache(root, '99.0.0'); // creates .afk/, which writeConfig needs
+    writeConfig(root, 'off');
+    const ctx = parseOut(runHook({ cwd: root, env: NOTICE_ON }).stdout)
+      .hookSpecificOutput.additionalContext;
+    assert.match(ctx, /latest v99\.0\.0/);
+    assert.match(ctx, /update the afk-skills plugin/i);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('a paused run and a stale install are surfaced together', () => {
+  const root = initRepo();
+  try {
+    writeRun(root, 'paused-run', { scope: 'finish the queue' });
+    writeUpdateCache(root, '99.0.0');
+    const ctx = parseOut(runHook({ cwd: root, env: NOTICE_ON }).stdout)
+      .hookSpecificOutput.additionalContext;
+    assert.match(ctx, /paused-run/);
+    assert.match(ctx, /latest v99\.0\.0/);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('a current install adds no notice', () => {
+  const root = initRepo();
+  try {
+    writeRun(root, 'paused-run');
+    writeUpdateCache(root, '0.0.1'); // behind the installed version
+    const ctx = parseOut(runHook({ cwd: root, env: NOTICE_ON }).stdout)
+      .hookSpecificOutput.additionalContext;
+    assert.match(ctx, /paused-run/);
+    assert.doesNotMatch(ctx, /latest v/);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('the opt-out silences the notice and nothing else', () => {
+  const root = initRepo();
+  try {
+    writeRun(root, 'paused-run');
+    writeUpdateCache(root, '99.0.0');
+    const ctx = parseOut(runHook({ cwd: root, env: { AFK_UPDATE_CHECK: 'off' } }).stdout)
+      .hookSpecificOutput.additionalContext;
+    assert.match(ctx, /paused-run/);
+    assert.doesNotMatch(ctx, /99\.0\.0/);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('a repo with no .afk stays silent even with the notice enabled', () => {
+  // The hook's no-op-outside-an-afk-repo contract is not weakened by the notice.
+  const root = initRepo();
+  try {
+    const r = runHook({ cwd: root, env: NOTICE_ON });
+    assert.equal(r.status, 0);
+    assert.equal(r.stdout.trim(), '');
+  } finally {
+    cleanup(root);
   }
 });

@@ -8,15 +8,24 @@
 // (off | notify | auto; default notify). See
 // docs/designs/specs/2026-07-18-session-start-auto-resume.md.
 //
+// It also carries the stale-install notice. This hook fires before any skill is
+// chosen, so it is the only place a direct satellite invocation — which never
+// runs the afk driver's kickoff check — can see that its wrappers are old. The
+// two signals are independent: `auto-resume: off` silences resume detection and
+// not the notice, which has its own opt-out (AFK_UPDATE_CHECK).
+//
 // Contract: reads the hook JSON from stdin, writes at most one JSON object to
 // stdout, and ALWAYS exits 0. It never blocks or crashes a session — any error
 // is swallowed and produces no output. Pure no-op outside an afk repo.
 
-import { join } from 'node:path';
+import { existsSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { readConfigValue } from '../lib/config.mjs';
 import { mainWorktree } from '../lib/gate/git.mjs';
 import { buildContext, collectResumable, normalizeMode } from '../lib/resume/detect.mjs';
+import { resolveUpdateNotice } from '../scripts/update-check.mjs';
 
 async function readStdin() {
   let raw = '';
@@ -37,14 +46,26 @@ async function main() {
 
   const cwd = (typeof data.cwd === 'string' && data.cwd) || process.cwd();
   const root = mainWorktree({ cwd }) || cwd;
+  const afkDir = join(root, '.afk');
 
-  // Disabled → stay silent without even scanning.
-  const mode = normalizeMode(readConfigValue(join(root, '.afk', 'config.md'), 'auto-resume'));
-  if (mode === 'off') return;
+  // No .afk/ means no afk repo: the hook's no-op contract, unchanged by the
+  // notice below.
+  if (!existsSync(afkDir)) return;
 
-  const runs = collectResumable(join(root, '.afk', 'runs'), { root, now: new Date() });
-  const context = buildContext(runs, { mode });
-  if (!context) return; // no resumable run
+  // Disabled → do not scan. The update notice is a different fact and is
+  // resolved regardless, so this knob can no longer end the run early.
+  const mode = normalizeMode(readConfigValue(join(afkDir, 'config.md'), 'auto-resume'));
+  const runs = mode === 'off'
+    ? []
+    : collectResumable(join(afkDir, 'runs'), { root, now: new Date() });
+
+  const notice = await resolveUpdateNotice({
+    pluginRoot: join(dirname(fileURLToPath(import.meta.url)), '..'),
+    cachePath: join(afkDir, 'update-check.json'),
+  });
+
+  const context = [notice, buildContext(runs, { mode })].filter(Boolean).join('\n\n');
+  if (!context) return; // nothing to say
 
   const payload = JSON.stringify({
     hookSpecificOutput: {

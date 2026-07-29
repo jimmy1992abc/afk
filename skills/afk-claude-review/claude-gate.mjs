@@ -33,6 +33,7 @@ import { join } from 'node:path';
 import { isGateDisabled } from '../../lib/gate/env.mjs';
 import { git } from '../../lib/gate/git.mjs';
 import { guardFor } from '../../lib/gate/implementer.mjs';
+import { isPinnedModelId, verifyReviewerIdentity } from '../../lib/gate/model-identity.mjs';
 import { buildDesignReviewPrompt, buildReviewPrompt } from '../../lib/gate/prompt.mjs';
 import { createProtocol } from '../../lib/gate/protocol.mjs';
 import { collectDiff, parseTarget, readDesign, validateTarget } from '../../lib/gate/target.mjs';
@@ -175,8 +176,19 @@ if (isDesign) {
 }
 
 // ── Invocation ──────────────────────────────────────────────────────────────
-const model = (process.env.CLAUDE_REVIEW_MODEL || 'opus').trim();
+// A full model ID, never an alias: `--model opus` resolved to claude-opus-4-8
+// while the pipeline required a current generation, and nothing in the run said
+// so. Refused here rather than after the call — an alias is no more verifiable
+// afterwards, so accepting one would only spend a metered call to learn it.
+const model = (process.env.CLAUDE_REVIEW_MODEL || 'claude-opus-5').trim();
 const effort = (process.env.CLAUDE_REVIEW_EFFORT || 'medium').trim();
+
+if (!isPinnedModelId(model)) {
+  emitError(
+    `cannot review — CLAUDE_REVIEW_MODEL "${model}" is an alias, not a pinned model ID. An alias is resolved by the host and can select an older generation with no visible symptom, which this gate cannot allow. Set a full ID, e.g. claude-opus-5.`,
+    1,
+  );
+}
 
 // `--tools "Read,Grep,Glob"` is the entire read-only boundary: no Bash, no
 // Write, no Edit are loaded, so nothing can grant them back.
@@ -304,6 +316,20 @@ if (envelope?.is_error) {
     emitSkip(`Claude is rate-limited or out of quota (HTTP 429) — this gate cannot run right now; the next gate in priority should take its place. ${detail}`);
   }
   emitError(`Claude review failed${status ? ` (HTTP ${status})` : ''}: ${detail} Transcript: ${logFile}`, res.status || 1);
+}
+
+// argv states what was requested; the envelope states what answered. Checking
+// only the first is how a review written by an older generation reaches the
+// driver as a clean round.
+const identity = verifyReviewerIdentity(envelope?.modelUsage, model);
+if (!identity.ok) {
+  const detail = identity.reason === 'mismatch'
+    ? `the result envelope reports ${identity.observed.map((m) => `"${m}"`).join(', ')} instead`
+    : 'the result envelope reports no modelUsage, so which model answered cannot be established';
+  emitError(
+    `reviewer identity unverified — requested "${model}" but ${detail}. This review is not a clean round; it is discarded rather than attributed to a model that may not have run. Transcript: ${logFile}`,
+    res.status || 1,
+  );
 }
 
 const denials = Array.isArray(envelope?.permission_denials) ? envelope.permission_denials : [];
