@@ -150,7 +150,11 @@ constraints:
 
 - **Cached.** `.afk/update-check.json` holds `{ checkedAt, latest }`; the
   network is touched at most once per 24h. A session start must not become a
-  network round-trip.
+  network round-trip. The entry records that a check *happened*, not that one
+  succeeded (`latest: null` for a failure) — otherwise the machine that can
+  never reach GitHub is the one that pays the fetch timeout at every window it
+  opens, and it is the one with nothing to gain from the retry. Deferring an
+  advisory notice for a day is the cheaper side of that trade.
 - **Silent on every failure**, as the rest of the hook is. No network, no
   manifest, no cache — no notice.
 - **Independent of `auto-resume`.** That knob governs resume detection; a
@@ -228,6 +232,7 @@ skill can call and CI can test.
 | A superseded versioned cache root is refreshed | `lib/plugin-root.mjs` | `plugin-root.test.mjs` — old root lacks a newly added helper |
 | A custom root is preserved | `lib/plugin-root.mjs` | `plugin-root.test.mjs` — custom root keeps |
 | The update notice never blocks a session | hook: cached, bounded, catch-all, exit 0 | `afk-resume-detect.test.mjs` — offline and cache paths |
+| One network attempt per TTL, success or failure | `resolveUpdateNotice` records every attempt | `update-check.test.mjs` — failed attempt is cached |
 
 ---
 

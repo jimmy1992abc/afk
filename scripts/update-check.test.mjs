@@ -268,6 +268,48 @@ describe('resolveUpdateNotice', () => {
     assert.equal(notice, null);
   });
 
+  test('a failed attempt is cached, so an offline machine stops retrying', async () => {
+    // Otherwise the host that can never reach GitHub is the one that pays the
+    // fetch timeout at every single window it opens.
+    const path = cachePath();
+    await resolveUpdateNotice({
+      pluginRoot: root,
+      cachePath: path,
+      fetchImpl: async () => { throw new Error('offline'); },
+    });
+    const recorded = JSON.parse(readFileSync(path, 'utf8'));
+    assert.ok(recorded.checkedAt, 'the attempt itself is recorded');
+    assert.equal(recorded.latest, null);
+
+    const again = await resolveUpdateNotice({
+      pluginRoot: root,
+      cachePath: path,
+      fetchImpl: () => { throw new Error('must not fetch'); },
+    });
+    assert.equal(again, null);
+  });
+
+  test('a recorded failure expires with the same TTL', async () => {
+    const path = cachePath();
+    writeFileSync(path, JSON.stringify({
+      checkedAt: new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString(),
+      latest: null,
+    }), 'utf8');
+    const notice = await resolveUpdateNotice({ pluginRoot: root, cachePath: path, fetchImpl: fetchOf('0.2.11') });
+    assert.match(notice, /latest v0\.2\.11/);
+  });
+
+  test('a non-ok response is a failed attempt, not a silent success', async () => {
+    const path = cachePath();
+    const notice = await resolveUpdateNotice({
+      pluginRoot: root,
+      cachePath: path,
+      fetchImpl: async () => ({ ok: false, status: 503 }),
+    });
+    assert.equal(notice, null);
+    assert.equal(JSON.parse(readFileSync(path, 'utf8')).latest, null);
+  });
+
   test('an unwritable cache path costs a fetch, not the notice', async () => {
     // The cache is an optimisation; losing it must not lose the signal.
     const notice = await resolveUpdateNotice({

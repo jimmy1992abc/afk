@@ -80,15 +80,20 @@ export async function latestVersion(repo, fetchImpl = fetch, timeoutMs = 4000) {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-// The cache exists so a session start is not a network round-trip. It is an
-// optimisation only: every failure path below falls through to a fetch, and a
-// failed fetch falls through to silence.
+// The cache exists so a session start is not a network round-trip.
+//
+// It records that a check HAPPENED, not only that one succeeded: a machine
+// that cannot reach GitHub would otherwise re-attempt on every window it opens
+// and pay the fetch timeout each time, which is the cost the cache exists to
+// avoid — and the population most likely to pay it is the one that gains
+// nothing from the retry. Returns null when there is no usable entry,
+// otherwise `{ latest }` with `latest` null for a recorded failure.
 function readCache(cachePath, now, ttlMs) {
   try {
     const { checkedAt, latest } = JSON.parse(readFileSync(cachePath, 'utf8'));
-    if (typeof latest !== 'string' || !latest) return null;
     const age = now.getTime() - new Date(checkedAt).getTime();
-    return Number.isFinite(age) && age >= 0 && age < ttlMs ? latest : null;
+    if (!Number.isFinite(age) || age < 0 || age >= ttlMs) return null;
+    return { latest: typeof latest === 'string' && latest ? latest : null };
   } catch {
     return null;
   }
@@ -123,15 +128,24 @@ export async function resolveUpdateNotice({
     if (local === null) return null; // can't tell — stay silent
 
     const cached = cachePath ? readCache(cachePath, now, ttlMs) : null;
-    if (cached) return updateNotice(local, cached);
+    if (cached) return cached.latest ? updateNotice(local, cached.latest) : null;
 
     const repo = resolveRepo(pluginRoot, env);
     if (repo === null) return null;
 
-    const latest = await latestVersion(repo, fetchImpl);
-    if (typeof latest !== 'string' || !latest) return null;
+    let latest = null;
+    try {
+      latest = await latestVersion(repo, fetchImpl);
+    } catch {
+      // An unreachable canonical repo is a fact about this attempt; record it
+      // so the next window is silent and fast rather than paying the timeout
+      // again. The notice is advisory, so deferring it a day costs nothing.
+      latest = null;
+    }
+    if (typeof latest !== 'string' || !latest) latest = null;
+
     if (cachePath) writeCache(cachePath, latest, now);
-    return updateNotice(local, latest);
+    return latest ? updateNotice(local, latest) : null;
   } catch {
     // network/parse/filesystem failure: never block, stay silent
     return null;
