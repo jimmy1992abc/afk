@@ -325,7 +325,9 @@ const identity = verifyReviewerIdentity(envelope?.modelUsage, model);
 if (!identity.ok) {
   const detail = identity.reason === 'mismatch'
     ? `the result envelope reports ${identity.observed.map((m) => `"${m}"`).join(', ')} instead`
-    : 'the result envelope reports no modelUsage, so which model answered cannot be established';
+    // A CLI too old to report modelUsage lands here, so the message says what
+    // would make the check possible rather than only that it failed.
+    : 'the result envelope carries no modelUsage, so which model answered cannot be established — update the Claude Code CLI to one that reports it';
   emitError(
     `reviewer identity unverified — requested "${model}" but ${detail}. This review is not a clean round; it is discarded rather than attributed to a model that may not have run. Transcript: ${logFile}`,
     res.status || 1,

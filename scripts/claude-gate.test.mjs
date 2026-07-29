@@ -484,6 +484,22 @@ test('a near-miss identity does not pass on a shared prefix', () => {
   });
 });
 
+test('design mode is not exempt from the identity check', () => {
+  // The design gate reviews reasoning instead of a diff, but it is the same
+  // reviewer and the same claim about which model produced the verdict.
+  withStub({ is_error: false, result: 'SOUND', modelUsage: usage('claude-opus-4-8') }, (bin) => {
+    withDesignDoc('# Spec\n\nA claim.\n', (path) => {
+      const result = runGate({
+        args: ['--implementer', 'codex', '--design', path],
+        env: { CLAUDE_GATE_BIN: bin },
+      });
+      assert.notEqual(result.status, 0);
+      assert.match(result.stdout, /ERROR: reviewer identity unverified/);
+      assert.doesNotMatch(result.stdout, /SOUND/);
+    });
+  });
+});
+
 test('an envelope with no modelUsage is unverifiable, not clean', () => {
   withStub({ is_error: false, result: 'LGTM' }, (bin) => {
     const result = runGate({
