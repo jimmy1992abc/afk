@@ -17,8 +17,10 @@ guide; this is the short human version.
 3. For anything non-trivial, add a design spec under `docs/designs/specs/`.
 4. Write or update tests, then the code.
 5. Run the local checks below until clean.
-6. Open a PR using the template. Bump the plugin `version` if you changed
-   `skills/` or a bundled script.
+6. Open a Draft PR using the template. Bump the plugin `version` if you changed
+   `skills/` or a bundled script. Keep repair batches Draft until local validation
+   and the required reviews are clean, then mark Ready for review to trigger CI.
+   Wait for the current revision's required CI runs before declaring merge-ready.
 
 ## Adding or editing a skill
 

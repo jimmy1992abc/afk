@@ -48,6 +48,12 @@ The driver and satellites are the active policy. Imported design documents
 retain historical decisions; this record identifies where the integration differs.
 [Model and pricing reference](models-and-pricing.md) records the current source check.
 
+The Draft-first lifecycle is retained explicitly: local validation and reviews
+finish before Ready for review triggers CI. The original and imported workflow
+snapshots lacked Draft job guards; this integration adds them and separates
+the Ready transition from merge readiness. Draft-stage skips cannot satisfy
+the post-promotion CI reading. The expected-CI wait starts after promotion.
+
 ## Per-commit disposition
 
 Functional fixes and their tests are carried forward in their final source form;

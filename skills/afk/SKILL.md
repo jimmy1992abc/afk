@@ -62,13 +62,14 @@ the shared review-cycle allowance governs repairs) →
 design-stage external gate (opt-in pilot, default off; one role per evaluation —
 "Design-stage external gate" below) → tests
 first (targeted) → implementation → adversarial sweep →
-commit → push early → open the PR as not-ready → read the revision's checks
-(fix a failure now) → **internal review** (`afk-internal-review`) → triage
+commit → push early → open a Draft PR →
+**internal review** (`afk-internal-review`) → triage
 every finding and
 batch-fix confirmed in-scope structural findings →
 **external gate(s)** (the loop, closure, and termination — rule below) →
 **full test suite once** (the project's test command from `.afk/config.md`) on
-the final commit → declare it ready → merge per policy. The design doc matters more
+the final commit → mark Ready for review → read the final revision's checks →
+declare it merge-ready → merge per policy. The design doc matters more
 than the code.
 
 - Scale design/debate depth to the work: mechanical, well-specified work gets a
@@ -77,6 +78,23 @@ than the code.
 - **Green** = the full test suite green on the final commit, and that commit's
   check reading resolved ("Remote checks"). A green status on the PR alone is
   not green. Never declare it ready before the suite is green.
+
+**Draft lifecycle.** Keep the PR Draft while implementing, reviewing, and
+batching fixes. Do not wait for intentionally deferred CI while the PR is Draft;
+record it as deferred and continue local validation and review. Existing checks
+that did run still supply evidence, and a demonstrated failure needs repair.
+After internal review, the selected external roles, and the final local suite
+are clean on the same commit, mark Ready for review to trigger CI.
+Ready for review is a forge state, not a merge-ready verdict. The remaining
+readiness rules refer to merge readiness. Never reuse Draft-stage skipped checks as passing CI evidence;
+observe the required runs for the current revision after the latest Ready
+transition. Return to Draft before pushing review-driven repairs or CI-failure fixes, then repeat
+the affected review and final local validation before promoting again. A
+cancelled or already-running check remains recorded with its actual outcome.
+If the forge has no Draft state, record that limitation and use its supported
+not-ready state without claiming CI was deferred. A consuming repository must
+configure its CI to skip Draft jobs and trigger on Ready transitions; this
+plugin does not silently rewrite another repository's workflows.
 
 **Freeze the issue contract before implementation.** The design records the
 acceptance criteria, product and engineering invariants, explicit non-goals,
@@ -661,9 +679,11 @@ change or sequence restart never resets it by itself.
 
 After final is clean, run the full native suite once on the same commit. A test
 failure or content fix restarts ordered roles; a green suite with unchanged
-stamps permits ready once the revision's check reading resolves.
+stamps permits the Ready transition. Declare merge-ready only once the
+revision's check reading resolves.
 
-**Remote checks.** Before ready, ask the forge which checks it required of the
+**Remote checks.** After the Ready transition and before declaring merge-ready,
+ask the forge which checks it required of the
 final revision and record its answer as given; where a forge draws no
 required/advisory distinction, every check it reports is required here. Classify
 by what the answer names, never by how the lookup exited — a status code is a
@@ -689,7 +709,9 @@ forge's own vocabulary, and a reading nobody took resolves nothing:
   on a later tick.
 
 Record with the answer which of those it was, and stamp the reading's first
-attempt against that revision's commit — the window is 30 minutes of wall clock
+attempt against that revision's commit after the latest Ready transition.
+Intentional Draft deferral does not start the window or supply a settled reading.
+The window is 30 minutes of wall clock
 from that stamp, so a resumed tick can tell a spent window from a fresh one, and
 a new commit starts its own. `remote-ci`
 governs only an empty or unanswered reading, and adds no requirement of its own;

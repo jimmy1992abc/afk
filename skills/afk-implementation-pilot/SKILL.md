@@ -105,6 +105,11 @@ authorized actions.
 
 ### 7 — CI watch (only when asked to push / open a PR)
 
+Open new PRs as Draft and keep review-driven or CI-failure repair batches Draft. Do not wait for intentionally deferred CI;
+record that state and continue the internal-review handoff. The driver owns the Ready transition
+after all required reviews and the final local suite pass; that transition
+starts the CI readiness check. A Draft-stage skip is not a passing CI run.
+
 If a push or PR is authorised, the job is not done when `git push` returns. Ask
 the forge which checks it required of the pushed revision (`../afk/SKILL.md`,
 "Remote checks", for what counts as required) and stay engaged while any is

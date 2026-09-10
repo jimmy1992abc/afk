@@ -100,13 +100,26 @@ scope
 -> targeted tests
 -> implementation
 -> self-review
--> pull request (draft) + required checks resolved
+-> pull request (draft; CI deferred)
 -> internal review
 -> Codex external role (or independent fallback; single by default)
 -> Kimi final external role (only when a double profile is selected)
 -> full final test suite on the final commit
+-> Ready for review (trigger CI)
+-> required CI runs pass on the current revision
 -> owner approval or configured merge policy
 ```
+
+Draft PRs keep review fixes from starting repeated CI jobs. This repository
+skips validation and owner-approval jobs for Draft events and runs them on
+`ready_for_review`; later commits to a ready PR still trigger validation.
+Ready for review starts CI and does not declare the PR merge-ready. Draft-stage
+skips are never reused as passing CI evidence. Return to Draft before pushing
+another repair batch, then complete local validation before promoting.
+Other repositories must configure the equivalent CI conditions themselves.
+GitHub may still show a skipped workflow entry for a Draft event; this policy
+reduces executed jobs, not every workflow entry. Main-branch and manual
+validation remain available.
 
 The plugin never deploys.
 
