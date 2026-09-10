@@ -4,15 +4,18 @@
 // installed version against the canonical repo's latest and warns only —
 // it must never block a run or exit nonzero.
 
-import { readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { isGateDisabled } from '../lib/gate/env.mjs';
+import { mainWorktree } from '../lib/gate/git.mjs';
+import { isReleaseVersion } from '../lib/version.mjs';
 
 const MANIFEST_RELPATH = ['.claude-plugin', 'marketplace.json'];
 
 export function isBehind(local, latest) {
+  if (!isReleaseVersion(local) || !isReleaseVersion(latest)) return false;
   const partsOf = (v) => String(v).split('.').slice(0, 3)
     .map((p) => Number.parseInt(p, 10) || 0);
   const [lMajor, lMinor, lPatch] = partsOf(local);
@@ -36,7 +39,8 @@ export function localVersion(repoRoot) {
   const manifestPath = join(repoRoot, ...MANIFEST_RELPATH);
   try {
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
-    return manifest.plugins?.[0]?.version ?? null;
+    const version = manifest.plugins?.[0]?.version;
+    return isReleaseVersion(version) ? version : null;
   } catch {
     return null;
   }
@@ -72,7 +76,8 @@ export async function latestVersion(repo, fetchImpl = fetch, timeoutMs = 4000) {
     const res = await fetchImpl(url, { signal: ctrl.signal });
     if (!res.ok) throw new Error(`update-check: fetch failed with status ${res.status}`);
     const manifest = JSON.parse(await res.text());
-    return manifest.plugins?.[0]?.version ?? null;
+    const version = manifest.plugins?.[0]?.version;
+    return isReleaseVersion(version) ? version : null;
   } finally {
     clearTimeout(timer);
   }
@@ -93,7 +98,7 @@ function readCache(cachePath, now, ttlMs) {
     const { checkedAt, latest } = JSON.parse(readFileSync(cachePath, 'utf8'));
     const age = now.getTime() - new Date(checkedAt).getTime();
     if (!Number.isFinite(age) || age < 0 || age >= ttlMs) return null;
-    return { latest: typeof latest === 'string' && latest ? latest : null };
+    return { latest: isReleaseVersion(latest) ? latest : null };
   } catch {
     return null;
   }
@@ -142,7 +147,7 @@ export async function resolveUpdateNotice({
       // again. The notice is advisory, so deferring it a day costs nothing.
       latest = null;
     }
-    if (typeof latest !== 'string' || !latest) latest = null;
+    if (!isReleaseVersion(latest)) latest = null;
 
     if (cachePath) writeCache(cachePath, latest, now);
     return latest ? updateNotice(local, latest) : null;
@@ -154,7 +159,10 @@ export async function resolveUpdateNotice({
 
 // Runs the checks and prints a notice if warranted; never throws.
 async function runCli(repoRoot, env) {
-  const notice = await resolveUpdateNotice({ pluginRoot: repoRoot, env, cachePath: null });
+  const root = mainWorktree() || process.cwd();
+  const afk = join(root, '.afk');
+  const cachePath = existsSync(afk) ? join(afk, 'update-check.json') : null;
+  const notice = await resolveUpdateNotice({ pluginRoot: repoRoot, env, cachePath });
   if (notice) console.log(notice);
 }
 

@@ -27,10 +27,15 @@ export function semverGt(a, b) {
 }
 
 // Directories whose contents ship to an installed plugin. `lib/` is shared
-// runtime imported by every gate helper, and `hooks/` is a plugin component
-// (hooks/hooks.json plus its bundled scripts), so a change under either alters
+// runtime imported by every gate helper, `hooks/` is a plugin component
+// (hooks/hooks.json plus its bundled scripts), and `templates/` is consumed at
+// runtime by afk-init's bootstrap, so a change under any of them alters
 // installed behaviour exactly as a change under skills/ does.
-const SHIPPED_DIRS = ['skills/', 'scripts/', 'lib/', 'hooks/'];
+const SHIPPED_DIRS = ['skills/', 'scripts/', 'lib/', 'hooks/', 'templates/'];
+
+// The comparator coerces garbage to 0.0.0, so anything reaching it must first
+// pass this shape rule — a corrupted version must fail loudly, never "bump".
+const VERSION_RE = /^\d+\.\d+\.\d+$/;
 
 export function requiresBump(changedPaths) {
   return changedPaths.some(
@@ -43,7 +48,13 @@ export function evaluate(baseVersion, headVersion, changedPaths) {
     return { ok: true, reason: 'no base version found (first PR) — skipping bump check' };
   }
   if (!requiresBump(changedPaths)) {
-    return { ok: true, reason: 'no skills/scripts/manifest paths changed — bump not required' };
+    return { ok: true, reason: 'no shipped paths (skills/scripts/lib/hooks/templates/manifests) changed — bump not required' };
+  }
+  if (typeof headVersion !== 'string' || !VERSION_RE.test(headVersion)) {
+    return {
+      ok: false,
+      reason: `shipped paths changed but the head version is unusable (${JSON.stringify(headVersion)}) — expected X.Y.Z`,
+    };
   }
   if (semverGt(headVersion, baseVersion)) {
     return { ok: true, reason: `version bumped ${baseVersion} -> ${headVersion}` };
@@ -54,29 +65,52 @@ export function evaluate(baseVersion, headVersion, changedPaths) {
   };
 }
 
-function readVersionAtRef(repoRoot, ref) {
+const MANIFEST_PATH = '.claude-plugin/marketplace.json';
+
+// Shell-less on purpose: `^{commit}` is a cmd.exe metacharacter under a shell.
+function runGit(repoRoot, args, opts = {}) {
+  return execFileSync('git', args, { cwd: repoRoot, encoding: 'utf8', ...opts });
+}
+
+// Classified base read. Only "manifest absent at the ref" may skip the check;
+// every other failure throws its distinct reason and the CLI fails closed —
+// a silently unreadable base would disable the one gate this script is.
+export function readBaseVersion(repoRoot, ref) {
   try {
-    const raw = execFileSync('git', ['show', `${ref}:.claude-plugin/marketplace.json`], {
-      cwd: repoRoot,
-      encoding: 'utf8',
-    });
-    return JSON.parse(raw).plugins[0].version;
+    runGit(repoRoot, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], { stdio: ['ignore', 'pipe', 'ignore'] });
   } catch {
-    return null;
+    throw new Error(`cannot resolve base ref '${ref}'`);
+  }
+  const listed = runGit(repoRoot, ['ls-tree', '--name-only', ref, '--', MANIFEST_PATH]).trim();
+  if (!listed) return { kind: 'absent' };
+  const raw = runGit(repoRoot, ['show', `${ref}:${MANIFEST_PATH}`]);
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error(`manifest at '${ref}' is not valid JSON`);
+  }
+  const version = parsed?.plugins?.[0]?.version;
+  if (typeof version !== 'string' || !VERSION_RE.test(version)) {
+    throw new Error(`manifest at '${ref}' has no plugins[0].version matching X.Y.Z (got ${JSON.stringify(version)})`);
+  }
+  return { kind: 'version', version };
+}
+
+export function readWorkingVersion(repoRoot) {
+  const path = join(repoRoot, '.claude-plugin', 'marketplace.json');
+  try {
+    return JSON.parse(readFileSync(path, 'utf8')).plugins[0].version;
+  } catch (err) {
+    throw new Error(`cannot read the working manifest at ${path}: ${err.message}`);
   }
 }
 
-function readWorkingVersion(repoRoot) {
-  const path = join(repoRoot, '.claude-plugin', 'marketplace.json');
-  const raw = readFileSync(path, 'utf8');
-  return JSON.parse(raw).plugins[0].version;
-}
-
-function getChangedPaths(repoRoot, base) {
-  const raw = execFileSync('git', ['diff', '--name-only', `${base}...HEAD`], {
-    cwd: repoRoot,
-    encoding: 'utf8',
-  });
+// --no-renames: a rename out of a shipped directory is a shipped change; with
+// rename detection on, only the destination path would be listed and the
+// deletion would vanish from the change set.
+export function getChangedPaths(repoRoot, base) {
+  const raw = runGit(repoRoot, ['diff', '--name-only', '--no-renames', `${base}...HEAD`]);
   return raw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
 }
 
@@ -87,13 +121,26 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     || process.env.GITHUB_BASE_REF
     || 'origin/main';
 
-  const changedPaths = getChangedPaths(repoRoot, base);
-  const baseVersion = readVersionAtRef(repoRoot, base);
-  const headVersion = existsSync(join(repoRoot, '.claude-plugin', 'marketplace.json'))
-    ? readWorkingVersion(repoRoot)
-    : null;
+  // Catch-all: every unhandled throw fails closed with its message — a check
+  // that dies silently or "skips" on an unreadable input is no check at all.
+  try {
+    // Base read first: an unresolvable ref gets its classified reason instead
+    // of whatever `git diff` happens to say about it.
+    const baseRead = readBaseVersion(repoRoot, base);
+    const changedPaths = getChangedPaths(repoRoot, base);
+    if (baseRead.kind === 'absent') {
+      console.log(`no manifest at base ref '${base}' (first PR) — skipping bump check`);
+      process.exit(0);
+    }
+    const headVersion = existsSync(join(repoRoot, '.claude-plugin', 'marketplace.json'))
+      ? readWorkingVersion(repoRoot)
+      : null;
 
-  const { ok, reason } = evaluate(baseVersion, headVersion, changedPaths);
-  console.log(reason);
-  process.exit(ok ? 0 : 1);
+    const { ok, reason } = evaluate(baseRead.version, headVersion, changedPaths);
+    console.log(reason);
+    process.exit(ok ? 0 : 1);
+  } catch (err) {
+    console.error(`version check failed: ${err.message}`);
+    process.exit(1);
+  }
 }

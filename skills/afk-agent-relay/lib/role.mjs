@@ -6,6 +6,8 @@
 // Returns { code, out } and does NOT touch process.* — the entry bootstrap
 // prints/exits. That keeps the whole pipeline unit-testable.
 
+import { join } from 'node:path';
+
 import {
   parseArgs,
   gate,
@@ -15,9 +17,19 @@ import {
   errorBlock,
   extractBlock,
   parseExcludeList,
+  relayError,
 } from './relay.mjs';
 import { buildRegistry, resolveProvider } from './providers.mjs';
+import { mainWorktree } from '../../../lib/gate/git.mjs';
 import { gatherContext } from './gather.mjs';
+import { byteLength, truncateWithMarker } from '../../../lib/text-budget.mjs';
+
+// `.afk/config.md` in the repository's main working tree, or null when git
+// cannot answer — resolution then falls to the remote, never to a guess.
+function afkConfigPath() {
+  const root = mainWorktree({});
+  return root ? join(root, '.afk', 'config.md') : null;
+}
 
 export async function runRole(cfg, io) {
   const { argv, env, fetchImpl, spawnImpl, readFileImpl, gather } = io;
@@ -54,22 +66,55 @@ export async function runRole(cfg, io) {
     return { code: 2, out: errorBlock(cfg.label, e.message) };
   }
 
-  // gather context out of process (excludes + redaction + loud byte cap)
-  const gctx = (gather || gatherContext)(
-    { diff: args.diff, issue: args.issue, files: args.files, logs: args.logs, grep: args.grep },
-    {
-      maxBytes: envInt(env, 'AGENT_RELAY_MAX_INPUT_BYTES', 400000),
-      excludeGlobs: parseExcludeList(env.AGENT_RELAY_EXCLUDE),
-      redact: !isOff(env.AGENT_RELAY_REDACT), // default on
-    },
-  );
+  const maxInputBytes = envInt(env, 'AGENT_RELAY_MAX_INPUT_BYTES', 400000);
+  let user;
+  try {
+    const gctx = (gather || gatherContext)(
+      { diff: args.diff, issue: args.issue, files: args.files, logs: args.logs, grep: args.grep },
+      {
+        maxBytes: maxInputBytes,
+        excludeGlobs: parseExcludeList(env.AGENT_RELAY_EXCLUDE),
+        redact: !isOff(env.AGENT_RELAY_REDACT),
+        configPath: afkConfigPath(),
+        cwd: process.cwd(),
+      },
+    );
+    const built = cfg.buildInput
+      ? cfg.buildInput(args, gctx)
+      : { prefix: cfg.buildUser(args, gctx), context: '' };
+    const prefix = String(built.prefix || '');
+    const context = String(built.context || '');
+    const separator = String(provider.inputSeparator || '');
+    const fixedBytes = byteLength(cfg.systemPrompt) + byteLength(separator) + byteLength(prefix);
+    if (fixedBytes > maxInputBytes) {
+      throw relayError(
+        'input_budget',
+        'fixed request content exceeds AGENT_RELAY_MAX_INPUT_BYTES',
+      );
+    }
+    const fitted = truncateWithMarker(
+      context,
+      maxInputBytes - fixedBytes,
+      () => '\n…[context truncated by AGENT_RELAY_MAX_INPUT_BYTES]',
+    );
+    if (fitted.truncated && !fitted.markerFits) {
+      throw relayError(
+        'input_budget',
+        'AGENT_RELAY_MAX_INPUT_BYTES cannot fit the required truncation marker',
+      );
+    }
 
-  // one provider call
+    user = prefix + fitted.text;
+  } catch (e) {
+    const message = e?.relay ? e.message : 'request preparation failed';
+    return { code: 2, out: errorBlock(cfg.label, message) };
+  }
+
   let result;
   try {
     result = await provider.complete({
       system: cfg.systemPrompt,
-      user: cfg.buildUser(args, gctx),
+      user,
       model,
       // Headroom: with DeepSeek thinking ON, reasoning tokens are spent from the
       // output budget BEFORE content, so a ~6000-token brief (the prompt ceiling)

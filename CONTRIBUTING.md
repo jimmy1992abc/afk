@@ -17,8 +17,10 @@ guide; this is the short human version.
 3. For anything non-trivial, add a design spec under `docs/designs/specs/`.
 4. Write or update tests, then the code.
 5. Run the local checks below until clean.
-6. Open a PR using the template. Bump the plugin `version` if you changed
-   `skills/` or a bundled script.
+6. Open a Draft PR using the template. Bump the plugin `version` if you changed
+   `skills/` or a bundled script. Keep repair batches Draft until local validation
+   and the required reviews are clean, then mark Ready for review to trigger CI.
+   Wait for the current revision's required CI runs before declaring merge-ready.
 
 ## Adding or editing a skill
 
@@ -39,6 +41,10 @@ node --test
 
 ## Review and merge
 
-Every PR is reviewed by the owner/maintainer and passes one independent external
-review before merge. PRs are squash-merged. CI must be green, but a green CI is
-not by itself approval to merge.
+Every PR is reviewed by the owner/maintainer and passes its configured
+external roles before merge. By default that is a single Codex review; an
+ordered double — Codex outer, Kimi final — runs when explicitly selected by
+handoff flags (`-codex -kimi`) or config `gates`. Independent fallbacks
+replace a provider that implemented the change or cannot run. PRs are
+squash-merged. CI must be green, but a green CI is not by itself approval to
+merge.

@@ -43,12 +43,21 @@ function writeRun(root, id, { state = 'active', heartbeat = staleIso(), scope = 
 }
 
 function writeConfig(root, autoResume) {
-  writeFileSync(join(root, '.afk', 'config.md'), `## resume\nauto-resume: ${autoResume}\n`, 'utf8');
+  writeFileSync(
+    join(root, '.afk', 'config.md'),
+    `## external gate\ngates: codex > kimi\n\n## resume\nauto-resume: ${autoResume}\n`,
+    'utf8',
+  );
+}
+
+function writeRawConfig(root, text) {
+  mkdirSync(join(root, '.afk'), { recursive: true });
+  writeFileSync(join(root, '.afk', 'config.md'), text, 'utf8');
 }
 
 // The update notice is off unless a test is about it: leaving it on would put a
 // network fetch inside every resume assertion.
-function runHook({ source = 'startup', cwd, env = { AFK_UPDATE_CHECK: 'off' } }) {
+function runHook({ source = 'startup', cwd, env = { AFK_UPDATE_CHECK: 'off', AFK_GATE_PROFILE_NOTICE: 'off' } }) {
   const r = spawnSync(process.execPath, [HOOK], {
     input: JSON.stringify({ hook_event_name: 'SessionStart', source, cwd }),
     encoding: 'utf8',
@@ -56,6 +65,8 @@ function runHook({ source = 'startup', cwd, env = { AFK_UPDATE_CHECK: 'off' } })
   });
   return r;
 }
+
+const GATE_NOTICE_ON = { AFK_UPDATE_CHECK: 'off', AFK_GATE_PROFILE_NOTICE: '' };
 
 // A fresh cache entry, so the notice path resolves without any network call.
 function writeUpdateCache(root, latest) {
@@ -131,6 +142,57 @@ test('hook is silent in a git repo with no .afk/runs', () => {
     const r = runHook({ source: 'startup', cwd: root });
     assert.equal(r.status, 0);
     assert.equal(r.stdout.trim(), '');
+  } finally {
+    cleanup(root);
+  }
+});
+
+// ── ordered-gate migration notices ──────────────────────────────────────────
+
+test('legacy external-gate config receives one bounded opt-in notice', () => {
+  const root = initRepo();
+  try {
+    writeRawConfig(root, '## external gate\npriority: codex > kimi\nmin-pass: 1\n');
+    const first = parseOut(runHook({ cwd: root, env: GATE_NOTICE_ON }).stdout);
+    assert.match(first.hookSpecificOutput.additionalContext, /legacy gate profile/i);
+    assert.match(first.hookSpecificOutput.additionalContext, /gates: codex > kimi/);
+    assert.equal(runHook({ cwd: root, env: GATE_NOTICE_ON }).stdout.trim(), '');
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('profileless config receives the default-change notice once', () => {
+  const root = initRepo();
+  try {
+    writeRawConfig(root, '## external gate\ndesign-gate: risky\n# implementer: codex\n');
+    const first = parseOut(runHook({ cwd: root, env: GATE_NOTICE_ON }).stdout);
+    assert.match(first.hookSpecificOutput.additionalContext, /default single external review/i);
+    assert.match(first.hookSpecificOutput.additionalContext, /gates: codex/);
+    assert.match(first.hookSpecificOutput.additionalContext, /-codex -kimi/);
+    assert.equal(runHook({ cwd: root, env: GATE_NOTICE_ON }).stdout.trim(), '');
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('explicit ordered gates suppress migration notices', () => {
+  const root = initRepo();
+  try {
+    writeRawConfig(root, '## external gate\ngates: codex > kimi\n');
+    assert.equal(runHook({ cwd: root, env: GATE_NOTICE_ON }).stdout.trim(), '');
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('unrelated config edits do not re-fire the gate-profile notice', () => {
+  const root = initRepo();
+  try {
+    writeRawConfig(root, '## commands\ntest: one\n## external gate\nmin-pass: 1\n');
+    assert.ok(parseOut(runHook({ cwd: root, env: GATE_NOTICE_ON }).stdout));
+    writeRawConfig(root, '## commands\ntest: two\n## external gate\nmin-pass: 1\n');
+    assert.equal(runHook({ cwd: root, env: GATE_NOTICE_ON }).stdout.trim(), '');
   } finally {
     cleanup(root);
   }
@@ -226,7 +288,7 @@ test('a run in the MAIN tree is found when the hook fires from a LINKED worktree
 // A direct /afk-codex-review never runs the driver's kickoff check, so the
 // SessionStart hook is where a stale install becomes visible at all.
 
-const NOTICE_ON = { AFK_UPDATE_CHECK: '' };
+const NOTICE_ON = { AFK_UPDATE_CHECK: '', AFK_GATE_PROFILE_NOTICE: 'off' };
 
 test('a stale install is surfaced even when auto-resume is off', () => {
   // The two knobs govern different facts: silencing resume prompts is not a

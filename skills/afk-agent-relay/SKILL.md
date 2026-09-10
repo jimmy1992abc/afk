@@ -1,6 +1,6 @@
 ---
 name: afk-agent-relay
-description: Part of the afk pipeline. Provider-pluggable dev-tooling that shells out to cheap/independent models so the coding agent burns fewer of its own tokens. Two roles — a context COMPRESSOR (default deepseek) that reads big context out of process and returns a 6-section brief, and a SCOPE gate (default codex) that turns a raw request into a reviewable issue draft. Development-time only; never wired into a live production system. Triggers include "/afk-agent-relay", "compress context", "relay brief", "scope this".
+description: "afk-agent-relay: Part of the afk pipeline. Provider-pluggable dev-tooling that shells out to cheap/independent models so the coding agent burns fewer of its own tokens. Two roles — a context COMPRESSOR (default deepseek) that reads big context out of process and returns a 6-section brief, and a SCOPE gate (default codex) that turns a raw request into a reviewable issue draft. Development-time only; never wired into a live production system. Triggers include \"/afk-agent-relay\", \"compress context\", \"relay brief\", \"scope this\"."
 ---
 
 # afk-agent-relay
@@ -35,7 +35,7 @@ The bundled scripts (`brief.mjs`, `scope.mjs`, `hooks/`) sit beside this
 SKILL.md. Locate their directory as `${CLAUDE_PLUGIN_ROOT}/skills/afk-agent-relay`
 if the env var is set, else `<pluginRoot>/skills/afk-agent-relay` from
 `.afk/config.md`, else this skill's own directory. Resolve `.afk/` from the
-repository's main working tree — the first `worktree` line of
+repository's main working tree — the first non-bare `worktree` record of
 `git worktree list --porcelain` — never the current directory. Always pass
 `--manual`
 (bypasses the default-off `AGENT_RELAY_ENABLED` master switch). Run in the
@@ -54,7 +54,9 @@ node "<relay-dir>/scope.mjs" --manual --task "<raw request>"
 
 ### Flags
 
-`--task "<one line>"` (required) · `--issue N` (repeatable; runs `gh issue view`)
+`--task "<one line>"` (required) · `--issue N` (repeatable; reads the tracked
+issue through the forge resolved for this repository — a forge with no adapter
+is named in the notes, never omitted silently)
 · `--diff [base]` (runs `git diff`; bare = default base) · `--files a b …`
 (reads files) · `--logs path …` (tails) · `--grep "pat"` (repeatable; ripgrep) ·
 `--provider <name>` / `--model <id>` (override for this call).

@@ -1,5 +1,6 @@
 {
-  // Lint prose and skills; skip config templates and GitHub PR boilerplate.
+  // Lint prose and skills; skip config templates, GitHub PR boilerplate, and the
+  // gitignored .afk/ runtime state every developer has and CI never does.
   "globs": ["**/*.md"],
-  "ignores": ["node_modules", "templates", ".github/pull_request_template.md"]
+  "ignores": ["node_modules", "templates", ".github/pull_request_template.md", ".afk"]
 }

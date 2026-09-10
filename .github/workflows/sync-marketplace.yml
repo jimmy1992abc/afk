@@ -1,19 +1,23 @@
 name: sync-marketplace
 
-# On main, regenerate the agent manifests from skills/ and commit any drift, so
-# the enumerated skill list and mirrored version never lag the source of truth.
+# Drift must be repaired through a reviewed PR, so this job has no write token.
 
 on:
   push:
     branches: [main]
     paths:
       - 'skills/**'
-      - '.claude-plugin/marketplace.json'
       - 'scripts/sync-marketplace.mjs'
+      - '.claude-plugin/marketplace.json'
+      - '.github/plugin/marketplace.json'
+      - '.agents/plugins/marketplace.json'
+      - '.codex-plugin/plugin.json'
+      - 'plugin.json'
+      - 'package.json'
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: sync-marketplace
@@ -25,27 +29,9 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
 
-      - name: Regenerate manifests
-        run: node scripts/sync-marketplace.mjs
-
-      - name: Commit drift
-        run: |
-          set -e
-          files=(
-            .claude-plugin/marketplace.json
-            .github/plugin/marketplace.json
-            .agents/plugins/marketplace.json
-            .codex-plugin/plugin.json
-            plugin.json
-            package.json
-          )
-          if [ -z "$(git status --porcelain -- "${files[@]}")" ]; then
-            echo "manifests already in sync"
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -- "${files[@]}"
-          git commit -m "chore: sync manifests [skip ci]"
-          git push
+      # Manifest repairs need the same reviewed PR path as their source edits.
+      - name: Verify manifests
+        run: node scripts/sync-marketplace.mjs --check

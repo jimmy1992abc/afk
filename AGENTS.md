@@ -4,7 +4,7 @@ Canonical instructions for any agent or human working **on this repository**.
 `CLAUDE.md` and `GEMINI.md` defer here.
 
 This repo packages a set of skills — an autonomous PR pipeline (plan → implement
-→ internal review → independent external gate) — as a standalone, cross-agent
+→ internal review → ordered independent external roles) — as a standalone, cross-agent
 plugin. It is stack-agnostic and carries no project's specifics; a consuming
 project supplies its own via a gitignored `.afk/` directory.
 
@@ -53,7 +53,7 @@ A consuming project's per-developer preferences live in a **gitignored** `.afk/`
 `config.md` (personal run preferences) and `runs/<run-id>/`, one directory per
 run holding that run's ledger and its saved final reports. Run state is keyed by
 run, never by repository or worktree, so concurrent runs cannot overwrite one
-another. `.afk/` itself lives in the main working tree (the first `worktree` line
+another. `.afk/` itself lives in the main working tree (the first non-bare `worktree` record
 of `git worktree list --porcelain`), shared by every linked worktree. Everything
 is optional; a blank or absent `config.md` resolves to safe defaults. Skills
 never write project specifics back into this plugin.
@@ -87,9 +87,12 @@ node --test                                  # unit tests
 
 Design (for anything non-trivial, a spec under `docs/designs/specs/`) → tests
 first → implement → self-review → open a PR. Before merge a PR passes the owner
-review and **one** independent external gate — a different model than the one
-that wrote the change. CI green is necessary but not sufficient; the owner's
-review is the merge gate.
+review and the configured external roles — by default a single Codex review; an
+ordered double (Codex outer → Kimi final) runs only when explicitly selected by
+handoff flags (`-codex -kimi`) or config `gates`, with independent fallbacks
+when a role matches the implementer or is unavailable. Every actual reviewer
+differs from the implementer and from every other role. CI green is necessary
+but not sufficient; the owner's review is the merge gate.
 
 ## What this plugin can and cannot enforce
 

@@ -1,18 +1,26 @@
 ---
 name: afk-claude-review
-description: Part of the afk pipeline. Runs Claude (Claude Code CLI) as an independent, read-only external review gate on the current PR/branch, then triages and fixes the findings. For use when another model implemented the change — it declines to review its own work. Interchangeable with afk-codex-review, afk-kimi-review and afk-glm-review, subject to .afk/config.md gate priority and min-pass. Triggers include "/afk-claude-review", "run claude review", "claude gate".
+description: "afk-claude-review: Part of the afk pipeline. Runs Claude (Claude Code CLI) as an independent, read-only fallback external role, and the default outer fallback when Codex implemented the change. It declines to review its own work and follows ordered .afk/config.md gates. Triggers include \"/afk-claude-review\", \"run claude review\", \"claude gate\"."
 ---
 
 # afk-claude-review
 
-An independent second-opinion review by Claude, used as an external gate after
-`afk-internal-review`. Interchangeable with `afk-codex-review`,
-`afk-kimi-review` and `afk-glm-review`: run the number of gates required by
-`.afk/config.md`, and never use a gate whose model matches the implementer's.
+Per-run `--model <alias-or-id>` and `--effort <level>` override
+`CLAUDE_REVIEW_MODEL` and `CLAUDE_REVIEW_EFFORT` independently. The shared
+`../../lib/gate/model-select.mjs` expands explicit `opus`, `fable`, `sonnet`,
+and `haiku` aliases to pinned IDs; environment model values still require full
+IDs. Efforts are `low`, `medium`, `high`, `xhigh`, and `max`. Defaults remain
+`claude-opus-5` and `medium`; `--print-args` reports the effective selection.
+Response identity verification still applies after alias expansion.
+
+An independent second-opinion review by Claude, used as a fallback external role
+after `afk-internal-review`; it is the default outer fallback when Codex is the
+implementer. Run the ordered roles required by `.afk/config.md`, and never use a
+reviewer whose model matches the implementer or another role.
 
 **This gate exists for the case where Claude is not the implementer** — Codex,
-Kimi, Gemini or Copilot wrote the change and Claude reviews it. It refuses to run
-otherwise (see Independence below), so under a Claude Code driver it will
+Kimi, GLM, DeepSeek, MiMo, Gemini or Copilot wrote the change and Claude reviews
+it. It refuses to run otherwise (see Independence below), so under a Claude Code driver it will
 normally self-skip and the next gate in `priority` takes its place. That is the
 intended behaviour, not a fault.
 
@@ -34,8 +42,9 @@ An unrecognised implementer value fails **closed**: the gate skips rather than
 guess that it is independent.
 
 Pass `--implementer <family>` whenever the implementer is not the driver — most
-often when `afk-agent-relay` relayed the implementation to another model. Known
-families: `claude`, `codex`, `kimi`, `glm`, `gemini`, `copilot`.
+often when `afk-agent-relay` relayed the implementation to another model. In
+design mode the flag names the design's author, not the code implementer (see
+"Run it"). Known families: `claude`, `codex`, `kimi`, `glm`, `deepseek`, `mimo`, `gemini`, `copilot`.
 
 **Known gap:** `CLAUDECODE` identifies the driver, not the model. A Claude
 implementer driven from Copilot, Cursor, CI, or a plain terminal leaves it
@@ -55,8 +64,25 @@ limited to the snapshot it was sent.
 
 ## Metering
 
-Metered like any external gate. Batch confirmed structural findings into one fix
-pass, self-review, then re-run once. Defer minor items to a single final pass.
+Metered like any external gate. Batch minimal admitted P1 fixes into one content pass, self-review, then re-run once. Record every other
+disposition together at the end without editing a clean revision.
+
+## Review receipts
+
+To retain canonical inputs and explicit outcomes, use the optional
+`--review-receipt <request.json>` flag under the
+[shared receipt contract](../afk/SKILL.md#canonical-review-receipts). Preserve
+unknown identity explicitly; skipped or incomplete attempts and previews never
+supply approval.
+
+## Review context
+
+Use the [shared context contract](../afk/SKILL.md#supported-review-context) to
+carry frozen acceptance scope and named prior findings with accessible proof.
+`--review-phase re-review --review-context <packet.json>` preserves the selected
+review target while supplying closure context; `--print-args` reports its digest.
+Use `--print-prompt` to inspect the supplied section before a provider call.
+Required history is validated and never silently truncated.
 
 ## Run it
 
@@ -67,12 +93,30 @@ skill's own directory. If `.afk/` is absent, the `afk-init` bootstrap runs
 automatically first:
 
 ```text
-node "<helper-dir>/claude-gate.mjs" --implementer codex
+node "<helper-dir>/claude-gate.mjs"
 ```
 
 Run it in the **background** with a generous timeout; redirect stdout to a file
 and read it when it completes. Pass through any target flag (`--base <branch>` /
 `--commit <sha>` / `--uncommitted`). Do not poll in a sleep loop.
+
+Pass `--implementer <family>` when another model wrote the change. In design
+mode (`--design`) the flag instead names the design's **author**, never the
+eventual code implementer — see `../afk/SKILL.md` ("Design-stage external
+gate"): declaring the code implementer there can hand a driver-authored design
+to the driver's own model for review. A persistent `implementer:` line in
+`.afk/config.md` also names the code implementer, and in design mode it can
+wrongly block that family's independent review of a driver-authored design —
+declare the design's author explicitly then: the per-run flag outranks the
+config line.
+
+Add the flag only when that other model *actually* produced the artifact under
+review — it can permit a run as well as block one (Independence above), so a
+value copied in from an example defeats the self-skip this gate exists for.
+
+**The review is bounded** by `CLAUDE_REVIEW_TIMEOUT_MS` (default 15 min), with
+`AFK_REVIEW_TIMEOUT_MS` as the shared fallback. A timeout is a non-zero `ERROR`,
+never a partial verdict; it follows the role's transient retry rule.
 
 **Design mode** (`--design <path>`) reviews a design document's reasoning instead
 of a diff — the opt-in design-stage gate (see `../afk/SKILL.md`, "Design-stage
@@ -80,7 +124,7 @@ external gate"). The reviewer keeps its read-only `Read,Grep,Glob` tools, so it
 can check whether the code says what the design claims. A missing or unreadable
 `--design` path fails loudly (`ERROR`, non-zero), never a skip.
 
-Read the verdict between the `===== CLAUDE REVIEW (final message) =====` markers.
+Read the verdict between the `===== CLAUDE REVIEW (final message) =====` markers. Treat only column-0 marker lines as markers; the last END marker wins.
 A `SKIPPED: …` line is not a failure — record it and continue per the `afk`
 gate-selection rule. The reasons are distinct on purpose, so the ledger can tell
 "correctly declined" from "could not review":
@@ -91,6 +135,9 @@ gate-selection rule. The reasons are distinct on purpose, so the ledger can tell
 - `SKIPPED: Claude CLI not installed …`
 - `SKIPPED: Claude not authenticated (HTTP 401) …`
 - `SKIPPED: Configured model "…" is unavailable (HTTP 404) …`
+- `SKIPPED: Claude is rate-limited or out of quota (HTTP 429) …` — the
+  selection rule treats a rate-limited reviewer as unavailable; the next gate
+  in priority takes its place.
 - `SKIPPED: No changes found for …`
 
 An `ERROR: …` line with a non-zero exit means the gate ran and could not produce
@@ -100,27 +147,46 @@ a verdict; that is not a clean round.
 
 Same discipline as the other gate skills:
 
-1. Sort structural findings from minor items.
-2. Verify each finding to the standard below.
-3. Fix confirmed structural findings in one batch and sweep for the same pattern.
+1. Map every hypothesis to the frozen contract and apply the P1 admission rule.
+2. Verify its trigger and consequence; a reviewer severity is only a proposal.
+3. Fix confirmed structural findings in one batch, including in-scope P2.
 4. Self-review once.
 5. Re-run the gate once if structural findings were fixed.
-6. Resolve minor items in a single final pass without another gate round.
+6. Resolve documentation and cosmetic items in one final pass without another
+   gate call for that pass alone.
 
-A structural finding claims both that the code is as described and that it goes
-wrong; reading the cited `file:line` settles only the first. Demonstrate the
-consequence before fixing, and account for every consumer of what you change
-that lives outside the diff — `../afk/SKILL.md` ("External gate") holds both
-rules.
+Treat every reported finding as `UNTRIAGED`. Admit P1 only after mapping it to
+the frozen issue contract or an invariant, demonstrating a reachable trigger
+and wrong consequence, explaining why the current artifact cannot safely
+advance, and naming the minimal causal fix. Do not edit for an untriaged claim;
+fix confirmed in-scope structural P2 or record its deferral for the operator-owned
+merge boundary; collect minor items for one final pass and defer out-of-scope work.
+
+Fix confirmed in-scope structural findings, including P2, in one batch.
+Defer documentation and cosmetic items to one final pass after structural
+closure. A recorded decision may defer a structural P2 to the operator-owned
+merge boundary. Unverified or out-of-scope suggestions authorize no edits.
+
+Use the issue-wide allowance and finding record in `../afk/SKILL.md`
+("Review-cycle allowance"). Initial review is comprehensive; re-review checks
+accepted findings, the intervening diff, and affected regression paths. Broader
+investigation requires specific evidence of an affected area. New evidenced
+in-scope blockers remain reportable. Supply prior findings and verification
+through supported context; missing context is unavailable, never invented.
+Reviewer identity alone does not reopen a closed finding. Exhaustion leaves
+unresolved work `OUTSTANDING`; finish the current cycle's validation without
+starting another repair or requesting another round automatically.
 
 Apply any invariant in `.afk/config.md` as an extra lens.
 
 ## Stop rule
 
 Stop when the loop-termination rule in `../afk/SKILL.md` ("External gate")
-holds: a round with no new structural finding and every prior structural
-finding closed by a recorded disposition — a driver-verified fix, a
-refutation, or an accepted risk.
+holds: triage leaves no `UNTRIAGED`, `Contested`, or open admitted P1, and every
+lower-severity item has a recorded disposition that does not block the role stamp (a
+structural P2 may still bar auto-merge). That same verdict
+earns the role stamp only if it requires no content change; a content fix
+invalidates it and the role re-reviews the fixed revision.
 
 Report `CLEAN`, or `OUTSTANDING` with what remains. A clean pass is not
 authority to merge.

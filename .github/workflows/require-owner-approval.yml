@@ -8,7 +8,7 @@ name: require-owner-approval
 
 on:
   pull_request:
-    types: [opened, reopened, synchronize]
+    types: [opened, reopened, synchronize, ready_for_review]
   pull_request_review:
     types: [submitted, dismissed]
 
@@ -18,6 +18,7 @@ permissions:
 
 jobs:
   gate:
+    if: github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -37,8 +38,11 @@ jobs:
             exit 0
           fi
           head=$(gh api "repos/$REPO/pulls/$PR" --jq '.head.sha')
-          approvers=$(HEAD_SHA="$head" gh api "repos/$REPO/pulls/$PR/reviews" \
-            --jq '[.[] | select(.state=="APPROVED") | select(.commit_id==env.HEAD_SHA) | .user.login] | unique | .[]')
+          if ! approvers=$(HEAD_SHA="$head" gh api "repos/$REPO/pulls/$PR/reviews" --paginate \
+            --jq '[.[] | select(.state=="APPROVED") | select(.commit_id==env.HEAD_SHA) | .user.login] | unique | .[]'); then
+            echo "::error::Could not fetch complete review history."
+            exit 1
+          fi
           for u in $approvers; do
             if [ "$(perm_of "$u")" = "admin" ]; then
               echo "Approved on the current head commit by an admin ($u)."

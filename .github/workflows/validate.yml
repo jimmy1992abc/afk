@@ -6,6 +6,8 @@ name: validate
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -17,6 +19,7 @@ concurrency:
 
 jobs:
   checks:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -53,7 +56,9 @@ jobs:
 
       - name: Version bump
         if: github.event_name == 'pull_request'
-        run: node scripts/check-version-bump.mjs --base "origin/${{ github.base_ref }}"
+        env:
+          GH_BASE_REF: ${{ github.base_ref }}
+        run: node scripts/check-version-bump.mjs --base "origin/$GH_BASE_REF"
 
       - name: Markdown lint
         run: npx --yes markdownlint-cli2@0.23.0
@@ -62,7 +67,8 @@ jobs:
         run: |
           set -e
           ver=8.30.1
-          curl -sSL -o /tmp/gitleaks.tgz \
+          curl -fLsS -o /tmp/gitleaks.tgz \
             "https://github.com/gitleaks/gitleaks/releases/download/v${ver}/gitleaks_${ver}_linux_x64.tar.gz"
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  /tmp/gitleaks.tgz" | sha256sum --check --strict
           tar -xzf /tmp/gitleaks.tgz -C /tmp gitleaks
           /tmp/gitleaks detect --source . --config .gitleaks.toml --no-banner --redact

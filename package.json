@@ -1,6 +1,6 @@
 {
   "name": "afk-skills",
-  "version": "0.2.11",
+  "version": "1.0.0",
   "description": "Autonomous PR-pipeline skills for AI coding agents",
   "license": "Apache-2.0",
   "private": true,
@@ -11,6 +11,7 @@
     "sync:check": "node scripts/sync-marketplace.mjs --check",
     "lint:skills": "node scripts/lint-skills.mjs",
     "lint:links": "node scripts/check-links.mjs",
+    "lint:md": "npx --yes markdownlint-cli2@0.23.0",
     "scan:provenance": "node scripts/scan-provenance.mjs",
     "check:version": "node scripts/check-version-bump.mjs",
     "check:update": "node scripts/update-check.mjs"

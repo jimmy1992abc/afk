@@ -20,6 +20,8 @@ const gates = {
   claude: read('../skills/afk-claude-review/SKILL.md'),
   kimi: read('../skills/afk-kimi-review/SKILL.md'),
   glm: read('../skills/afk-glm-review/SKILL.md'),
+  deepseek: read('../skills/afk-deepseek-review/SKILL.md'),
+  mimo: read('../skills/afk-mimo-review/SKILL.md'),
 };
 
 test('afk SKILL.md defines the design-stage gate step and its placement', () => {
@@ -28,16 +30,13 @@ test('afk SKILL.md defines the design-stage gate step and its placement', () => 
   assert.match(afkSkill, /--design/, 'the selector the step uses must appear');
 });
 
-test('afk SKILL.md pins the one-round-per-version and cap-2 rule', () => {
-  // Whitespace-tolerant: these phrases legitimately wrap across a line.
-  assert.match(afkSkill, /one\s+(external\s+)?gate\s+per\s+design\s+version|one\s+round\s+per\s+design\s+version/i);
-  assert.match(afkSkill, /2\s+per\s+issue|two\s+per\s+issue|cap(?:ped)?\s+(?:at|of)\s+2/i);
+test('design-stage review shares the issue allowance without a permission loop', () => {
+  assert.match(afkSkill, /later evaluations share the issue's review-cycle allowance/i);
+  assert.doesNotMatch(afkSkill, /hard cap 2 per\s+issue|cap(?:ped)?\s+(?:at|of)\s+2/i);
 });
 
-test('afk SKILL.md pins P1-escalate-at-cap for the design gate', () => {
-  // At the cap a still-open design P1 escalates; only a P2 may be accept-recorded.
-  assert.match(afkSkill, /P1/);
-  assert.match(afkSkill, /escalate/i);
+test('a clean debate and clean design gate advance without a false no-progress stop', () => {
+  assert.match(afkSkill, /clean terminal round (advances the waterfall and )?never counts\s+as stalled/i);
 });
 
 test('afk SKILL.md pins the baseline-before-gate rule', () => {
@@ -80,4 +79,35 @@ test('every gate SKILL.md documents design mode and the --design selector', () =
   for (const [name, text] of Object.entries(gates)) {
     assert.match(text, /--design/, `${name} SKILL.md must document --design`);
   }
+});
+
+test('design-stage finding vocabulary includes contested', () => {
+  assert.match(afkSkill, /fixed \/ refuted \/ deferred \/ suppressed \/ contested/i);
+});
+
+// The `--implementer` rule is one doctrine with two modes (PR: code
+// implementer; design: the design's author). The block is byte-identical in
+// every gate skill so drift in any copy fails here, not in a review.
+const IMPLEMENTER_RULE_RE = /Pass `--implementer <family>` when another model wrote the change\.[\s\S]*?the per-run flag outranks the\nconfig line\./;
+
+test('every gate SKILL.md carries the identical implementer rule block', () => {
+  const blocks = Object.entries(gates).map(([name, text]) => {
+    const match = text.match(IMPLEMENTER_RULE_RE);
+    assert.ok(match, `${name} SKILL.md must carry the implementer rule block`);
+    return [name, match[0]];
+  });
+  const [refName, ref] = blocks[0];
+  for (const [name, block] of blocks.slice(1)) {
+    assert.equal(block, ref, `${name} implementer rule must be byte-identical to ${refName}'s`);
+  }
+});
+
+test('the claude sample command does not hardcode the permitting flag', () => {
+  // `--implementer` is the one flag that can PERMIT a run; a copy-paste sample
+  // carrying it converts the intended self-skip into self-review.
+  assert.doesNotMatch(gates.claude, /claude-gate\.mjs" --implementer/);
+});
+
+test('the kimi skill carries the requested-not-enforced read-only caveat', () => {
+  assert.match(gates.kimi, /not enforced by construction/);
 });
