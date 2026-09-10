@@ -46,8 +46,8 @@ describe('isBehind', () => {
     assert.equal(isBehind('2.0.0', '1.9.9'), false);
   });
 
-  test('non-numeric parts count as 0', () => {
-    assert.equal(isBehind('1.2.x', '1.2.1'), true);
+  test('invalid versions never produce an ordering claim', () => {
+    assert.equal(isBehind('1.2.x', '1.2.1'), false);
   });
 });
 

@@ -13,6 +13,9 @@ node_modules/
 # afk personal state, if afk is ever run against this repo
 .afk/
 
+# Local provider credentials must never be tracked.
+.env
+
 # Scratch
 *.log
 tmp/

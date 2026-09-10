@@ -11,25 +11,22 @@ import { test } from 'node:test';
 const afkSkill = readFileSync(new URL('../skills/afk/SKILL.md', import.meta.url), 'utf8');
 const planner = readFileSync(new URL('../skills/afk-spec-planner/SKILL.md', import.meta.url), 'utf8');
 
-test('the debate has exit criteria, so the cap cannot pass a P1 by running out', () => {
-  // The gap this closes: a round cap bounds spend, not correctness. Without
-  // this, round 3 ending on an unresolved P1 let the pipeline proceed with
-  // known uncertainty and no record.
+test('the debate has evidence-based exit criteria without a round permission gate', () => {
   assert.match(afkSkill, /Exit criteria/);
-  assert.match(afkSkill, /\*\*do\s*\n?\s*not start implementing\*\*/);
-  assert.match(afkSkill, /Never proceed past a P1 because the rounds ran out/);
-  assert.match(afkSkill, /never implement a\s*\n?\s*revision the cap left unreviewed/);
+  assert.match(afkSkill, /\*\*do not start\s+implementing\*\*/i);
+  assert.match(afkSkill, /round\s+count never (asks|requests|becomes)/i);
+  assert.doesNotMatch(afkSkill, /~3 rounds is the cap|refuses to start a fourth\s+sequence/i);
 });
 
-test('the cap asks the clean-round question rather than a parallel one', () => {
-  // The root of four gate rounds: the exit criteria restated the clean round's
-  // condition as "unresolved findings" instead of referencing it, and the two
-  // drifted every time the loop moved — undefined labels, then a P2 revision
-  // exiting clean, then a P2 revision at the cap with no defined outcome. One
-  // definition, referenced everywhere, has no seam to drift along.
-  assert.match(afkSkill, /has the design in front of you had a clean\s*\n?\s*round/);
+test('an unfixable verified P1 remains an operator authority decision', () => {
+  assert.match(afkSkill, /abandoning or replanning a verified P1/i);
+  assert.match(afkSkill, /cannot be fixed inside the frozen contract/i);
+});
+
+test('the debate requires closure and respects the shared allowance', () => {
+  assert.match(afkSkill, /has the\s+design in front of you had a clean\s+round/);
   assert.match(afkSkill, /revised after its last clean round/);
-  assert.match(afkSkill, /the cap changes nothing/);
+  assert.match(afkSkill, /two consecutive unfinished rounds without material progress/i);
 });
 
 test('the exit criteria are stated as doctrine, not as a mechanism', () => {
@@ -48,13 +45,18 @@ test('the severities the exit criteria turn on are actually defined', () => {
   assert.match(afkSkill, /Every finding carries a severity/);
   assert.match(afkSkill, /\*\*P1\*\* — the design is wrong/);
   assert.match(afkSkill, /\*\*P2\*\* — a real weakness the design survives/);
-  assert.match(afkSkill, /unlabelled finding is a P1 until someone labels it/);
+  assert.match(afkSkill, /\*\*minor\*\* —/);
+  assert.match(afkSkill, /unlabelled finding (starts|is) `UNTRIAGED`/i);
+  assert.doesNotMatch(afkSkill, /unlabelled finding is a P1/);
 });
 
-test('a supported P1 cannot end the debate before the cap is ever reached', () => {
-  // The exit criteria only governed the cap, so a round-one supported P1 let a
-  // compliant driver call the debate done and implement — the halt rule never
-  // fired. The normal exit has to be the clean round, not the cap.
+test('an unavailable load-bearing claim has a demonstrable P1 consequence', () => {
+  assert.match(afkSkill, /load-bearing claim/i);
+  assert.match(afkSkill, /explicitly depends on it/i);
+  assert.match(afkSkill, /can(?:not|'t) verify it by any available\s+safe means/i);
+});
+
+test('a supported P1 cannot end the debate without a clean round', () => {
   assert.match(afkSkill, /A clean round ends the debate/);
   assert.match(afkSkill, /Implementation starts here\s*\n?\s*and nowhere earlier/);
   assert.match(afkSkill, /only by a round that revalidates it by name\s*\n?\s*and reports it resolved/);
@@ -78,7 +80,7 @@ test('any revision gets another round, whatever severity prompted it', () => {
   // on exactly the unreviewed edit the next line warns about. A P2 is either
   // accepted without touching the design, or it is a revision like any other.
   assert.match(afkSkill, /no revision made this round/);
-  assert.match(afkSkill, /accept it knowingly and record it in the\s*\n?\s*ledger/);
+  assert.match(afkSkill, /revise or mark it `Deferred` with its\s+reason/);
   assert.match(afkSkill, /A revision is a new design/);
 });
 
@@ -132,7 +134,11 @@ test('the planner and the debate accept the same evidence', () => {
   assert.match(afkSkill, /Source, official documentation, or a recorded fixture/);
 });
 
-test('the round-cap concept stays out of the planner, which has no such step', () => {
-  // afk owns the debate; the planner produces the plan and stops.
+test('the planner freezes the contract while leaving debate orchestration to afk', () => {
+  assert.match(planner, /frozen issue contract/i);
+  assert.match(planner, /acceptance criteria/i);
+  assert.match(planner, /invariants/i);
+  assert.match(planner, /out of scope/i);
+  assert.match(planner, /smallest causal boundary/i);
   assert.doesNotMatch(planner, /debate|round cap|external gate/i);
 });

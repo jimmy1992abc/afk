@@ -14,22 +14,34 @@ const read = (p) =>
   readFileSync(new URL(p, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 
 const afkSkill = read('../skills/afk/SKILL.md');
+const internalReview = read('../skills/afk-internal-review/SKILL.md');
+const pilot = read('../skills/afk-implementation-pilot/SKILL.md');
 const gates = {
   codex: read('../skills/afk-codex-review/SKILL.md'),
   claude: read('../skills/afk-claude-review/SKILL.md'),
   kimi: read('../skills/afk-kimi-review/SKILL.md'),
   glm: read('../skills/afk-glm-review/SKILL.md'),
+  deepseek: read('../skills/afk-deepseek-review/SKILL.md'),
+  mimo: read('../skills/afk-mimo-review/SKILL.md'),
 };
 
 // The summary every gate skill carries, byte-identical. The driver holds the
 // full rules; a gate skill is loadable standalone, so the summary sits where
 // findings are handled and must not drift the way the old stop rules did.
 const TRIAGE_SENTENCE = [
-  'A structural finding claims both that the code is as described and that it goes',
-  'wrong; reading the cited `file:line` settles only the first. Demonstrate the',
-  'consequence before fixing, and account for every consumer of what you change',
-  'that lives outside the diff — `../afk/SKILL.md` ("External gate") holds both',
-  'rules.',
+  'Treat every reported finding as `UNTRIAGED`. Admit P1 only after mapping it to',
+  'the frozen issue contract or an invariant, demonstrating a reachable trigger',
+  'and wrong consequence, explaining why the current artifact cannot safely',
+  'advance, and naming the minimal causal fix. Do not edit for an untriaged claim;',
+  'fix confirmed in-scope structural P2 or record its deferral for the operator-owned',
+  'merge boundary; collect minor items for one final pass and defer out-of-scope work.',
+].join('\n');
+
+const BATCH_SENTENCE = [
+  'Fix confirmed in-scope structural findings, including P2, in one batch.',
+  'Defer documentation and cosmetic items to one final pass after structural',
+  'closure. A recorded decision may defer a structural P2 to the operator-owned',
+  'merge boundary. Unverified or out-of-scope suggestions authorize no edits.',
 ].join('\n');
 
 const countMatches = (text, re) => (text.match(new RegExp(re, 'g')) ?? []).length;
@@ -37,9 +49,9 @@ const countMatches = (text, re) => (text.match(new RegExp(re, 'g')) ?? []).lengt
 test('the driver states each triage rule exactly once', () => {
   for (const phrase of [
     /A finding asserts two things; reading settles one/,
-    /restating the finding is not a\s+demonstration/,
+    /Restating the finding is not a\s+demonstration/,
     /Account for the fix's reach before it lands/,
-    /consumers outside it are invisible to\s+every reviewer in the loop/,
+    /consumers outside it are invisible to\s+every\s+reviewer in the loop/,
   ]) {
     assert.equal(
       countMatches(afkSkill, phrase.source),
@@ -52,22 +64,56 @@ test('the driver states each triage rule exactly once', () => {
 test('an undemonstrated consequence is recorded, not fixed', () => {
   // The incident this rule answers: the shape was confirmed, the asserted
   // consequence never was, and the fix landed anyway.
-  assert.match(afkSkill, /evidence against the finding, not\s+licence to fix it anyway/);
+  assert.match(afkSkill, /evidence against the\s+finding, not licence to fix it anyway/);
   assert.match(afkSkill, /leave the code as it is/);
-  // Refuted is closed by a recorded disproof, so failing to demonstrate must
-  // not reach it — that exit would close a load-bearing finding without the
-  // operator escalation the unverified path carries.
-  assert.match(afkSkill, /An affirmative disproof records it Refuted/);
-  assert.match(afkSkill, /keeps\s+a load-bearing finding on the escalation path/);
+  assert.match(afkSkill, /An affirmative disproof records it\s+Refuted/);
+  assert.match(afkSkill, /untriaged claim never\s+authorizes a code change/);
 });
 
-test('an unaccountable consumer narrows or defers the fix, and never blocks', () => {
+test('an unaccountable consumer narrows or defers the fix without expanding scope', () => {
   assert.match(afkSkill, /not licence to\s+proceed/);
   assert.match(afkSkill, /narrow the fix to the caller inside the diff/);
-  assert.match(afkSkill, /record the finding\s+Accepted with a follow-up issue/);
+  assert.match(afkSkill, /record the finding\s+Deferred/i);
+  assert.match(afkSkill, /does not create a\s+follow-up issue automatically/i);
 });
 
-test('all four gate skills carry the identical triage sentence', () => {
+test('P1 admission is scope-anchored and evidence-complete', () => {
+  for (const phrase of [
+    /frozen issue contract or an invariant/,
+    /reachable (condition|trigger)/,
+    /wrong (outcome|consequence)/,
+    /cannot safely (enter|advance)/,
+    /minimal causal fix/,
+  ]) assert.match(afkSkill, phrase);
+  assert.match(afkSkill, /unlabelled finding (starts|is) `UNTRIAGED`/i);
+  assert.match(afkSkill, /never\s+authorizes a code change/i);
+});
+
+test('stable finding identity prevents evidence-free reopening and oscillation', () => {
+  assert.match(afkSkill, /stable ID/);
+  assert.match(afkSkill, /Rewording the same consequence is the same finding/i);
+  assert.match(afkSkill, /new evidence or a different\s+observable\s+consequence/i);
+  assert.match(afkSkill, /Suppressed/);
+  assert.match(afkSkill, /Contested/);
+  assert.match(afkSkill, /executable check|reproducible verification artifact/i);
+  assert.match(afkSkill, /different (role|provider)/i);
+  assert.match(afkSkill, /bars? (the role stamp and )?auto-merge/i);
+  assert.match(afkSkill, /previous verification no longer applies/i);
+  assert.match(afkSkill, /new evidence/i);
+  assert.match(afkSkill, /A→B→A/);
+});
+
+test('structural P2 risk remains operator-owned at auto-merge', () => {
+  assert.match(afkSkill, /structural P2/i);
+  assert.match(afkSkill, /does not block the role stamp/i);
+  assert.match(afkSkill, /bars auto-merge/i);
+  assert.match(afkSkill, /operator[^.]*merge boundary/i);
+  assert.match(afkSkill, /minor[^.]*out-of-scope[^.]*do not bar auto-merge/i);
+  assert.match(internalReview, /operator merge decision pending/i);
+  assert.match(internalReview, /operator owns that risk at the merge boundary/i);
+});
+
+test('all gate skills carry the identical triage sentence', () => {
   for (const [name, text] of Object.entries(gates)) {
     assert.equal(
       countMatches(text, TRIAGE_SENTENCE.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
@@ -75,6 +121,41 @@ test('all four gate skills carry the identical triage sentence', () => {
       `expected exactly one copy of the triage sentence in ${name} gate skill`,
     );
   }
+});
+
+test('confirmed structural P2 repairs remain in scope', () => {
+  assert.match(afkSkill, /confirmed in-scope structural findings, including P2/i);
+  assert.match(afkSkill, /one final pass after structural/i);
+  assert.match(afkSkill, /Unverified or out-of-scope suggestions authorize no edits/i);
+});
+
+test('all gate skills carry the identical value-aware batch rule', () => {
+  for (const [name, text] of Object.entries(gates)) {
+    assert.equal(
+      countMatches(text, BATCH_SENTENCE.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+      1,
+      `expected exactly one copy of the batch sentence in ${name} gate skill`,
+    );
+    assert.doesNotMatch(text, /P2\/minor observations without implementation/i);
+  }
+});
+
+test('implementation and internal review share the minimal-fix boundary', () => {
+  for (const text of [pilot, internalReview]) {
+    assert.match(text, /confirmed in-scope structural findings, including P2/i);
+    assert.match(text, /one final pass after structural/i);
+    assert.match(text, /Unverified or out-of-scope suggestions authorize no edits/i);
+  }
+});
+
+test('evidence-free repeats stay closed across reviewer identities', () => {
+  assert.match(afkSkill, /recorded `Suppressed` without reopening it/i);
+  assert.match(afkSkill, /different role\/provider.*alone/s);
+  assert.match(afkSkill, /no edit, reopening, or extra paid review/i);
+});
+
+test('structural P2 remains operator-owned', () => {
+  assert.match(afkSkill, /structural P2 remains operator-owned/i);
 });
 
 test('the retired shape-only verification standard does not return', () => {

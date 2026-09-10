@@ -1,31 +1,59 @@
 # Branch protection
 
-The owner applies this ruleset to `main` in repository settings; it is the
-primary enforcement of owner-only review. The `require-owner-approval` workflow
-is defense in depth beside it, not a replacement.
+Required GitHub controls make the documented PR path apply to repository updates.
+Owner review remains workflow doctrine; the current `gate` accepts an admin-authored
+PR automatically and therefore does not establish that a human reviewed it.
+The separate admin-author identity policy is outside this settings change.
 
-## `main` ruleset (applied)
+## Intended main controls
 
-- **Require a pull request before merging** — no direct pushes to `main`.
-  - Native required approvals: **0**. A solo owner cannot approve their own PR,
-    so a non-zero native count would deadlock every owner-authored PR. Owner
-    review is enforced by the `gate` status check instead (see below), and
-    `CODEOWNERS` still routes review requests to the owner.
-  - Dismiss stale approvals when new commits are pushed.
-- **Require status checks to pass**, branches up to date (strict):
-  - `checks` — the `validate` suite.
-  - `gate` — `require-owner-approval`; red until an owner/maintainer approval
-    lands on the current head commit, and green automatically for
-    owner-authored PRs.
-- **Enforce for administrators** — no bypass.
-- **Require conversation resolution** before merging.
-- **Require linear history** (squash-merge only; merge commits and rebase are
-  disabled in repository settings).
-- **Block force pushes** and **branch deletion** (applies to everyone).
+The repository ruleset for `refs/heads/main` is active with no bypass actors:
 
-## Why the extra workflow
+- Require a pull request, with zero native required approvals, stale-review
+  dismissal and resolved review conversations. Zero preserves the existing
+  admin-author policy without making owners approve their own PRs.
+- Require `checks` and `gate` from GitHub Actions, with strict up-to-date checks.
+- Require linear history; prohibit force pushes and branch deletion.
+- Allow squash merging only, both in the PR rule and repository settings.
 
-Some of the above are settings-only and cannot be expressed in-repo. The
-`require-owner-approval` workflow fails any PR that lacks an owner/maintainer
-approval (unless an owner/maintainer authored it), so the guarantee travels with
-the repository even if a setting is later relaxed.
+These controls constrain updates while the settings remain active. Administrators
+can change settings; neither this document nor a workflow guarantees otherwise.
+`gate` applies its existing admin-permission/current-head approval policy, with
+its admin-author exemption. `CODEOWNERS` routes requests but is not proof of review.
+
+## Read-only drift audit
+
+Run from an authenticated GitHub CLI environment with permission to read ruleset
+bypass settings:
+
+```bash
+node scripts/audit-branch-protection.mjs OWNER/REPO
+```
+
+`COMPLIANT` exits 0, verified `DRIFT` exits 1, and `UNVERIFIABLE` exits 2 for API
+failures or incomplete evidence. The command reads repository merge methods,
+main's protection flag, all pages of effective main rules and repository ruleset
+details. It expects one complete active repository ruleset with no bypass;
+it does not infer compliance from a failed lookup or compose organization policy.
+It never changes settings. This is a point-in-time audit, not a required CI gate.
+
+## Observation and transition
+
+The 2026-09-07 preparation audit observed no effective main rules, an unprotected
+main branch, and merge/rebase/squash all enabled. That evidence supersedes the
+previous unsupported “applied” description. Live application requires an API
+receipt; run the audit to establish current state rather than treating this
+historical observation as current compliance.
+
+The legacy sync workflow pushes manifest repairs directly to main, so disable it
+and verify its disabled state before activating the ruleset. Keep it disabled
+until the reviewed read-only workflow has reached main, then re-enable it.
+Record any partial application as incomplete and verify each setting before
+claiming completion; do not grant the workflow a bypass to restore its writes.
+
+The replacement workflow checks consistency with read-only permissions. Authors
+run `node scripts/sync-marketplace.mjs` locally and submit generated changes in
+the same reviewed topic PR, so manifest repair follows the protected path.
+
+GitHub documents the [effective rules and ruleset APIs](https://docs.github.com/en/rest/repos/rules)
+and [workflow disable/enable APIs](https://docs.github.com/en/rest/actions/workflows).

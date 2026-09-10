@@ -37,9 +37,11 @@ export const config = {
   modelEnv: 'AGENT_RELAY_BRIEF_MODEL',
   systemPrompt: SYSTEM,
   validate: validateBrief,
-  buildUser: (args, gctx) =>
-    `TASK: ${args.task}\n\nGATHER NOTES: ${gctx.notes.join(' ') || '(none)'}\n\n` +
-    `=== CONTEXT ===\n${gctx.text || '(no context gathered)'}`,
+  buildInput: (args, gctx) => ({
+    prefix: `TASK: ${args.task}\n\nGATHER NOTES: ${gctx.notes.join(' ') || '(none)'}\n\n` +
+      '=== CONTEXT ===\n',
+    context: gctx.text || '(no context gathered)',
+  }),
 };
 
 export function run(io) {

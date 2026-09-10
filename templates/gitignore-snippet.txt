@@ -1,2 +1,4 @@
 # afk — personal, per-developer run state (config, reports, ledger)
 .afk/
+# Local provider credentials stay outside version control.
+.env

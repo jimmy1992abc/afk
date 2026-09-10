@@ -3,7 +3,7 @@
 //
 // Runs a READ-ONLY structural review of a branch/commit/uncommitted diff via
 // `claude -p` and prints ONLY the final review between markers (transcript ->
-// log file). External review gate, interchangeable with the other afk gates.
+// log file). External reviewer that can fill a configured ordered AFK role.
 //
 // Read-only by construction: the reviewer session loads `Read,Grep,Glob` and
 // nothing else. It has no shell, so there is no command allowlist to maintain
@@ -26,26 +26,61 @@
 // Claude.
 
 import { spawnSync } from 'node:child_process';
-import { closeSync, mkdtempSync, openSync, writeSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { closeSync, openSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { isGateDisabled } from '../../lib/gate/env.mjs';
+import { isGateDisabled, isSpawnTimeout, reviewTimeoutMs } from '../../lib/gate/env.mjs';
+import { classifyChildOutcome, describeChildOutcome } from '../../lib/gate/child-outcome.mjs';
+import { failureDirection, httpFailureCode } from '../../lib/gate/failure.mjs';
 import { git } from '../../lib/gate/git.mjs';
 import { guardFor } from '../../lib/gate/implementer.mjs';
 import { isPinnedModelId, verifyReviewerIdentity } from '../../lib/gate/model-identity.mjs';
+import { resolveReviewSelection } from '../../lib/gate/model-select.mjs';
 import { buildDesignReviewPrompt, buildReviewPrompt } from '../../lib/gate/prompt.mjs';
-import { createProtocol } from '../../lib/gate/protocol.mjs';
+import { createReceiptProtocol } from '../../lib/gate/review-receipt.mjs';
+import { loadReviewContext } from '../../lib/gate/review-context.mjs';
+import { gateWorkDir } from '../../lib/gate/workdir.mjs';
+import { resolveCliBin, spawnViaShell, UNSAFE_SHELL_ARG } from '../../lib/gate/spawn.mjs';
 import { collectDiff, parseTarget, readDesign, validateTarget } from '../../lib/gate/target.mjs';
 
 const isWin = process.platform === 'win32';
-const { emitSkip, emitReview, emitError } = createProtocol({ label: 'CLAUDE', slug: 'claude-gate' });
+const { receipt, protocol, argv: receiptArgs } = createReceiptProtocol({
+  label: 'CLAUDE', slug: 'claude-gate', family: 'claude', argv: process.argv.slice(2),
+});
+const { emitSkip, emitError, emitVerifiedReview, emitPreview } = protocol;
+let selection;
+try {
+  selection = resolveReviewSelection({ family: 'claude', argv: receiptArgs });
+} catch (error) {
+  emitError(`cannot review — ${error.message}`, 1);
+}
+receipt.capture({ selection });
+
+// A target that could not be parsed is a caller error, and it must surface even
+// when the gate is switched off — placed after that exit, this check would be
+// unreachable in exactly the configuration that most needs to say why. Reads
+// argv directly: it runs before the shared `userArgs` binding exists.
+{
+  const early = parseTarget(receiptArgs);
+  // A design target names its document here, so a missing path is the same
+  // class of caller error as an unparseable target and must surface with it.
+  if (early.kind === 'error' || early.kind === 'design') {
+    const valid = validateTarget(early);
+    if (!valid.ok) emitError(`cannot review — ${valid.reason}`, 1);
+  }
+}
+
+const reviewContext = loadReviewContext({
+  argv: receiptArgs, target: parseTarget(receiptArgs),
+});
+if (reviewContext.error) emitError(`cannot review — ${reviewContext.error}`, 1);
+receipt.capture({ context: reviewContext });
 
 if (isGateDisabled('CLAUDE_REVIEW_GATE')) {
   emitSkip('Claude gate disabled via CLAUDE_REVIEW_GATE.');
 }
 
-const userArgs = process.argv.slice(2);
+const userArgs = selection.argv;
 const printArgsOnly = userArgs.includes('--print-args');
 // Prints the exact prompt the reviewer would receive, and calls no model. The
 // argv is not the review: asserting flags proved nothing about whether the
@@ -60,7 +95,9 @@ const isDesign = target.kind === 'design';
 // one about to self-skip, so a design target validates BEFORE the independence
 // guard. A diff target validates after it — a self-skipping gate need not
 // resolve a ref it will never review.
-if (isDesign) {
+// A target that could not be parsed is the same class of operator error: it
+// must surface, not become an exit-0 skip when the guard happens to decline.
+if (isDesign || target.kind === 'error') {
   const valid = validateTarget(target);
   if (!valid.ok) {
     emitError(`cannot review — ${valid.reason}`, 1);
@@ -84,6 +121,8 @@ if (!isDesign) {
     emitError(`cannot review — ${valid.reason}`, 1);
   }
 }
+
+receipt.capture({ target });
 
 // Design mode reviews a document's reasoning, not a diff, and never enters the
 // diff path. Everything below the design branch is diff-only.
@@ -175,13 +214,15 @@ if (isDesign) {
   prompt = buildReviewPrompt({ scope: target.label, context });
 }
 
+prompt += `\n${reviewContext.section}`;
+
 // ── Invocation ──────────────────────────────────────────────────────────────
 // A full model ID, never an alias: `--model opus` resolved to claude-opus-4-8
 // while the pipeline required a current generation, and nothing in the run said
 // so. Refused here rather than after the call — an alias is no more verifiable
 // afterwards, so accepting one would only spend a metered call to learn it.
-const model = (process.env.CLAUDE_REVIEW_MODEL || 'claude-opus-5').trim();
-const effort = (process.env.CLAUDE_REVIEW_EFFORT || 'medium').trim();
+const { model, effort } = selection;
+const timeoutMs = reviewTimeoutMs('claude');
 
 if (!isPinnedModelId(model)) {
   emitError(
@@ -211,10 +252,14 @@ const args = [
   '--no-session-persistence',
 ];
 
-const bin = (process.env.CLAUDE_GATE_BIN || 'claude').trim();
+// resolveCliBin: an npm-installed `claude.cmd` with no `.exe` is invisible to
+// libuv's Windows PATH search, so the shell-less spawn below ENOENTs and this
+// gate reports an installed CLI as missing. A no-op off Windows and whenever
+// libuv can find the name itself.
+const bin = resolveCliBin((process.env.CLAUDE_GATE_BIN || 'claude').trim());
 
 if (printPromptOnly) {
-  process.stdout.write(`${prompt}\n`);
+  emitPreview(`${prompt}\n`);
   process.exit(0);
 }
 
@@ -223,8 +268,11 @@ if (printArgsOnly) {
   // so target/base selection can be tested without spending a metered call.
   // Runs BEFORE the no-changes skip — a dry run on a clean tree must still be
   // able to report which base it resolved.
-  process.stdout.write(`${JSON.stringify({
+  emitPreview(`${JSON.stringify({
     bin,
+    model,
+    effort,
+    selectionSources: selection.sources,
     kind: target.kind,
     base: target.base ?? null,
     commit: target.commit ?? null,
@@ -234,6 +282,9 @@ if (printArgsOnly) {
     changedFiles,
     promptBytes: prompt.length,
     promptOnStdin: true,
+    reviewPhase: reviewContext.phase,
+    reviewContextDigest: reviewContext.digest,
+    timeoutMs,
     args,
   }, null, 2)}\n`);
   process.exit(0);
@@ -243,7 +294,9 @@ if (!hasChanges) {
   emitSkip(`No changes found for ${target.label}.`);
 }
 
-const work = mkdtempSync(join(tmpdir(), 'claude-gate-'));
+const workDir = gateWorkDir('claude-gate-');
+if (workDir.error) emitError(workDir.error, 1);
+const work = workDir.path;
 const logFile = join(work, 'claude.log');
 
 process.stderr.write(`[claude-gate] ${bin} -p --model ${model} --effort ${effort} (${changedFiles.length} files, ${prompt.length}B prompt via stdin)\n`);
@@ -257,7 +310,13 @@ function dropEmptyValued(argv, flag) {
   return i >= 0 && argv[i + 1] === '' ? [...argv.slice(0, i), ...argv.slice(i + 2)] : argv;
 }
 
-const spawnOpts = { input: prompt, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 };
+const spawnOpts = {
+  input: prompt,
+  encoding: 'utf8',
+  maxBuffer: 64 * 1024 * 1024,
+  timeout: timeoutMs,
+  killSignal: 'SIGKILL',
+};
 
 // No shell: it mangles empty args and imposes the command-line limit. A native
 // install (winget/installer/homebrew) launches directly.
@@ -267,8 +326,14 @@ let res = spawnSync(bin, args, spawnOpts);
 // shell (EINVAL). Retry there, minus the flag that cannot survive a shell.
 if (isWin && res.error && res.error.code === 'EINVAL') {
   process.stderr.write('[claude-gate] script shim detected; retrying via shell without --setting-sources (the read-only boundary is --tools and is unaffected)\n');
-  res = spawnSync(bin, dropEmptyValued(args, '--setting-sources'), { ...spawnOpts, shell: true });
+  // spawnViaShell, not a bare `shell: true`, for two reasons it owns: `bin` is
+  // often an absolute path, and an account named "First Last" puts a space in it
+  // that cmd.exe would split; and the prompt must reach stdin on an inherited
+  // descriptor, because `input` under a shell deadlocks this gate on timeout.
+  res = spawnViaShell(bin, dropEmptyValued(args, '--setting-sources'), spawnOpts);
 }
+
+receipt.capture({ execution: { exitCode: res.status ?? null, signal: res.signal ?? null, completion: null } });
 
 const out = res.stdout || '';
 const errOut = res.stderr || '';
@@ -278,6 +343,26 @@ try {
   closeSync(fd);
 } catch {
   // The transcript is a convenience; losing it must not fail the review.
+}
+
+if (isSpawnTimeout(res)) {
+  emitError(
+    `Claude review timed out after ${Math.round(timeoutMs / 1000)}s with no verdict. `
+    + 'Raise CLAUDE_REVIEW_TIMEOUT_MS or AFK_REVIEW_TIMEOUT_MS, or narrow the target. '
+    + 'Local transcript retained.',
+    1,
+  );
+}
+
+if (res.error && res.error.code === UNSAFE_SHELL_ARG) {
+  // Operator input this gate cannot carry, not a reviewer that is unavailable:
+  // ERROR, so the round is unclean and the target gets fixed, rather than SKIP,
+  // which would hand the review to the next family and hide the bad ref.
+  emitError(
+    'cannot review this target: an argument cannot be represented safely by the required '
+    + 'shell. Rename the ref or path, or install the CLI as a native binary.',
+    1,
+  );
 }
 
 if (res.error && res.error.code === 'ENOENT') {
@@ -290,6 +375,11 @@ if (!out.trim() && /is not recognized as|command not found|no such file/i.test(e
   emitSkip('Claude CLI not installed (see https://claude.com/claude-code), or set CLAUDE_REVIEW_GATE=off to disable this gate.');
 }
 
+const childOutcome = classifyChildOutcome(res);
+if (childOutcome && childOutcome.kind !== 'nonzero') {
+  emitError(`${describeChildOutcome('Claude', childOutcome)}; no review was accepted.`, 1);
+}
+
 // The exit code is NOT the signal: `claude -p --output-format json` exits 0 on
 // an API error and reports it in the envelope. Reading the exit code alone
 // would report a failed review as a clean one.
@@ -297,23 +387,42 @@ let envelope;
 try {
   envelope = JSON.parse(out);
 } catch {
+  if (childOutcome?.kind === 'nonzero') {
+    emitError(`${describeChildOutcome('Claude', childOutcome)}; no review was accepted.`, 1);
+  }
   emitError(`Claude produced no parseable result (exit ${res.status}). Transcript: ${logFile}`, res.status || 1);
 }
 
-if (envelope?.is_error) {
+const isErrorEnvelope = envelope?.is_error === true;
+if (childOutcome?.kind === 'nonzero' && !isErrorEnvelope) {
+  emitError(`${describeChildOutcome('Claude', childOutcome)}; no review was accepted.`, 1);
+}
+if (typeof envelope?.is_error !== 'boolean') {
+  emitError('Claude result envelope has no Boolean is_error status; no review was accepted.', 1);
+}
+
+if (isErrorEnvelope) {
   const status = envelope.api_error_status;
   const detail = String(envelope.result || '').slice(0, 300);
-  if (status === 401 || status === 403) {
-    emitSkip(`Claude not authenticated (HTTP ${status}) — log in with the Claude Code CLI, or set CLAUDE_REVIEW_GATE=off. ${detail}`);
+  // Direction is table-owned (lib/gate/failure.mjs): auth, rate-limit, and
+  // model-unavailable are UNAVAILABILITY — the next gate in priority takes
+  // this reviewer's place. Erroring on a quota blip would block the PR.
+  const code = status ? httpFailureCode(status) : 'http_error';
+  if (failureDirection(code) === 'skip') {
+    if (code === 'auth') {
+      emitSkip(`Claude not authenticated (HTTP ${status}) — log in with the Claude Code CLI, or set CLAUDE_REVIEW_GATE=off.${childOutcome ? '' : ` ${detail}`}`);
+    }
+    if (code === 'model_unavailable') {
+      const configured = childOutcome ? 'Configured Claude model' : `Configured model "${model}"`;
+      emitSkip(`${configured} is unavailable (HTTP 404) — set CLAUDE_REVIEW_MODEL to a model this account can use.${childOutcome ? '' : ` ${detail}`}`);
+    }
+    if (code === 'rate_limit') {
+      emitSkip(`Claude is rate-limited or out of quota (HTTP 429) — this gate cannot run right now; the next gate in priority should take its place.${childOutcome ? '' : ` ${detail}`}`);
+    }
+    emitSkip(`Claude is unavailable (HTTP ${status}).${childOutcome ? '' : ` ${detail}`}`);
   }
-  if (status === 404) {
-    emitSkip(`Configured model "${model}" is unavailable (HTTP 404) — set CLAUDE_REVIEW_MODEL to a model this account can use. ${detail}`);
-  }
-  if (status === 429) {
-    // afk's selection rule treats an out-of-credit or rate-limited reviewer as
-    // UNAVAILABLE, so the next gate in priority takes its place. Erroring here
-    // would instead mark the round unclean and block the PR on a quota blip.
-    emitSkip(`Claude is rate-limited or out of quota (HTTP 429) — this gate cannot run right now; the next gate in priority should take its place. ${detail}`);
+  if (childOutcome?.kind === 'nonzero') {
+    emitError(`${describeChildOutcome('Claude', childOutcome)}; no review was accepted.`, 1);
   }
   emitError(`Claude review failed${status ? ` (HTTP ${status})` : ''}: ${detail} Transcript: ${logFile}`, res.status || 1);
 }
@@ -322,6 +431,7 @@ if (envelope?.is_error) {
 // only the first is how a review written by an older generation reaches the
 // driver as a clean round.
 const identity = verifyReviewerIdentity(envelope?.modelUsage, model);
+receipt.capture({ model: { observed: identity.observed ?? null, verification: identity.ok ? 'verified' : identity.reason === 'mismatch' ? 'mismatch' : 'unavailable', reason: identity.ok ? null : identity.reason } });
 if (!identity.ok) {
   const detail = identity.reason === 'mismatch'
     ? `the result envelope reports ${identity.observed.map((m) => `"${m}"`).join(', ')} instead`
@@ -341,10 +451,11 @@ if (denials.length) {
   process.stderr.write(`[claude-gate] reviewer was denied ${denials.length} tool call(s); see ${logFile}\n`);
 }
 
-const review = String(envelope?.result || '').trim();
-if (!review) {
-  emitError(`Claude returned an empty review (exit ${res.status}). Transcript: ${logFile}`, res.status || 1);
-}
-
-emitReview(review);
+emitVerifiedReview(String(envelope?.result || ''), {
+  requireVerdict: true,
+  mode: target.kind === 'design' ? 'design' : 'diff',
+  emptyMessage: `Claude returned an empty review (exit ${res.status}). Transcript: ${logFile}`,
+  missingVerdictMessage: `Claude answered without the mandated verdict line; the review is discarded rather than presented as a verdict. Transcript: ${logFile}`,
+  exitCode: res.status || 1,
+});
 process.exit(0);
