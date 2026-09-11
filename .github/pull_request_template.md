@@ -13,3 +13,5 @@
 - [ ] `node scripts/sync-marketplace.mjs --check` is clean
 - [ ] `node --test` is green
 - [ ] Plugin `version` bumped if `skills/` or a bundled script changed
+- [ ] Release notes prepared and post-merge GitHub Release publication assigned
+      if the plugin version changed

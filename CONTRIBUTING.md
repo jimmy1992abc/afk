@@ -21,6 +21,9 @@ guide; this is the short human version.
    `skills/` or a bundled script. Keep repair batches Draft until local validation
    and the required reviews are clean, then mark Ready for review to trigger CI.
    Wait for the current revision's required CI runs before declaring merge-ready.
+7. If the plugin version changes, prepare release notes in the PR and complete
+   [Publishing a version](AGENTS.md#publishing-a-version) after merge and
+   successful CI.
 
 ## Adding or editing a skill
 
