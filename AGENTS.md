@@ -94,6 +94,26 @@ when a role matches the implementer or is unavailable. Every actual reviewer
 differs from the implementer and from every other role. CI green is necessary
 but not sufficient; the owner's review is the merge gate.
 
+## Publishing a version
+
+Every plugin version bump includes a matching GitHub Release so users can
+identify the shipped revision and its upgrade impact. Publication is a
+maintainer/agent workflow step; CI does not create releases automatically.
+
+- Prepare release notes with the version change, covering user-visible changes,
+  compatibility, and upgrade steps.
+- After owner review, merge, and successful required CI on the release commit,
+  create the tag and publish the GitHub Release against that full commit SHA.
+- Read the version from `.claude-plugin/marketplace.json` → `plugins[0].version`;
+  the tag is `v<version>` and all mirrored manifests must agree.
+- Verify any existing tag or release against the intended commit before reuse.
+  Never move a published tag to different code.
+- Verify the published release and tag target, then report the release URL.
+  If publication is unavailable or unauthorized, report it as pending rather
+  than declaring the version released.
+- Documentation-only changes that do not bump the plugin version need no new
+  tag or release.
+
 ## What this plugin can and cannot enforce
 
 These skills are markdown read by a host agent. **There is no afk runtime.**
