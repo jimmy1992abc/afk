@@ -26,10 +26,16 @@ into the plugin.
 - **Observed-host evaluations:** a manual campaign records execution evidence, transport history and independent scoring.
 - **Input handling:** credential detection distinguishes path-like prose and labelled digests from secret values.
 
-Structural P2 repairs remain supported, repair cycles have no numeric cap by default,
-and absent remote-CI configuration means `expected`. Explicit operator budgets remain
-binding; proportional increases require explicit authorization. Helpers validate
-artifacts when invoked and do not enforce agent compliance.
+### Defaults and availability
+
+| Setting | Version 1.1.0 behavior |
+| --- | --- |
+| Repair cycles | No numeric cap unless the operator sets one; confirmed in-scope structural P2 repairs remain supported. |
+| Remote CI | `expected` when unset; `off` selects local completion with all configured reviews and local checks. |
+| Direction audits | Off by default. Live dispatch requires a reviewed qualification matching the installed runtime; this version ships pending qualification. |
+| Resource budgets | Explicit operator limits remain binding; proportional increases require explicit authorization. |
+
+Helpers validate artifacts when invoked and do not enforce agent compliance.
 
 See the [direction rollout guide](docs/direction-rollout.md) before enabling audits.
 
@@ -44,9 +50,10 @@ plugin is built around:
 - **Evidence limits churn.** Focused re-review checks verified closure and
   affected regressions. Stalled work gets a root-cause checkpoint; explicit
   repair limits remain optional.
-- **A draft PR is not a finish line.** The waterfall has one end state: green
-  checks, a clean internal review, clean external roles, and the full test suite
-  passing on the final commit.
+- **A draft PR is not a finish line.** Completion requires a clean internal
+  review, clean external roles, and the full test suite passing on the final
+  commit. Enabled CI modes also require resolved remote checks; `remote-ci: off`
+  finishes locally without automatic publication.
 
 ## Quick start
 
