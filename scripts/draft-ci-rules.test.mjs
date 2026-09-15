@@ -5,11 +5,11 @@ import { test } from 'node:test';
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 const validate = read('.github/workflows/validate.yml');
 const owner = read('.github/workflows/require-owner-approval.yml');
-const driver = read('skills/afk/SKILL.md');
+const driver = read('skills/afk/SKILL.md') + read('skills/afk/references/publication.md');
 const pilot = read('skills/afk-implementation-pilot/SKILL.md');
 
 test('validation skips draft jobs while retaining main and manual validation', () => {
-  assert.match(validate, /jobs:\n  checks:\n    if: github\.event_name != 'pull_request' \|\| github\.event\.pull_request\.draft == false\n/);
+  assert.match(validate, /jobs:\n  checks:\n    if: \$\{\{ github\.event_name != 'pull_request' \|\| github\.event\.pull_request\.draft == false \}\}\n/);
   assert.match(validate, /  push:\n    branches: \[main\]/);
   assert.match(validate, /  workflow_dispatch:/);
 });
@@ -33,7 +33,7 @@ test('the waterfall finishes local review before promoting and reading CI', () =
   const end = driver.indexOf('- Scale design/debate', start);
   assert.ok(start >= 0 && end > start);
   const waterfall = driver.slice(start, end);
-  const steps = ['open a Draft PR', '**internal review**', '**external gate(s)**', '**full test suite once**', 'mark Ready for review', 'read the final revision'];
+  const steps = ['open a Draft PR', '**internal review**', '**external gate(s)**', '**full test suite once**', 'mark Ready for review', 'resolve remote checks'];
   let previous = -1;
   for (const step of steps) {
     const position = waterfall.indexOf(step);

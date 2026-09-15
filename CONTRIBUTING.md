@@ -51,3 +51,6 @@ handoff flags (`-codex -kimi`) or config `gates`. Independent fallbacks
 replace a provider that implemented the change or cannot run. PRs are
 squash-merged. CI must be green, but a green CI is not by itself approval to
 merge.
+
+Read [external review](skills/afk/references/external-review.md) for role selection;
+the owner/maintainer retains merge approval.

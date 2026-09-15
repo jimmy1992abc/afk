@@ -18,24 +18,20 @@ invariants, reports, and run ledgers live in the consuming repository's
 gitignored `.afk/` directory — nothing about your project is ever written back
 into the plugin.
 
-## What's new in 1.0.0
+## What's new in 1.1.0
 
-Version 1.0.0 makes
-review evidence explicit so a resumed run can distinguish verified closure from
-missing or stale information:
+- **Local completion mode:** `remote-ci: off` completes local checks and configured reviews without automatic publication or CI polling.
+- **Stage-specific instructions:** shared references retain task authority, findings and evidence across handoffs and resumed sessions.
+- **Opt-in direction audits:** independent checks compare work with retained task intent and correction history. Audits remain off by default.
+- **Observed-host evaluations:** a manual campaign records execution evidence, transport history and independent scoring.
+- **Input handling:** credential detection distinguishes path-like prose and labelled digests from secret values.
 
-- [Review context](#carry-findings-into-re-review) carries the frozen scope,
-  named findings, dispositions, and current-revision proof to supported reviewers.
-- [Review receipts](#check-receipts-before-reuse) retain the inputs and outcomes
-  needed to check whether earlier review evidence still matches the candidate.
-- [Behavior evaluations](#behavior-evaluations) expose unnecessary repairs,
-  missed defects, and unsafe readiness through repeatable, bounded scenarios.
+Structural P2 repairs remain supported, repair cycles have no numeric cap by default,
+and absent remote-CI configuration means `expected`. Explicit operator budgets remain
+binding; proportional increases require explicit authorization. Helpers validate
+artifacts when invoked and do not enforce agent compliance.
 
-This release integrates the parallel implementation's functional improvements
-with the selected review policy: structural P2 repairs remain supported, there
-is no numeric repair cap by default, and absent remote-CI policy means
-`expected`. The helpers do not add an orchestration runtime or establish that
-agents obey workflow instructions. See the [integration record](docs/port-v1.md).
+See the [direction rollout guide](docs/direction-rollout.md) before enabling audits.
 
 ## Why
 
@@ -100,13 +96,13 @@ scope
 -> targeted tests
 -> implementation
 -> self-review
--> pull request (draft; CI deferred)
+-> pull request (draft; omitted in local mode)
 -> internal review
 -> Codex external role (or independent fallback; single by default)
 -> Kimi final external role (only when a double profile is selected)
 -> full final test suite on the final commit
--> Ready for review (trigger CI)
--> required CI runs pass on the current revision
+-> local completion if CI is off; otherwise Ready for review to trigger CI
+-> actual current-revision validation success and required checks resolved
 -> owner approval or configured merge policy
 ```
 
@@ -211,7 +207,7 @@ triage without claiming that custom context reached that reviewer. Packets are
 claims for a reviewer to verify, not proof that the stated checks ran.
 
 Keep packets and sanitized proof in the run's ignored `.afk/` directory. The
-[context guide](skills/afk/SKILL.md#supported-review-context) explains target
+[context guide](skills/afk/references/review-evidence.md#supported-review-context) explains target
 binding, previews, provider limits, and the linked JSON schema.
 
 ### Check receipts before reuse
@@ -234,7 +230,7 @@ not approval. Requested identity never substitutes for an unobserved model, and
 legacy runs without receipts stay unknown. These are local, unsigned records,
 not provider attestation or permission to merge.
 
-The [receipt guide](skills/afk/SKILL.md#canonical-review-receipts) provides the
+The [receipt guide](skills/afk/references/review-evidence.md#canonical-review-receipts) provides the
 request/candidate schemas, artifact layout, checker invocation, and native Codex
 verdict and Codex/Kimi identity limitations. Existing run ledgers still carry
 finding dispositions, repair allowances, and merge decisions.
@@ -261,17 +257,15 @@ time, and output; these are not hard dollar, token, or internal model-call caps.
 Cleanup observations cover the owned process group, not proof that escaped
 descendants are absent.
 
-The [imported pilot report](docs/evaluations/issue-98-pilot.md), for its original
-parallel-project revision rather than this integration, records **29 passing
-deterministic evaluator tests, three real prerequisite invocations, and 0 of 14
-behavior trials covered**. Tool-surface isolation could not be qualified, and
-the alternate-model prerequisite timed out. Behavioral completion, defect
-recognition, and excess-repair rates therefore remain unobserved.
-[Issue #98](https://github.com/AlvinShenSSW/afk/issues/98) tracks the outstanding
-empirical acceptance; merging the evaluator did not close that gap. The
-[design](docs/designs/specs/issue-98-behavior-evaluations.md) defines the scenarios,
-comparison matrix, limits, and distinction between tested implementation and
-later report-only commits.
+The observed-host campaign records instruction loading, actual tool actions,
+resume boundaries and usage alongside independent scenario scoring. Its native
+host adapter requires the explicitly supported CLI build and platform; unsupported
+hosts remain unavailable. Preparation takes explicit immutable baseline and candidate
+revisions, and execution requires an operator-authorized handoff.
+
+The audit profile ships pending qualification. Deterministic fixture checks do
+not establish live provider compatibility or improved agent behavior. See the
+[rollout guide](docs/direction-rollout.md) for activation and rollback requirements.
 
 ## What this can and cannot enforce
 
@@ -374,7 +368,7 @@ priority: codex > claude > kimi > glm
 # github-repository:     # [HOST/]OWNER/REPO, likewise
 
 ## checks
-# remote-ci:             # expected (default) · detect · absent
+# remote-ci:             # expected (default) · detect · absent · off
 
 ## merge
 policy: leave-open
@@ -454,15 +448,42 @@ it from and each CLI would otherwise take one from the checkout or its own
 environment. A forge that cannot be served is named where it is needed rather
 than attempted.
 
+### Remote CI and local mode
+
+By default, finish local tests and reviews while the PR is Draft, then mark it
+Ready for review to start CI. That forge transition is not AFK merge readiness:
+wait for actual validation success on the current revision. A Draft-stage skipped
+job is not test evidence, even if the forge displays a successful check. This
+repository filters its validation job for Draft PRs and still validates later
+non-Draft updates, main pushes, and manual runs. Consuming repositories need
+compatible workflow triggers and Draft filtering to get the same CI savings.
+
+To finish AFK locally, set this in the consuming project's `.afk/config.md`:
+
+```markdown
+## checks
+remote-ci: off
+```
+
+`off` retains local test/lint/build checks, internal review, and every configured
+external review role. AFK completes the local branch, reports `LOCAL-COMPLETE`,
+and ends the queue without remote CI polling or automatic push, PR creation,
+Ready transition, or merge. Existing PRs remain as found. This takes precedence
+over automatic merge policy and does not close issues. It does not disable
+repository workflows, cancel existing runs, or make external models offline;
+explicitly publishing work can still trigger CI. Changing back to an enabled
+mode continues publication and CI from the retained revision and review evidence.
+
 ### What an empty check reading means
 
-`remote-ci` says what to do when the forge names no required check for a
+For enabled modes, `remote-ci` says what to do when the forge names no required check for a
 revision, or cannot be asked at all. `detect` (the default) settles it once the
 run's re-read window closes; `absent` settles it at once, for a repository the
 operator knows runs none; `expected` never settles it, for one that must always
 report. It adds no required check of its own; what counts as required is the
 forge's answer — a forge that draws no required/advisory line has every check it
-reports read as required.
+reports read as required. A known validation workflow deferred during Draft
+must actually run even if advisory; waiting for it is not an empty reading.
 
 Where no required check constrained a revision, the ordered roles and the local
 suite are the whole of what the run applied, and both are evaluation the driver
@@ -472,6 +493,8 @@ that authority, so every such revision is named in the end-of-run report.
 ## Merge policies
 
 Configured in `.afk/config.md`:
+
+With `remote-ci: off`, all three policies stop at local completion. Otherwise:
 
 - `leave-open` prepares the PR and leaves it for operator approval.
 - `merge-to-unblock` merges only when needed to unblock the scoped queue.
@@ -527,6 +550,14 @@ itself.
 /afk-deepseek-review
 /afk-mimo-review
 ```
+
+## Instruction routing
+
+The [driver](skills/afk/SKILL.md) routes each stage to its relevant references.
+Standalone skills explicitly load the same common rules before acting. This is
+workflow doctrine: link and compatibility tests establish structural coverage,
+not actual host loading or natural-language selection. Those behavior outcomes
+remain OUTSTANDING pending qualified trials under Epic #106.
 
 ## Repository layout
 

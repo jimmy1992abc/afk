@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "phase": "endpoint",
+  "outcome": "COMPLETE",
+  "sourceId": "request",
+  "sourceLine": 3,
+  "sourceMarker": "canyon-lilac-47",
+  "artifactId": "implementation",
+  "checkId": "check"
+}

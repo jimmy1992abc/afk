@@ -1,9 +1,35 @@
+import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { delimiter, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { normalizePathEntry } from '../lib/gate/spawn.mjs';
+
+export async function copyDirectionTestRuntime(t, { qualification }) {
+  const { RUNTIME_FILES, profileFingerprint, validateQualification } = await import('../lib/direction/audit.mjs');
+  const { canonicalBytes } = await import('../lib/gate/review-receipt.mjs');
+  const profile = profileFingerprint();
+  const record = qualification === 'pending'
+    ? { version: 1, status: 'pending', profileDigest: profile.digest, proof: null }
+    : qualification;
+  if (qualification !== 'pending') {
+    assert.equal(record?.status, 'qualified', 'an explicit pending or qualified fixture is required');
+    validateQualification(record);
+  }
+  const root = fileURLToPath(new URL('../', import.meta.url));
+  const directory = realpathSync(mkdtempSync(join(tmpdir(), 'afk-direction-runtime-')));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  for (const path of RUNTIME_FILES) {
+    mkdirSync(dirname(join(directory, path)), { recursive: true });
+    copyFileSync(join(root, path), join(directory, path));
+  }
+  writeFileSync(join(directory, 'lib/direction/qualification.json'), canonicalBytes(record));
+  const audit = await import(pathToFileURL(join(directory, 'lib/direction/audit.mjs')));
+  assert.deepEqual(audit.profileFingerprint(), profile);
+  return { directory, audit };
+}
 
 /** What libuv appends on Windows, plus the shims cmd.exe resolves. */
 const EXECUTABLE_EXTS = ['.com', '.exe', '.cmd', '.bat'];

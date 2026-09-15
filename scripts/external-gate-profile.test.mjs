@@ -1,3 +1,4 @@
+import { readInstruction, assertRoute, section } from './instruction-test-helpers.mjs';
 // Active-artifact contract for issue #1. AFK role orchestration is driver
 // doctrine, so these tests pin the one shipped story rather than pretending to
 // execute an orchestration runtime that does not exist.
@@ -8,7 +9,10 @@ import { test } from 'node:test';
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 
-const afk = read('../skills/afk/SKILL.md');
+const afk = read('../skills/afk/references/external-review.md');
+const kickoff = readInstruction('skills/afk/references/kickoff.md');
+const convergence = readInstruction('skills/afk/references/review-convergence.md');
+const design = readInstruction('skills/afk/references/design-review.md');
 const template = read('../templates/afk-config.example.md');
 const internal = read('../skills/afk-internal-review/SKILL.md');
 const readme = read('../README.md');
@@ -28,10 +32,10 @@ test('new configs choose a single Codex gate; ordered doubles are explicit opt-i
   assert.match(template, /^# gates:\s+codex > kimi\b/m, 'the double profile stays visible as a commented opt-in');
   assert.doesNotMatch(template, /^gates:\s+codex > kimi\s*$/m);
   assert.doesNotMatch(template, /^min-pass:/m);
-  assert.doesNotMatch(template, /^mode:/m);
+  assert.doesNotMatch(section(template, 'external gate'), /^mode:/m);
   assert.match(afk, /built-in `gates: codex`/);
   assert.match(afk, /-codex -kimi/);
-  for (const text of [afk, readme, agents, contributing]) {
+  for (const text of [afk, readme]) {
     assert.match(text, /single[^\n]*Codex|Codex[^\n]*single/i, 'each active doc names the single default');
     assert.match(text, /Codex[^\n]*(?:outer|外门)/i);
     assert.match(text, /Kimi[\s\S]{0,80}?(?:final|终审)/i);
@@ -41,8 +45,8 @@ test('new configs choose a single Codex gate; ordered doubles are explicit opt-i
 test('kickoff restates the resolved forge with its source', () => {
   // The restatement is what makes a misdetected forge visible before any paid
   // work; without a pin it can be dropped while the gate-profile half survives.
-  assert.match(afk, /resolved forge with\s+its source/i);
-  assert.match(afk, /`config` \/ `remote` \/ `default`/);
+  assert.match(kickoff, /resolved forge with\s+its source/i);
+  assert.match(kickoff, /`config` \/ `remote` \/ `default`/);
 });
 
 test('handoff role flags are a defined, bounded per-run channel', () => {
@@ -58,8 +62,8 @@ test('handoff role flags are a defined, bounded per-run channel', () => {
   assert.match(afk, /affirmation/i);
   assert.match(afk, /never mask a broken config/i);
   // Visibility control: kickoff restates the effective profile and its source.
-  assert.match(afk, /Restate the scope and the effective gate profile/i);
-  assert.match(afk, /`flags` \/ `config` \/ `legacy` \/ `built-in`/);
+  assert.match(kickoff, /Restate the scope and the effective gate profile/i);
+  assert.match(kickoff, /`flags` \/ `config` \/ `legacy` \/ `built-in`/);
 });
 
 test('the driver doctrine distinguishes ordered roles from fallback priority', () => {
@@ -102,14 +106,14 @@ test('ordered role convergence and final revision stamps are pinned', () => {
     /effective role-profile hash/,
     /minus its `gates` key/,
     /later-role content change/,
-  ]) assert.match(afk, phrase);
+  ]) assert.match(convergence, phrase);
   assert.doesNotMatch(afk, /refuses to start a fourth\s+sequence|four finding-bearing verdicts/i);
   assert.match(internal, /all configured roles/i);
   assert.match(internal, /same `HEAD`[^\n]*merge-base/i);
 });
 
 test('design-stage review remains exactly one independent gate', () => {
-  assert.match(afk, /Exactly one gate per design evaluation, regardless of PR `gates` length or\s+legacy `min-pass`/);
+  assert.match(design, /Exactly one gate per design evaluation, regardless of PR `gates` length or\s+legacy `min-pass`/);
 });
 
 test('gate skills name stable default roles instead of interchangeability', () => {
@@ -120,4 +124,12 @@ test('gate skills name stable default roles instead of interchangeability', () =
   assert.match(gates.deepseek, /optional/i);
   assert.match(gates.mimo, /optional/i);
   for (const text of Object.values(gates)) assert.doesNotMatch(text, /interchangeable/i);
+});
+
+
+test('repository-author documents route profile mechanics while keeping owner authority visible', () => {
+  for (const text of [agents, contributing]) {
+    assertRoute(text, 'skills/afk/references/external-review.md');
+    assert.match(text, /owner\/maintainer/);
+  }
 });

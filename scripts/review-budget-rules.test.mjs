@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
-const afk = readFileSync(new URL('../skills/afk/SKILL.md', import.meta.url), 'utf8').replace(/\s+/g, ' ');
+const afk = readFileSync(new URL('../skills/afk/references/review-convergence.md', import.meta.url), 'utf8').replace(/\s+/g, ' ');
 const config = readFileSync(new URL('../templates/afk-config.example.md', import.meta.url), 'utf8').replace(/\s+/g, ' ');
 
 test('the issue allowance persists across phases and resumes', () => {

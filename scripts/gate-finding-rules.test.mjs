@@ -1,3 +1,4 @@
+import { readInstruction, assertRoute, section } from './instruction-test-helpers.mjs';
 // The triage rules are prose executed by an agent — nothing here can enforce
 // them. These are presence pins on the load-bearing sentences of the
 // demonstrated-consequence and accounted-reach rules (they fail on silent
@@ -13,7 +14,7 @@ import { test } from 'node:test';
 const read = (p) =>
   readFileSync(new URL(p, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 
-const afkSkill = read('../skills/afk/SKILL.md');
+const afkSkill = read('../skills/afk/references/review-convergence.md');
 const internalReview = read('../skills/afk-internal-review/SKILL.md');
 const pilot = read('../skills/afk-implementation-pilot/SKILL.md');
 const gates = {
@@ -24,25 +25,6 @@ const gates = {
   deepseek: read('../skills/afk-deepseek-review/SKILL.md'),
   mimo: read('../skills/afk-mimo-review/SKILL.md'),
 };
-
-// The summary every gate skill carries, byte-identical. The driver holds the
-// full rules; a gate skill is loadable standalone, so the summary sits where
-// findings are handled and must not drift the way the old stop rules did.
-const TRIAGE_SENTENCE = [
-  'Treat every reported finding as `UNTRIAGED`. Admit P1 only after mapping it to',
-  'the frozen issue contract or an invariant, demonstrating a reachable trigger',
-  'and wrong consequence, explaining why the current artifact cannot safely',
-  'advance, and naming the minimal causal fix. Do not edit for an untriaged claim;',
-  'fix confirmed in-scope structural P2 or record its deferral for the operator-owned',
-  'merge boundary; collect minor items for one final pass and defer out-of-scope work.',
-].join('\n');
-
-const BATCH_SENTENCE = [
-  'Fix confirmed in-scope structural findings, including P2, in one batch.',
-  'Defer documentation and cosmetic items to one final pass after structural',
-  'closure. A recorded decision may defer a structural P2 to the operator-owned',
-  'merge boundary. Unverified or out-of-scope suggestions authorize no edits.',
-].join('\n');
 
 const countMatches = (text, re) => (text.match(new RegExp(re, 'g')) ?? []).length;
 
@@ -56,7 +38,7 @@ test('the driver states each triage rule exactly once', () => {
     assert.equal(
       countMatches(afkSkill, phrase.source),
       1,
-      `expected exactly one match for ${phrase} in skills/afk/SKILL.md`,
+      `expected exactly one match for ${phrase} in skills/afk/references/review-convergence.md`,
     );
   }
 });
@@ -79,7 +61,7 @@ test('an unaccountable consumer narrows or defers the fix without expanding scop
 
 test('P1 admission is scope-anchored and evidence-complete', () => {
   for (const phrase of [
-    /frozen issue contract or an invariant/,
+    /frozen issue\s+contract or an invariant/,
     /reachable (condition|trigger)/,
     /wrong (outcome|consequence)/,
     /cannot safely (enter|advance)/,
@@ -113,14 +95,8 @@ test('structural P2 risk remains operator-owned at auto-merge', () => {
   assert.match(internalReview, /operator owns that risk at the merge boundary/i);
 });
 
-test('all gate skills carry the identical triage sentence', () => {
-  for (const [name, text] of Object.entries(gates)) {
-    assert.equal(
-      countMatches(text, TRIAGE_SENTENCE.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
-      1,
-      `expected exactly one copy of the triage sentence in ${name} gate skill`,
-    );
-  }
+test('all gate skills explicitly read common admission before triage', () => {
+  for (const text of Object.values(gates)) assertRoute(text, '../afk/references/review-convergence.md');
 });
 
 test('confirmed structural P2 repairs remain in scope', () => {
@@ -129,23 +105,15 @@ test('confirmed structural P2 repairs remain in scope', () => {
   assert.match(afkSkill, /Unverified or out-of-scope suggestions authorize no edits/i);
 });
 
-test('all gate skills carry the identical value-aware batch rule', () => {
-  for (const [name, text] of Object.entries(gates)) {
-    assert.equal(
-      countMatches(text, BATCH_SENTENCE.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
-      1,
-      `expected exactly one copy of the batch sentence in ${name} gate skill`,
-    );
-    assert.doesNotMatch(text, /P2\/minor observations without implementation/i);
+test('gate routes retain the common minimal batch boundary', () => {
+  for (const text of Object.values(gates)) {
+    assertRoute(text, '../afk/references/review-convergence.md');
+    assert.doesNotMatch(text, /resolve minor items|Deferred pass once/i);
   }
 });
 
-test('implementation and internal review share the minimal-fix boundary', () => {
-  for (const text of [pilot, internalReview]) {
-    assert.match(text, /confirmed in-scope structural findings, including P2/i);
-    assert.match(text, /one final pass after structural/i);
-    assert.match(text, /Unverified or out-of-scope suggestions authorize no edits/i);
-  }
+test('implementation and internal review explicitly read the minimal-fix source', () => {
+  for (const text of [pilot, internalReview]) assertRoute(text, '../afk/references/review-convergence.md');
 });
 
 test('evidence-free repeats stay closed across reviewer identities', () => {

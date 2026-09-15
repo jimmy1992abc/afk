@@ -1,15 +1,16 @@
+import { readInstruction, assertRoute, section } from './instruction-test-helpers.mjs';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), 'utf8');
-const afk = read('../skills/afk/SKILL.md');
+const afk = read('../skills/afk/references/continuity.md');
 const pilot = read('../skills/afk-implementation-pilot/SKILL.md');
 const planner = read('../skills/afk-spec-planner/SKILL.md');
 const prose = (text) => text.replace(/\s+/g, ' ');
 
 test('a restricted executor hands commit authority back to the driver', () => {
-  for (const source of [afk, pilot]) {
+  for (const source of [afk]) {
     const text = prose(source);
     assert.match(text, /linked-worktree Git metadata/i);
     assert.match(text, /driver.*inspect.*diff/is);
@@ -19,7 +20,7 @@ test('a restricted executor hands commit authority back to the driver', () => {
 });
 
 test('environment refusal is neither RED nor green until an unchanged rerun', () => {
-  for (const source of [afk, pilot]) {
+  for (const source of [afk]) {
     const text = prose(source);
     assert.match(text, /`ENVIRONMENT-BLOCKED`/);
     assert.match(text, /before.*assertion|before.*contract behavior/is);
@@ -41,7 +42,12 @@ test('the planner closes generated-artifact execution surfaces without granting 
 });
 
 test('stable finding identity remains while a fixed round exit stays absent', () => {
-  assert.match(afk, /stable ID/);
-  assert.match(afk, /two consecutive unfinished rounds without material progress/i);
-  assert.doesNotMatch(afk, /four[- ]round (cap|limit)|stop after four rounds/i);
+  assert.match(readInstruction('skills/afk/references/review-convergence.md'), /stable ID/);
+  assert.match(readInstruction('skills/afk/references/review-convergence.md'), /two consecutive unfinished rounds without material progress/i);
+  assert.doesNotMatch(readInstruction('skills/afk/references/review-convergence.md'), /four[- ]round (cap|limit)|stop after four rounds/i);
+});
+
+
+test('pilot loads the canonical restricted-executor handoff before using it', () => {
+  assertRoute(pilot, '../afk/references/continuity.md');
 });

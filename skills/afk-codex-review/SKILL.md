@@ -1,9 +1,20 @@
 ---
 name: afk-codex-review
-description: "afk-codex-review: Part of the afk pipeline. Runs Codex (OpenAI Codex CLI) as the default outer independent, read-only external review role, then triages and fixes findings before later ordered roles. Subject to .afk/config.md gates and fallback priority. Triggers include \"/afk-codex-review\", \"run codex review\", \"codex gate\"."
+description: "afk-codex-review: Part of the afk pipeline. Independent read-only Codex review, the default outer role when eligible. Triggers include \"/afk-codex-review\", \"run codex review\", \"codex gate\"."
 ---
 
 # afk-codex-review
+
+Read [AFK environment](../afk/references/environment.md) before resolving
+configuration, local state or bundled helper paths.
+Before invoking this gate, read [external review](../afk/references/external-review.md)
+and [review convergence](../afk/references/review-convergence.md). They own role
+selection, authorship declaration, admission, repair allowance and closure.
+Before supplying context/receipts or reusing receipts, read
+[review evidence](../afk/references/review-evidence.md). Before `--design`, read
+[external design review](../afk/references/design-review.md#external-design-review).
+Reuse only the same installed revision already read and still in context;
+otherwise reread it. Apply these routes for standalone invocations too.
 
 An independent second-opinion review by Codex (a *different* model), used as the
 default **outer** role before later configured roles (Kimi is the default final
@@ -20,34 +31,19 @@ Codex calls are metered — keep invocations to a minimum. Batch minimal admitte
 once. Record every other disposition together at the end without editing a clean
 revision. Never spend a round-trip on a small or doc-only observation.
 
-## Review receipts
-
-To retain canonical inputs and explicit outcomes, use the optional
-`--review-receipt <request.json>` flag under the
-[shared receipt contract](../afk/SKILL.md#canonical-review-receipts). Preserve
-unknown identity explicitly; skipped or incomplete attempts and previews never
-supply approval.
-
 ## Review context
 
-Use the [shared context contract](../afk/SKILL.md#supported-review-context) to
-carry frozen acceptance scope and named prior findings with accessible proof.
-`--review-phase re-review --review-context <packet.json>` preserves the selected
-review target while supplying closure context; `--print-args` reports its digest.
-Native diff review cannot accept this input or a focus prompt; it reports the
-limitation without changing modes. Only `--design` delivers custom context on
+Read [review evidence](../afk/references/review-evidence.md) before using
+`--review-context`, `--review-phase` or `--review-receipt`.
+Native diff review rejects custom context and re-review focus; it reports the
+limitation without changing modes. Native diff review still supports `--review-receipt`.
+Only `--design` delivers custom context on
 stdin and supports `--print-prompt`. Keep native diff history triage in the driver.
 
 ## Run it
 
-The bundled helper `codex-gate.mjs` sits beside this SKILL.md. Locate its
-directory as `${CLAUDE_PLUGIN_ROOT}/skills/afk-codex-review` if the env var is
-set, else `<pluginRoot>/skills/afk-codex-review` from `.afk/config.md`, else this
-skill's own directory (the helper is its sibling). Resolve `.afk/` from the
-repository's main working tree — the first non-bare `worktree` record of
-`git worktree list --porcelain` — never the current directory, or a run from a
-linked worktree reads a different `.afk/` than the one `afk-init` wrote. If
-`.afk/` is absent, the `afk-init` bootstrap runs automatically first:
+The bundled helper `codex-gate.mjs` sits beside this SKILL.md. Read [environment](../afk/references/environment.md) to resolve its sibling
+helper directory and bootstrap when needed.
 
 ```text
 node "<helper-dir>/codex-gate.mjs"
@@ -59,19 +55,11 @@ completes. Pass through any target flag (`--base <branch>` / `--commit <sha>` /
 `--uncommitted`; default = current branch vs the default branch). Do not poll in
 a sleep loop — wait for completion.
 
-Pass `--implementer <family>` when another model wrote the change. In design
-mode (`--design`) the flag instead names the design's **author**, never the
-eventual code implementer — see `../afk/SKILL.md` ("Design-stage external
-gate"): declaring the code implementer there can hand a driver-authored design
-to the driver's own model for review. A persistent `implementer:` line in
-`.afk/config.md` also names the code implementer, and in design mode it can
-wrongly block that family's independent review of a driver-authored design —
-declare the design's author explicitly then: the per-run flag outranks the
-config line.
+Read [authorship declaration](../afk/references/external-review.md#authorship-declaration)
+before choosing `--implementer`; design mode names the design author.
 
 **Design mode** (`--design <path>`) reviews a design document's reasoning instead
-of a diff — the opt-in design-stage gate (see `../afk/SKILL.md`, "Design-stage
-external gate"). Codex runs it with `exec -s read-only` and the brief + doc piped
+of a diff — the opt-in design-stage gate (read [external design review](../afk/references/design-review.md#external-design-review)). Codex runs it with `exec -s read-only` and the brief + doc piped
 on stdin — never the `review` subcommand or the sandbox bypass, so it stays
 read-only on every OS. A missing or unreadable `--design` path fails loudly
 (`ERROR`, non-zero), never a skip.
@@ -103,50 +91,16 @@ Read the verdict between the `===== CODEX REVIEW (final message) =====` markers.
 is not a failure — report it and continue. `ERROR: …` means the review itself
 failed — read the transcript it names; never report an errored run as clean.
 
-## Handle findings (batch — minimise calls)
+## Handle findings
 
-1. **Triage before editing.** Map each hypothesis to the frozen contract, apply
-   the P1 admission standard below, and identify duplicates or scope proposals.
-2. **Verify before trusting.** Push back with evidence on anything disproved or
-   unverified; severity proposed by the reviewer is not authority to edit.
-3. **Fix confirmed structural findings in one batch**, including in-scope P2.
-4. **Self-review once** over your fixes.
-5. **Re-run the gate once.** Continue only within the issue allowance.
-6. **Resolve documentation and cosmetic items once, at the end.** Do not
-   spend another gate call on a documentation-only or cosmetic pass.
-
-Treat every reported finding as `UNTRIAGED`. Admit P1 only after mapping it to
-the frozen issue contract or an invariant, demonstrating a reachable trigger
-and wrong consequence, explaining why the current artifact cannot safely
-advance, and naming the minimal causal fix. Do not edit for an untriaged claim;
-fix confirmed in-scope structural P2 or record its deferral for the operator-owned
-merge boundary; collect minor items for one final pass and defer out-of-scope work.
-
-Fix confirmed in-scope structural findings, including P2, in one batch.
-Defer documentation and cosmetic items to one final pass after structural
-closure. A recorded decision may defer a structural P2 to the operator-owned
-merge boundary. Unverified or out-of-scope suggestions authorize no edits.
-
-Use the issue-wide allowance and finding record in `../afk/SKILL.md`
-("Review-cycle allowance"). Initial review is comprehensive; re-review checks
-accepted findings, the intervening diff, and affected regression paths. Broader
-investigation requires specific evidence of an affected area. New evidenced
-in-scope blockers remain reportable. Supply prior findings and verification
-through supported context; missing context is unavailable, never invented.
-Reviewer identity alone does not reopen a closed finding. Exhaustion leaves
-unresolved work `OUTSTANDING`; finish the current cycle's validation without
-starting another repair or requesting another round automatically.
-
-Apply any invariant in `.afk/config.md` as an extra must-check lens.
+Apply [review convergence](../afk/references/review-convergence.md) before triage,
+repairs or re-review. Keep the issue's current finding record and allowance;
+apply consuming `.afk/config.md` invariants as extra must-check lenses.
 
 ## Stop rule
 
-Stop when the loop-termination rule in `../afk/SKILL.md` ("External gate")
-holds: triage leaves no `UNTRIAGED`, `Contested`, or open admitted P1, and every
-lower-severity item has a recorded disposition that does not block the role stamp (a
-structural P2 may still bar auto-merge). That same verdict
-earns the role stamp only if it requires no content change; a content fix
-invalidates it and the role re-reviews the fixed revision.
+Use the [canonical closure and stop rules](../afk/references/review-convergence.md)
+to decide whether this revision earns the role stamp.
 
 Report honestly: `CLEAN`, or `OUTSTANDING` with what remains. A clean pass is
 not authority to merge — hand back to the operator.

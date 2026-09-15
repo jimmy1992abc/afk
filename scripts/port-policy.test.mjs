@@ -20,7 +20,7 @@ test('active skills retain structural P2 repairs without an implicit numeric cap
   for (const [path, text] of skills) {
     assert.doesNotMatch(text, /P2\/minor observations without implementation|only inseparable|Default to \*\*two review-driven|Do not start a third automatic cycle/i, path);
   }
-  const driver = read('skills/afk/SKILL.md').replace(/\s+/g, ' ');
+  const driver = (read('skills/afk/SKILL.md') + read('skills/afk/references/review-convergence.md') + read('skills/afk/references/publication.md')).replace(/\s+/g, ' ');
   assert.match(driver, /no numeric repair cap by default/i);
   assert.match(driver, /including P2/i);
   assert.match(driver, /two consecutive unfinished rounds without material progress/i);
@@ -29,7 +29,7 @@ test('active skills retain structural P2 repairs without an implicit numeric cap
 });
 
 test('an absent CI policy requires a resolved remote reading', () => {
-  const driver = read('skills/afk/SKILL.md').replace(/\s+/g, ' ');
+  const driver = (read('skills/afk/SKILL.md') + read('skills/afk/references/review-convergence.md') + read('skills/afk/references/publication.md')).replace(/\s+/g, ' ');
   assert.match(driver, /blank or absent is `expected`/);
   assert.match(read('templates/afk-config.example.md'), /expected \(default\)/);
 });
