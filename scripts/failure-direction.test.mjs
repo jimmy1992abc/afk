@@ -49,7 +49,7 @@ test('prototype-named codes are unknown codes, not inherited lookups', () => {
 });
 
 test('the driver doctrine no longer scopes quota/model-unavailable to Claude', () => {
-  const afkSkill = readFileSync(new URL('../skills/afk/SKILL.md', import.meta.url), 'utf8');
+  const afkSkill = readFileSync(new URL('../skills/afk/references/external-review.md', import.meta.url), 'utf8');
   assert.doesNotMatch(afkSkill, /Claude-only/);
   assert.match(afkSkill, /quota\/rate-limit\/model-unavailable/);
 });

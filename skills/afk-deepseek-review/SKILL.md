@@ -1,9 +1,20 @@
 ---
 name: afk-deepseek-review
-description: "afk-deepseek-review: Part of the afk pipeline. Runs DeepSeek V4 Pro as an optional independent, read-only external review role for an ordered .afk/config.md gate profile. Triggers include \"/afk-deepseek-review\", \"run deepseek review\", and \"DeepSeek external gate\"."
+description: "afk-deepseek-review: Part of the afk pipeline. Independent read-only DeepSeek review, an optional external role. Triggers include \"/afk-deepseek-review\", \"run deepseek review\", and \"DeepSeek external gate\"."
 ---
 
 # afk-deepseek-review
+
+Read [AFK environment](../afk/references/environment.md) before resolving
+configuration, local state or bundled helper paths.
+Before invoking this gate, read [external review](../afk/references/external-review.md)
+and [review convergence](../afk/references/review-convergence.md). They own role
+selection, authorship declaration, admission, repair allowance and closure.
+Before supplying context/receipts or reusing receipts, read
+[review evidence](../afk/references/review-evidence.md). Before `--design`, read
+[external design review](../afk/references/design-review.md#external-design-review).
+Reuse only the same installed revision already read and still in context;
+otherwise reread it. Apply these routes for standalone invocations too.
 
 An optional independent review by `deepseek-v4-pro`. Run it only when an
 explicit `.afk/config.md` `gates:` or `priority:` profile selects DeepSeek, or
@@ -15,29 +26,17 @@ repository tools, so verify findings that require material outside the snapshot.
 Kilo Code may use the same provider, but this gate neither reads Kilo Code state
 nor depends on that extension.
 
-## Review receipts
-
-To retain canonical inputs and explicit outcomes, use the optional
-`--review-receipt <request.json>` flag under the
-[shared receipt contract](../afk/SKILL.md#canonical-review-receipts). Preserve
-unknown identity explicitly; skipped or incomplete attempts and previews never
-supply approval.
-
 ## Review context
 
-Use the [shared context contract](../afk/SKILL.md#supported-review-context) to
-carry frozen acceptance scope and named prior findings with accessible proof.
-`--review-phase re-review --review-context <packet.json>` preserves the selected
-review target while supplying closure context; `--print-args` reports its digest.
+Read [review evidence](../afk/references/review-evidence.md) before using
+`--review-context`, `--review-phase` or `--review-receipt`.
 Use `--print-prompt` to inspect the supplied section before a provider call.
 Required history is validated and never silently truncated.
 
 ## Run it
 
-Locate `deepseek-gate.mjs` beside this file through
-`${CLAUDE_PLUGIN_ROOT}/skills/afk-deepseek-review`, then the `pluginRoot` in
-`.afk/config.md`, then this skill's directory. Resolve `.afk/` from the main
-working tree. Run `afk-init` automatically first when `.afk/` is absent.
+Read [environment](../afk/references/environment.md) to resolve
+`deepseek-gate.mjs` beside this skill and bootstrap when needed.
 
 ```text
 node "<helper-dir>/deepseek-gate.mjs"
@@ -48,15 +47,8 @@ record. Pass through `--base <branch>`, `--commit <sha>`, `--uncommitted`, or
 `--design <path>`. Use `--print-args` for resolved metadata or `--print-prompt`
 for the redacted prompt without a provider call. Do not poll in a sleep loop.
 
-Pass `--implementer <family>` when another model wrote the change. In design
-mode (`--design`) the flag instead names the design's **author**, never the
-eventual code implementer — see `../afk/SKILL.md` ("Design-stage external
-gate"): declaring the code implementer there can hand a driver-authored design
-to the driver's own model for review. A persistent `implementer:` line in
-`.afk/config.md` also names the code implementer, and in design mode it can
-wrongly block that family's independent review of a driver-authored design —
-declare the design's author explicitly then: the per-run flag outranks the
-config line.
+Read [authorship declaration](../afk/references/external-review.md#authorship-declaration)
+before choosing `--implementer`; design mode names the design author.
 
 The bounded snapshot excludes secret-bearing paths, redacts secret-shaped
 values, and rejects unsafe design inputs before the request. A missing or
@@ -72,48 +64,18 @@ family takes its place, per the shared skip-vs-error table. A successful review 
 Read the verdict between the
 `===== DEEPSEEK REVIEW (final message) =====` markers. Treat only column-0
 marker lines as markers; the last END marker wins. A `SKIPPED` result is not
-a verdict; record it and follow the fallback rule in `../afk/SKILL.md`.
+a verdict; record it and follow [external review](../afk/references/external-review.md) for fallback.
 
 ## Handle findings
 
-1. Map every hypothesis to the frozen contract and apply the P1 admission rule.
-2. Verify its trigger and consequence because the reviewer saw only a snapshot.
-3. Batch any admitted P1 fixes, then self-review the affected surface.
-4. Re-run this role when a content fix invalidates its prior verdict.
-5. Record every remaining disposition without changing a clean revision.
-
-Treat every reported finding as `UNTRIAGED`. Admit P1 only after mapping it to
-the frozen issue contract or an invariant, demonstrating a reachable trigger
-and wrong consequence, explaining why the current artifact cannot safely
-advance, and naming the minimal causal fix. Do not edit for an untriaged claim;
-fix confirmed in-scope structural P2 or record its deferral for the operator-owned
-merge boundary; collect minor items for one final pass and defer out-of-scope work.
-
-Fix confirmed in-scope structural findings, including P2, in one batch.
-Defer documentation and cosmetic items to one final pass after structural
-closure. A recorded decision may defer a structural P2 to the operator-owned
-merge boundary. Unverified or out-of-scope suggestions authorize no edits.
-
-Use the issue-wide allowance and finding record in `../afk/SKILL.md`
-("Review-cycle allowance"). Initial review is comprehensive; re-review checks
-accepted findings, the intervening diff, and affected regression paths. Broader
-investigation requires specific evidence of an affected area. New evidenced
-in-scope blockers remain reportable. Supply prior findings and verification
-through supported context; missing context is unavailable, never invented.
-Reviewer identity alone does not reopen a closed finding. Exhaustion leaves
-unresolved work `OUTSTANDING`; finish the current cycle's validation without
-starting another repair or requesting another round automatically.
-
-Apply any invariant in `.afk/config.md` as an extra lens.
+Apply [review convergence](../afk/references/review-convergence.md) before triage,
+repairs or re-review. Keep the issue's current finding record and allowance;
+apply consuming `.afk/config.md` invariants as extra must-check lenses.
 
 ## Stop rule
 
-Stop when the loop-termination rule in `../afk/SKILL.md` ("External gate")
-holds: triage leaves no `UNTRIAGED`, `Contested`, or open admitted P1, and every
-lower-severity item has a recorded disposition that does not block the role stamp (a
-structural P2 may still bar auto-merge). That same verdict
-earns the role stamp only if it requires no content change; a content fix
-invalidates it and the role re-reviews the fixed revision.
+Use the [canonical closure and stop rules](../afk/references/review-convergence.md)
+to decide whether this revision earns the role stamp.
 
 Report `CLEAN`, or `OUTSTANDING` with what remains. A clean pass is not
 authority to merge.

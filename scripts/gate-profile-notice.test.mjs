@@ -69,7 +69,7 @@ test('hook, afk-init, and kickoff all name the shared implementation', () => {
   for (const relative of [
     '../hooks/afk-resume-detect.mjs',
     '../skills/afk-init/SKILL.md',
-    '../skills/afk/SKILL.md',
+    '../skills/afk/references/kickoff.md',
   ]) {
     const text = readFileSync(join(ROOT, 'scripts', relative), 'utf8');
     assert.match(text, /gate-profile-notice\.mjs/, relative);

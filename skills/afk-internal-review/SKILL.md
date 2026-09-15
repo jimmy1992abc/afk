@@ -1,9 +1,15 @@
 ---
 name: afk-internal-review
-description: "afk-internal-review: Part of the afk pipeline. The deep internal production-readiness review of a PR, run BEFORE the ordered independent external roles. Emits APPROVE / APPROVE-WITH-COMMENTS / BLOCK as a concise, agent-actionable handoff; the full report is produced only once internal review and every configured external role are clean. Triggers include \"/afk-internal-review\", \"internal review PR N\", \"review before merge\"."
+description: "afk-internal-review: Part of the afk pipeline. Review production readiness before the independent external roles; return an actionable verdict. Triggers include \"/afk-internal-review\", \"internal review PR N\", \"review before merge\"."
 ---
 
 # afk-internal-review
+
+Read [AFK environment](../afk/references/environment.md) before resolving
+configuration, local state or bundled helper paths.
+Before review or a review-driven edit, read and apply
+[review convergence](../afk/references/review-convergence.md). Reuse only the same
+installed revision already read and still in context; otherwise reread it.
 
 The final **internal** review before merge — a rigorous, high-stakes read whose
 job is to protect production. It runs **before** the ordered external roles:
@@ -15,6 +21,16 @@ This review is not the last gate, so its routine output is a **cheap, structured
 handoff** the fixing agent and ordered external roles can act on — not a long report.
 The long report is written only at the very end (see Output).
 
+## Stage boundary
+
+Before returning a result, read [stage output](../afk/references/output.md);
+before a run handoff or resume, read
+[continuity](../afk/references/continuity.md). Standalone review ends at its
+verdict. A nested review returns that verdict and evidence to the driver for
+finding triage and the ordered external roles; it does not complete the run.
+An outstanding result names unresolved findings or unavailable prerequisites.
+The final-report conditions below remain separate from this stage's verdict.
+
 ## 1 — Gather context
 
 Collect every signal before forming an opinion: PR metadata and linked
@@ -23,19 +39,23 @@ checks the forge reports for the revision; the surrounding code of
 changed functions (not only the diff lines); existing tests and coverage; new
 dependencies; config, migrations, and flags; recent related merges.
 
+With `remote-ci: off`, omit the forge check read and review the local branch;
+the driver owns the local completion endpoint. A Draft-stage skip does not
+prevent review and supplies no CI approval.
+
 **Checks before depth:** a failing required check means the diff will change —
 send the branch back to fix it rather than reading it deeply, unless the
 operator asks to review-with-caveat. A check still unfinished, none reported,
 or no answer at all is not that: review now and note what the reading said.
-Which readings permit ready is the driver's (`../afk/SKILL.md`, "Remote
-checks"), never this review's.
+Which readings permit ready is the driver's ([Remote checks](../afk/references/publication.md#remote-checks), read before
+interpreting check evidence), never this review's.
 
 ## 2 — Deep review
 
 For the initial review, evaluate every dimension. Subsequent review checks
 accepted findings, the intervening diff, and affected regression paths. Broader
 investigation requires specific evidence; new in-scope blockers remain reportable.
-Use the issue-wide "Review-cycle allowance" in `../afk/SKILL.md`; no extra
+Apply [review convergence](../afk/references/review-convergence.md) for the issue-wide allowance; no extra
 clean-only sweep is required.
 
 Initial dimensions:
@@ -92,10 +112,8 @@ blocker is open. A reported concern begins `UNTRIAGED`; admit it as a blocker on
 after every blocker field above is demonstrated. Otherwise classify it P2,
 minor, or out-of-scope without changing scope. Put a demonstrated structural P2
 under risks so it cannot disappear into suggestions; minor and out-of-scope
-items go under suggestions. Fix confirmed in-scope structural findings, including P2, in one batch.
-Defer documentation and cosmetic items to one final pass after structural
-closure. A recorded decision may defer a structural P2 to the operator-owned
-merge boundary. Unverified or out-of-scope suggestions authorize no edits.
+items go under suggestions. Apply the [common minimal-fix boundary](../afk/references/review-convergence.md)
+before any review-driven edit.
 
 Complete validation included in the current cycle. Exhaustion leaves unresolved
 repairs `OUTSTANDING` and does not authorize another automatic content pass.
@@ -110,18 +128,11 @@ reviewed, residual risk, and the production-readiness checklist.
 - **Auto-merge policy** (`merge-when-green` / `merge-to-unblock` in
   `.afk/config.md`): write the final report into the run's own directory, as
   `.afk/runs/<run-id>/PR#<n>-<title>.md` — a report belongs to the run that
-  produced it, so it is never written to a path another run also owns. Take
-  `<run-id>` from the run you are executing under; invoked outside a run,
-  allocate `.afk/runs/<YYYY-MM-DD>-pr<n>/` the same collision-safe way the `afk`
-  skill allocates a run directory (create failing if it exists, retry the next
-  suffix), so two standalone reviews of one PR on one date do not land in a
-  shared directory. Give it a `ledger.md` header too — `run-id`, `scope` (the PR
-  you reviewed), `state`, `heartbeat` — and set `state: complete` when the review
-  ends: `afk` reads a ledgerless directory as a run mid-claim and would wait on
-  yours forever. Resolve `.afk/` against the main working tree (the first non-bare
-  `worktree` record of `git worktree list --porcelain`), never the current
-  directory, so a review from a linked worktree still writes to the run's one
-  directory. The filename leads with `PR#<n>-<title>`;
+  produced it, so it is never written to a path another run also owns. Before saving a report, read [continuity](../afk/references/continuity.md)
+  for the shared state location and collision-safe run claim. Use the current
+  run's `<run-id>`; outside a run, claim `.afk/runs/<YYYY-MM-DD>-pr<n>/` with the
+  same rules and a `ledger.md` header for the reviewed PR. Set `state: complete`
+  when that standalone review ends. The filename leads with `PR#<n>-<title>`;
   sanitize the title for the filesystem (illegal characters and whitespace
   collapsed to `-`, case preserved, length-capped) and add a numeric suffix only
   to avoid clobbering an existing file.

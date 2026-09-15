@@ -1,3 +1,4 @@
+import { readInstruction, assertRoute, section } from './instruction-test-helpers.mjs';
 // The debate rules are prose executed by an agent — nothing here can enforce
 // them, and a test asserting a sentence exists would be pinning the wrong
 // object. What IS worth pinning: the rules that were wrong in an earlier draft
@@ -8,7 +9,8 @@ import { readFileSync } from 'node:fs';
 
 import { test } from 'node:test';
 
-const afkSkill = readFileSync(new URL('../skills/afk/SKILL.md', import.meta.url), 'utf8');
+const afkSkill = readFileSync(new URL('../skills/afk/references/design-review.md', import.meta.url), 'utf8');
+const convergence = readInstruction('skills/afk/references/review-convergence.md');
 const planner = readFileSync(new URL('../skills/afk-spec-planner/SKILL.md', import.meta.url), 'utf8');
 
 test('the debate has evidence-based exit criteria without a round permission gate', () => {
@@ -26,7 +28,8 @@ test('an unfixable verified P1 remains an operator authority decision', () => {
 test('the debate requires closure and respects the shared allowance', () => {
   assert.match(afkSkill, /has the\s+design in front of you had a clean\s+round/);
   assert.match(afkSkill, /revised after its last clean round/);
-  assert.match(afkSkill, /two consecutive unfinished rounds without material progress/i);
+  assert.match(convergence, /two consecutive unfinished rounds without material progress/i);
+  assertRoute(afkSkill, 'review-convergence.md#root-cause-checkpoint');
 });
 
 test('the exit criteria are stated as doctrine, not as a mechanism', () => {
@@ -43,17 +46,18 @@ test('the severities the exit criteria turn on are actually defined', () => {
   // asked for supported/refuted/unverified — so the rule keyed on a label no
   // step produced, and each host was free to grade a defect its own way.
   assert.match(afkSkill, /Every finding carries a severity/);
+  assertRoute(afkSkill, 'review-convergence.md#finding-admission');
   assert.match(afkSkill, /\*\*P1\*\* — the design is wrong/);
   assert.match(afkSkill, /\*\*P2\*\* — a real weakness the design survives/);
   assert.match(afkSkill, /\*\*minor\*\* —/);
-  assert.match(afkSkill, /unlabelled finding (starts|is) `UNTRIAGED`/i);
-  assert.doesNotMatch(afkSkill, /unlabelled finding is a P1/);
+  assert.match(convergence, /unlabelled finding (starts|is) `UNTRIAGED`/i);
+  assert.doesNotMatch(convergence, /unlabelled finding is a P1/);
 });
 
 test('an unavailable load-bearing claim has a demonstrable P1 consequence', () => {
-  assert.match(afkSkill, /load-bearing claim/i);
-  assert.match(afkSkill, /explicitly depends on it/i);
-  assert.match(afkSkill, /can(?:not|'t) verify it by any available\s+safe means/i);
+  assert.match(convergence, /load-bearing claim/i);
+  assert.match(convergence, /explicitly depends on it/i);
+  assert.match(convergence, /can(?:not|'t) verify it by any available\s+safe means/i);
 });
 
 test('a supported P1 cannot end the debate without a clean round', () => {

@@ -1,3 +1,4 @@
+import { readInstruction, assertRoute, section } from './instruction-test-helpers.mjs';
 // The loop rules are prose executed by an agent — nothing here can enforce
 // them. These are mostly presence pins on the load-bearing sentences of the
 // gate-loop and pilot-loop terminations (they fail on silent deletion or
@@ -12,7 +13,9 @@ import { test } from 'node:test';
 const read = (p) =>
   readFileSync(new URL(p, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 
-const afkSkill = read('../skills/afk/SKILL.md');
+const afkSkill = read('../skills/afk/references/review-convergence.md');
+const design = readInstruction('skills/afk/references/design-review.md');
+const continuity = readInstruction('skills/afk/references/continuity.md');
 const pilot = read('../skills/afk-implementation-pilot/SKILL.md');
 const gates = {
   codex: read('../skills/afk-codex-review/SKILL.md'),
@@ -22,18 +25,6 @@ const gates = {
   deepseek: read('../skills/afk-deepseek-review/SKILL.md'),
   mimo: read('../skills/afk-mimo-review/SKILL.md'),
 };
-
-// The exact stop sentence every gate skill carries, byte-identical. The driver
-// holds the full rule; this summary must not drift the way the old per-gate
-// stop rules did.
-const STOP_SENTENCE = [
-  'Stop when the loop-termination rule in `../afk/SKILL.md` ("External gate")',
-  'holds: triage leaves no `UNTRIAGED`, `Contested`, or open admitted P1, and every',
-  'lower-severity item has a recorded disposition that does not block the role stamp (a',
-  'structural P2 may still bar auto-merge). That same verdict',
-  'earns the role stamp only if it requires no content change; a content fix',
-  'invalidates it and the role re-reviews the fixed revision.',
-].join('\n');
 
 const countMatches = (text, re) => (text.match(new RegExp(re, 'g')) ?? []).length;
 
@@ -52,7 +43,7 @@ test('the driver defines finding closure once, as recorded dispositions', () => 
     assert.equal(
       countMatches(afkSkill, phrase.source),
       1,
-      `expected exactly one match for ${phrase} in skills/afk/SKILL.md`,
+      `expected exactly one match for ${phrase} in skills/afk/references/review-convergence.md`,
     );
   }
 });
@@ -63,14 +54,8 @@ test('uncertainty receives investigation without speculative implementation', ()
   assert.match(afkSkill, /load-bearing.*OUTSTANDING/s);
 });
 
-test('all gate skills carry the identical stop sentence', () => {
-  for (const [name, text] of Object.entries(gates)) {
-    assert.equal(
-      countMatches(text, STOP_SENTENCE.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
-      1,
-      `expected exactly one copy of the stop sentence in ${name} gate skill`,
-    );
-  }
+test('all gate skills route closure to one common definition', () => {
+  for (const text of Object.values(gates)) assertRoute(text, '../afk/references/review-convergence.md');
 });
 
 test('a finding-bearing verdict cannot stamp a revision changed after it', () => {
@@ -100,7 +85,8 @@ test('every gate round ends in an affirmative report', () => {
 
 test('the pilot uses one initial full review and focused closure thereafter', () => {
   assert.match(pilot, /initial review applies every lens/i);
-  assert.match(pilot, /accepted findings, the intervening diff, and affected regression paths/i);
+  assertRoute(pilot, '../afk/references/review-convergence.md');
+  assert.match(afkSkill, /accepted finding closure, the intervening diff, and affected regression\s+paths/i);
   assert.doesNotMatch(pilot, /two consecutive clean/i);
 });
 
@@ -111,7 +97,7 @@ test('the pilot handoff records the lens results, not just round numbers', () =>
 test('ordered external roles retain progress checks within the cycle allowance', () => {
   assert.match(afkSkill, /two consecutive unfinished rounds without material progress/i);
   assert.match(afkSkill, /automatic root-cause checkpoint/i);
-  assert.match(afkSkill, /clean terminal round never counts as stalled/i);
+  assert.match(afkSkill, /clean terminal round never\s+counts as stalled/i);
   assert.match(afkSkill, /contract-mapped (RED test|implementation slice)/i);
   assert.match(afkSkill, /design version lands with its\s+frozen\s+contract/i);
   assert.match(afkSkill, /one transient retry/);
@@ -121,27 +107,15 @@ test('ordered external roles retain progress checks within the cycle allowance',
   assert.doesNotMatch(afkSkill, /four finding-bearing verdicts|refuses to start a fourth\s+sequence/i);
 });
 
-test('design progress is part of the canonical and debate material-progress definitions', () => {
-  const debate = afkSkill.slice(
-    afkSkill.indexOf('**Exit criteria — verified closure within the allowance.**'),
-    afkSkill.indexOf('This is level 3 — doctrine'),
-  );
-  const external = afkSkill.slice(
-    afkSkill.indexOf('Convergence requires net material progress'),
-    afkSkill.indexOf('The no-progress streak crosses debate rounds'),
-  );
-  const autoPause = afkSkill.slice(
-    afkSkill.indexOf('- **Auto-pause:**'),
-    afkSkill.indexOf('## End-of-run report'),
-  );
-
-  assert.match(debate, /design version lands with its\s+frozen\s+contract/i);
-  assert.match(external, /design version lands with its\s+frozen\s+contract/i);
-  assert.match(autoPause, /use the External gate's one material-progress definition above/i);
-  assert.doesNotMatch(autoPause, /admitted P1 closes/);
+test('design and continuity use the canonical material-progress definition', () => {
+  assert.match(design, /design version lands with its\s+frozen\s+contract/i);
+  assert.match(afkSkill, /design version lands with its\s+frozen\s+contract/i);
+  assertRoute(design, 'review-convergence.md#ordered-role-revision-and-convergence-rules');
+  assertRoute(continuity, 'review-convergence.md#ordered-role-revision-and-convergence-rules');
+  assert.doesNotMatch(continuity, /admitted P1 closes/);
 });
 
 test('continuity counts barren ticks only while the current stage is unfinished', () => {
-  assert.match(afkSkill, /Count a\s+barren tick only while the current stage is unfinished/i);
-  assert.doesNotMatch(afkSkill, /intentional external waits are not stalled construction/i);
+  assert.match(continuity, /Count a\s+barren tick only while the current stage is unfinished/i);
+  assert.doesNotMatch(continuity, /intentional external waits are not stalled construction/i);
 });

@@ -23,8 +23,17 @@ design-gate: off         # opt-in pilot: one gate over the design doc before cod
 
 ## review
 # max-fix-cycles:        # optional nonnegative integer; blank means no numeric cap
-                         # kickoff override only; consumed cycles survive resumes
+                         # resource-cap increases need explicit budget authorization
+                         # original baseline and consumed/reserved amounts survive resumes
                          # exhaustion leaves unresolved repairs outstanding
+
+## direction
+mode: off
+# max-audit-attempts:    # optional nonnegative integer; blank has no attempt cap
+# Frozen sources and explicit operator amendments preserve consumed calls.
+# Existing runs stay off until explicitly initialized with recoverable history.
+# Shadow adds observations without direction-only holds; required needs a current
+# source-grounded endpoint COMPLETE alongside ordinary checks and authority.
 
 ## forge
 # forge:                 # github · azure-devops. Omit to detect from the origin
@@ -40,11 +49,13 @@ design-gate: off         # opt-in pilot: one gate over the design doc before cod
                          # repository from the checkout or its environment.
 
 ## checks
-# remote-ci:             # expected (default) · detect · absent. Governs only
+# remote-ci:             # expected (default) · detect · absent · off. Enabled modes govern
                          # what an empty or unanswered reading means: detect
                          # settles it once the window closes, absent at once,
                          # expected never. It adds no required check of its
-                         # own; what counts as required is the forge's answer.
+                         # own; deferred Draft validation must actually run.
+                         # off finishes locally with all reviews and checks,
+                         # without CI reads or automatic push/PR/ready/merge.
 
 ## merge
 policy: leave-open       # leave-open · merge-to-unblock · merge-when-green
