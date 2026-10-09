@@ -135,6 +135,27 @@ test('one reviewer revoking approval does not erase another administrator approv
   assert.ok(!result.calls.some((call) => call.permission === 'reviewer'));
 });
 
+test('deleted accounts do not invalidate a current administrator approval', posix, (t) => {
+  const result = run(t, [[approval({ user: null })], [approval()]], { reviewer: 'admin' });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.ok(result.calls.some((call) => call.permission === 'reviewer'));
+});
+
+test('deleted accounts cannot supply contributor authorization', posix, (t) => {
+  const result = run(t, [[approval({ user: null })]]);
+  assert.equal(result.status, 1);
+  assert.match(result.stdout, /needs an approving review/);
+  assert.ok(!result.calls.some((call) => call.permission === 'null'));
+});
+
+test('a missing user field remains a malformed review record', posix, (t) => {
+  const { user, ...missingUser } = approval();
+  const result = run(t, [[missingUser, approval()]], { reviewer: 'admin' });
+  assert.equal(result.status, 1);
+  assert.match(result.stdout, /Could not evaluate complete review history/);
+  assert.ok(!result.calls.some((call) => call.permission === 'reviewer'));
+});
+
 test('latest decision is selected before current-head filtering', posix, (t) => {
   const result = run(t, [[approval()], [approval({ state: 'CHANGES_REQUESTED', commit_id: 'previous-head' })]], { reviewer: 'admin' });
   assert.equal(result.status, 1, result.stdout + result.stderr);

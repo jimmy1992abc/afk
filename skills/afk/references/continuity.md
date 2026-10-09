@@ -130,8 +130,9 @@ Only `rotation` and `yield` mark a vacated run eligible for immediate takeover.
 A valid marker has a recognized reason, a parseable calendar-valid timestamp
 within the heartbeat validator's future-skew tolerance, and a non-empty action.
 Immediate takeover also requires a known heartbeat with `written` at or after
-it. `compaction` means the writer continues; `auto-pause` leaves a blockage that
-an immediate retake would repeat. Both use the ordinary stale-heartbeat path.
+it and no later than the observer's current time. `compaction` means the writer
+continues; `auto-pause` leaves a blockage that an immediate retake would repeat.
+Both use the ordinary stale-heartbeat path.
 Unknown heartbeat ownership remains notify-only. An absent, malformed or
 out-of-prefix block leaves existing detection unchanged; a marker can add a
 candidate but cannot hide one. The detector reads the first Handoff section and

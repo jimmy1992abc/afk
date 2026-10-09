@@ -3,6 +3,12 @@
 Status: frozen for implementation (2026-09-26). Operator-approved scope; no
 tracker issue.
 
+The default, Claude identity and version decisions below are superseded by
+[review boundaries and session continuity](2026-10-09-review-and-continuity-updates.md)
+and [reviewer defaults](reviewer-defaults-sol61-opus55.md). The integrated release
+uses `deepseek-flash`, tightens Claude minor-version matching and bumps
+1.1.0 → 1.2.0. The remaining allow-list and receipt criteria still apply.
+
 ## Problem
 
 The REST snapshot gates refuse any `*_REVIEW_MODEL` without a digit

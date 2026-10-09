@@ -43,7 +43,8 @@ jobs:
             if type == "array" and all(.[]; type == "array") then .
             else error("invalid review pages") end
             | reduce .[][] as $review ({};
-                if ($review.user.login | type != "string" or length == 0)
+                if ($review | has("user")) and $review.user == null then .
+                elif ($review.user.login | type != "string" or length == 0)
                   or ($review.state | IN("APPROVED", "CHANGES_REQUESTED", "DISMISSED", "COMMENTED", "PENDING") | not)
                 then error("invalid review record")
                 elif ($review.state | IN("APPROVED", "CHANGES_REQUESTED", "DISMISSED"))
