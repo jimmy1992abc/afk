@@ -115,7 +115,7 @@ function withSleepingStub(fn) {
 
 // The identity the gate demands by default, and the envelope field it reads it
 // from. A real run also bills an auxiliary model, so a usage map is a map.
-const PINNED = 'claude-opus-5';
+const PINNED = 'claude-opus-5-5';
 const usage = (...models) => Object.fromEntries(models.map((m) => [m, { outputTokens: 1 }]));
 
 // ── opt-out and the independence guard ──────────────────────────────────────
@@ -378,16 +378,16 @@ test('the default reviewer is a pinned full model ID, not an alias', () => {
   // full ID states which generation the gate asked for.
   const base = runGate({ args: ['--implementer', 'codex', '--commit', TEST_COMMIT, '--print-args'] });
   const dflt = JSON.parse(base.stdout).args;
-  assert.equal(dflt[dflt.indexOf('--model') + 1], 'claude-opus-5');
-  assert.equal(dflt[dflt.indexOf('--effort') + 1], 'medium');
+  assert.equal(dflt[dflt.indexOf('--model') + 1], PINNED);
+  assert.equal(dflt[dflt.indexOf('--effort') + 1], 'high');
 
   const custom = runGate({
     args: ['--implementer', 'codex', '--commit', TEST_COMMIT, '--print-args'],
-    env: { CLAUDE_REVIEW_MODEL: 'claude-sonnet-5', CLAUDE_REVIEW_EFFORT: 'high' },
+    env: { CLAUDE_REVIEW_MODEL: 'claude-sonnet-5', CLAUDE_REVIEW_EFFORT: 'medium' },
   });
   const set = JSON.parse(custom.stdout).args;
   assert.equal(set[set.indexOf('--model') + 1], 'claude-sonnet-5');
-  assert.equal(set[set.indexOf('--effort') + 1], 'high');
+  assert.equal(set[set.indexOf('--effort') + 1], 'medium');
 });
 
 test('explicit Claude aliases and effort override environment and retain pinned argv', () => {
@@ -628,7 +628,7 @@ test('a clean child still requires a Boolean Claude envelope status', () => {
 // first approves reviews written by a model it never asked for.
 
 test('an auxiliary model alongside the pinned reviewer is not a mismatch', () => {
-  // A correct `--model claude-opus-5` run bills a background haiku too, so
+  // A correct pinned-model run bills a background haiku too, so
   // "the pinned model is the only key" would fail every real review.
   withStub({
     is_error: false,
@@ -681,6 +681,15 @@ test('a review produced by another generation is an error, never a verdict', () 
     assert.match(result.stdout, new RegExp(PINNED));
     assert.doesNotMatch(result.stdout, /LGTM/, 'the review text must not be emitted');
     assert.doesNotMatch(result.stdout, /SKIPPED/);
+  });
+});
+
+test('the Opus 5.5 default refuses a response from Opus 5', () => {
+  withStub({ is_error: false, result: 'STALE MODEL\nAPPROVE', modelUsage: usage('claude-opus-5') }, bin => {
+    const result = runGate({ args: ['--implementer', 'codex', '--commit', TEST_COMMIT], env: { CLAUDE_GATE_BIN: bin } });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stdout, /ERROR:.*identity unverified/);
+    assert.doesNotMatch(result.stdout, /STALE MODEL/);
   });
 });
 

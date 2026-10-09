@@ -103,7 +103,8 @@ Roles are decoupled from models. One env var each:
 
 Known providers: `deepseek`, `mimo`, `kimi`, `openai` (OpenAI-compatible API,
 need their `DEV_*_API_KEY`) and `codex` (CLI, `codex login`). Pin a model per
-role with `AGENT_RELAY_SCOPE_MODEL` / `AGENT_RELAY_BRIEF_MODEL`.
+role with `AGENT_RELAY_SCOPE_MODEL` / `AGENT_RELAY_BRIEF_MODEL`. DeepSeek
+defaults to `deepseek-flash`; set `DEV_DEEPSEEK_MODEL=deepseek-v4-pro` for V4 Pro.
 
 ## Setup (per machine, once)
 

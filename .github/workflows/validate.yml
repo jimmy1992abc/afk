@@ -18,6 +18,15 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  windows-executable-boundary:
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Native executable lookup ignores the checkout
+        run: node --test --test-name-pattern="Windows executes the trusted native path" lib/gate/spawn.test.mjs
+
   checks:
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     runs-on: ubuntu-latest

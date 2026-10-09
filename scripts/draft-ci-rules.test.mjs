@@ -9,7 +9,9 @@ const driver = read('skills/afk/SKILL.md') + read('skills/afk/references/publica
 const pilot = read('skills/afk-implementation-pilot/SKILL.md');
 
 test('validation skips draft jobs while retaining main and manual validation', () => {
-  assert.match(validate, /jobs:\n  checks:\n    if: \$\{\{ github\.event_name != 'pull_request' \|\| github\.event\.pull_request\.draft == false \}\}\n/);
+  for (const job of ['checks', 'windows-executable-boundary']) {
+    assert.match(validate, new RegExp(`  ${job}:\\n    if: \\$\\{\\{ github\\.event_name != 'pull_request' \\|\\| github\\.event\\.pull_request\\.draft == false \\}\\}\\n`));
+  }
   assert.match(validate, /  push:\n    branches: \[main\]/);
   assert.match(validate, /  workflow_dispatch:/);
 });

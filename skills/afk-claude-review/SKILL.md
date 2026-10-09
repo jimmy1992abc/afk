@@ -16,24 +16,28 @@ Before supplying context/receipts or reusing receipts, read
 Reuse only the same installed revision already read and still in context;
 otherwise reread it. Apply these routes for standalone invocations too.
 
+For standalone review, run only the requested gate and return its verdict.
+Follow [external review](../afk/references/external-review.md) for the distinction
+between standalone invocation and driver-managed AFK sequencing.
+
 Per-run `--model <alias-or-id>` and `--effort <level>` override
 `CLAUDE_REVIEW_MODEL` and `CLAUDE_REVIEW_EFFORT` independently. The shared
 `../../lib/gate/model-select.mjs` expands explicit `opus`, `fable`, `sonnet`,
 and `haiku` aliases to pinned IDs; environment model values still require full
-IDs. Efforts are `low`, `medium`, `high`, `xhigh`, and `max`. Defaults remain
-`claude-opus-5` and `medium`; `--print-args` reports the effective selection.
+IDs. Efforts are `low`, `medium`, `high`, `xhigh`, and `max`. Defaults are
+`claude-opus-5-5` and `high`; `--print-args` reports the effective selection.
 Response identity verification still applies after alias expansion.
 
-An independent second-opinion review by Claude, used as a fallback external role
+In driver-managed AFK, Claude is an independent fallback external role
 after `afk-internal-review`; it is the default outer fallback when Codex is the
 implementer. Run the ordered roles required by `.afk/config.md`, and never use a
 reviewer whose model matches the implementer or another role.
 
 **This gate exists for the case where Claude is not the implementer** — Codex,
 Kimi, GLM, DeepSeek, MiMo, Gemini or Copilot wrote the change and Claude reviews
-it. It refuses to run otherwise (see Independence below), so under a Claude Code driver it will
-normally self-skip and the next gate in `priority` takes its place. That is the
-intended behaviour, not a fault.
+it. It refuses to run otherwise (see Independence below). In driver-managed AFK, an ineligible Claude role
+self-skips and the next gate in `priority` takes its place. A standalone invocation
+reports the requested gate's skip and returns.
 
 The helper `claude-gate.mjs` ships with this skill and travels with the plugin.
 
@@ -155,8 +159,8 @@ no API key. Disable with `CLAUDE_REVIEW_GATE=off`.
 
 Config knobs:
 
-- `CLAUDE_REVIEW_MODEL` (default `claude-opus-5`)
-- `CLAUDE_REVIEW_EFFORT` (default `medium`)
+- `CLAUDE_REVIEW_MODEL` (default `claude-opus-5-5`)
+- `CLAUDE_REVIEW_EFFORT` (default `high`)
 - `CLAUDE_REVIEW_MAX_CTX_BYTES` (default `400000`)
 - `CLAUDE_GATE_BIN` — override the resolved `claude` binary
 

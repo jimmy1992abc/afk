@@ -16,7 +16,11 @@ Before supplying context/receipts or reusing receipts, read
 Reuse only the same installed revision already read and still in context;
 otherwise reread it. Apply these routes for standalone invocations too.
 
-An independent second-opinion review by Z.ai `glm-5.3`, used as a fallback role
+For standalone review, run only the requested gate and return its verdict.
+Follow [external review](../afk/references/external-review.md) for the distinction
+between standalone invocation and driver-managed AFK sequencing.
+
+In driver-managed AFK, Z.ai `glm-5.3` provides an independent fallback role
 after `afk-internal-review`. Run the ordered roles required by `.afk/config.md`,
 and never use a reviewer whose model matches the implementer or another role.
 
@@ -40,13 +44,9 @@ Required history is validated and never silently truncated.
 
 ## Run it
 
-The bundled helper `glm-gate.mjs` sits beside this SKILL.md. Locate its directory
-as `${CLAUDE_PLUGIN_ROOT}/skills/afk-glm-review` if the env var is set, else
-`<pluginRoot>/skills/afk-glm-review` from `.afk/config.md`, else this skill's own
-directory. Resolve `.afk/` from the repository's main working tree — the first non-bare
-`worktree` record of `git worktree list --porcelain` — never the current directory,
-or a run from a linked worktree reads a different `.afk/` than the one `afk-init`
-wrote. If `.afk/` is absent, the `afk-init` bootstrap runs automatically first:
+Locate the bundled `glm-gate.mjs` beside this skill using the canonical
+[environment procedure](../afk/references/environment.md#bundled-helper-location),
+including upgrade reconciliation and main-worktree configuration discovery:
 
 ```text
 node "<helper-dir>/glm-gate.mjs"

@@ -15,7 +15,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { spawnViaShell } from '../../../lib/gate/spawn.mjs';
+import { resolveCliBin, spawnViaShell } from '../../../lib/gate/spawn.mjs';
 import { relayError } from './relay.mjs';
 
 const INPUT_SEPARATOR = '\n\n';
@@ -25,7 +25,7 @@ function resolveCodex(env, isWin) {
     const shim = join(env.APPDATA, 'npm', 'codex.cmd');
     if (existsSync(shim)) return shim;
   }
-  return 'codex';
+  return resolveCliBin('codex', { env, isWin });
 }
 
 export function makeCodexProvider() {

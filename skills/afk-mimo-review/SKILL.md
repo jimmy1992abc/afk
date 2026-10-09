@@ -16,6 +16,10 @@ Before supplying context/receipts or reusing receipts, read
 Reuse only the same installed revision already read and still in context;
 otherwise reread it. Apply these routes for standalone invocations too.
 
+For standalone review, run only the requested gate and return its verdict.
+Follow [external review](../afk/references/external-review.md) for the distinction
+between standalone invocation and driver-managed AFK sequencing.
+
 An optional independent review by `mimo-v2.5-pro` through Xiaomi's Token Plan.
 Run it only when an explicit `.afk/config.md` `gates:` or `priority:` profile
 selects MiMo, or when the operator invokes this skill directly. Never use it

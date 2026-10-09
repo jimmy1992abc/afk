@@ -315,11 +315,11 @@ test('codex gate promotes an operator-supplied base, not just the detected one',
 
 test('codex gate keeps its lean-context overrides ahead of passthrough flags', () => {
   // Codex applies later -c overrides last, so an operator's own -c must win.
-  const result = runGate({ args: ['--commit', TEST_COMMIT, '-c', 'model_reasoning_effort=high', '--print-args'] });
+  const result = runGate({ args: ['--commit', TEST_COMMIT, '-c', 'model_reasoning_effort=low', '--print-args'] });
 
   const { args } = JSON.parse(result.stdout);
   const efforts = args.filter((a) => String(a).startsWith('model_reasoning_effort='));
-  assert.deepEqual(efforts, ['model_reasoning_effort=medium', 'model_reasoning_effort=high']);
+  assert.deepEqual(efforts, ['model_reasoning_effort=high', 'model_reasoning_effort=low']);
 });
 
 test('codex gate does not forward --print-args to codex', () => {
@@ -337,8 +337,9 @@ test('codex gate pins the reviewer model instead of inheriting the session one',
   const result = runGate({ args: ['--commit', TEST_COMMIT, '--print-args'] });
 
   const { args, model } = JSON.parse(result.stdout);
-  assert.equal(model, 'gpt-5.6-sol');
-  assert.ok(args.includes('model=gpt-5.6-sol'), `no pinned model in ${JSON.stringify(args)}`);
+  assert.equal(model, 'gpt-6.1-sol');
+  assert.ok(args.includes('model_reasoning_effort=high'));
+  assert.ok(args.includes('model=gpt-6.1-sol'), `no pinned model in ${JSON.stringify(args)}`);
 });
 
 test('codex gate honours an explicit CODEX_REVIEW_MODEL', () => {
@@ -350,13 +351,13 @@ test('codex gate honours an explicit CODEX_REVIEW_MODEL', () => {
   const { args, model } = JSON.parse(result.stdout);
   assert.equal(model, 'gpt-6-astra');
   assert.ok(args.includes('model=gpt-6-astra'));
-  assert.equal(args.includes('model=gpt-5.6-sol'), false);
+  assert.equal(args.includes('model=gpt-6.1-sol'), false);
 });
 
 test('codex model and effort flags resolve aliases and are consumed before CLI dispatch', () => {
   const result = runGate({
     args: ['--commit', TEST_COMMIT, '--model=astra', '--effort', 'max', '--print-args'],
-    env: { CODEX_REVIEW_MODEL: 'gpt-5.6-sol', CODEX_REVIEW_REASONING: 'low' },
+    env: { CODEX_REVIEW_MODEL: 'gpt-6.1-sol', CODEX_REVIEW_REASONING: 'low' },
   });
   assert.equal(result.status, 0, result.stderr);
   const out = JSON.parse(result.stdout);
@@ -401,7 +402,7 @@ test('codex gate keeps the pinned model ahead of an operator -c override', () =>
 
   const { args } = JSON.parse(result.stdout);
   const models = args.filter((a) => String(a).startsWith('model='));
-  assert.deepEqual(models, ['model=gpt-5.6-sol', 'model=gpt-6-astra']);
+  assert.deepEqual(models, ['model=gpt-6.1-sol', 'model=gpt-6-astra']);
 });
 
 test('codex design raw overrides match reported selection without forwarding unsafe options', () => {
@@ -426,7 +427,8 @@ test('codex design mode pins the same reviewer model as diff mode', () => {
   withDesignDoc('# Spec\n', (path) => {
     const result = runGate({ args: ['--design', path, '--print-args'] });
     const { args } = JSON.parse(result.stdout);
-    assert.ok(args.includes('model=gpt-5.6-sol'), JSON.stringify(args));
+    assert.ok(args.includes('model=gpt-6.1-sol'), JSON.stringify(args));
+    assert.ok(args.includes('model_reasoning_effort=high'), JSON.stringify(args));
   });
 });
 

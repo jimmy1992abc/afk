@@ -207,6 +207,11 @@ and Kimi cannot verify identity through the current final-text interface and
 report unavailable. Auxiliary Claude usage identities remain observations, not
 additional role assignments. A mismatch follows the existing error path.
 
+HTTP gates add an optional fifth field, `fingerprint`: the response
+`system_fingerprint`, or null when the response has none. It records the
+provider backend as evidence and is never compared. Receipts without the field
+remain valid.
+
 Execution records the helper-observed child exit code/signal or provider
 completion state when available, otherwise explicit null values. It does not
 claim the wrapper's future exit was observed. Raw CLI transcripts remain where

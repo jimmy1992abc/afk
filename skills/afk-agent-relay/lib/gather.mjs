@@ -6,7 +6,7 @@
 // mocking.
 
 import { spawnSync } from 'node:child_process';
-import { readConfigSectionValue } from '../../../lib/config.mjs';
+import { readConfigSectionStrict } from '../../../lib/config.mjs';
 import { issueCommand, resolveForge } from '../../../lib/forge.mjs';
 import { RAW_DIFF_FLAGS, runGit } from '../../../lib/gate/git.mjs';
 import { readConfinedUtf8File } from '../../../lib/gate/file-boundary.mjs';
@@ -176,15 +176,13 @@ export function gatherContext(sources = {}, opts = {}) {
   if ((sources.issue || []).length) {
     const remote = run('git', ['remote', 'get-url', 'origin']);
     const remoteUrl = remote.status === 0 ? remote.stdout.trim() : '';
-    const { forge } = resolveForge({ configPath, remoteUrl });
-    // Both name the tracker for a checkout whose remote cannot; without them the
-    // forge's CLI picks one from the working directory or its own environment.
-    const organization = configPath
-      ? readConfigSectionValue(configPath, 'forge', 'azure-organization')
-      : null;
-    const repository = configPath
-      ? readConfigSectionValue(configPath, 'forge', 'github-repository')
-      : null;
+    let fields;
+    try { fields = configPath ? readConfigSectionStrict(configPath, 'forge').fields : {}; }
+    catch { throw relayError('config_unreadable', 'forge configuration is unreadable'); }
+    const { forge } = resolveForge({ remoteUrl, configFields: fields });
+    // The forge and its cross-host selectors must describe the same config read.
+    const organization = fields['azure-organization'];
+    const repository = fields['github-repository'];
     for (const n of sources.issue) {
       const cmd = issueCommand(forge, n, { remoteUrl, organization, repository });
       if (cmd.unsupported) {

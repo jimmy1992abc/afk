@@ -13,6 +13,15 @@ import { mainWorktree } from '../../../lib/gate/git.mjs';
 
 const noRun = () => ({ status: 1, stdout: '', stderr: '', error: new Error('nope') });
 
+test('quoted JSON credentials never reach gathered relay context', () => {
+  const result = gatherContext({ files: ['config.json'] }, {
+    run: noRun, readFile: () => '{"password":"fixture-pass-123","enabled":true}',
+  });
+  assert.doesNotMatch(result.text, /fixture-pass-123/);
+  assert.match(result.text, /"enabled":true/);
+  assert.ok(result.notes.some((note) => /redacted/.test(note)));
+});
+
 test('excluded files are skipped with a loud note', () => {
   const g = gatherContext(
     { files: ['.env', 'app.py'] },

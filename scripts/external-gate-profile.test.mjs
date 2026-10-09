@@ -127,9 +127,10 @@ test('gate skills name stable default roles instead of interchangeability', () =
 });
 
 
-test('repository-author documents route profile mechanics while keeping owner authority visible', () => {
+test('repository-author documents retain owner review and route independent roles', () => {
   for (const text of [agents, contributing]) {
     assertRoute(text, 'skills/afk/references/external-review.md');
-    assert.match(text, /owner\/maintainer/);
+    assert.match(text, /owner\/maintainer.*review|reviewed by the owner\/maintainer/i);
   }
+  assert.match(agents, /Each actual reviewer differs from the implementer\s+and every other review role/);
 });

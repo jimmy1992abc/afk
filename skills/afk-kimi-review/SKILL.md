@@ -16,7 +16,11 @@ Before supplying context/receipts or reusing receipts, read
 Reuse only the same installed revision already read and still in context;
 otherwise reread it. Apply these routes for standalone invocations too.
 
-An independent second-opinion review by Kimi (a *different* model), used as the
+For standalone review, run only the requested gate and return its verdict.
+Follow [external review](../afk/references/external-review.md) for the distinction
+between standalone invocation and driver-managed AFK sequencing.
+
+In driver-managed AFK, Kimi is an independent review by a *different* model, the
 default **final** role after internal review and all outer findings are resolved.
 Run the ordered `gates` profile from `.afk/config.md`, and never use a reviewer
 whose model matches the implementer or another role. Kimi reviews the diff
@@ -124,7 +128,7 @@ authority to merge.
 
 ## Selection
 
-Kimi is the default final role, not a generic second pass. The operator's
+In driver-managed AFK, Kimi is the default final role, not a generic second pass. The operator's
 explicit ordered profile wins; otherwise the `afk` skill's role/fallback rule
 applies (skip the implementer's and already-used models). The provider is locked
 to final for later sequences; a substitution is recorded and resets only its

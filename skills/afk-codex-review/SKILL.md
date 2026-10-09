@@ -16,7 +16,11 @@ Before supplying context/receipts or reusing receipts, read
 Reuse only the same installed revision already read and still in context;
 otherwise reread it. Apply these routes for standalone invocations too.
 
-An independent second-opinion review by Codex (a *different* model), used as the
+For standalone review, run only the requested gate and return its verdict.
+Follow [external review](../afk/references/external-review.md) for the distinction
+between standalone invocation and driver-managed AFK sequencing.
+
+In driver-managed AFK, Codex is an independent review by a *different* model, the
 default **outer** role before later configured roles (Kimi is the default final
 when a final role is configured; the built-in default is a single Codex gate).
 Run the ordered `gates` profile from `.afk/config.md`, never use a reviewer whose
@@ -68,7 +72,7 @@ read-only on every OS. A missing or unreadable `--design` path fails loudly
 `AFK_REVIEW_TIMEOUT_MS` as the shared fallback. A timeout is a non-zero `ERROR`,
 never a partial verdict; it follows the role's transient retry rule.
 
-**The reviewer's model defaults to `gpt-5.6-sol`**, pinned independently of
+**The reviewer's model defaults to `gpt-6.1-sol`**, pinned independently of
 `~/.codex/config.toml`: an
 interactive session tuned for speed or cost would otherwise decide the gate's
 model, and a downgraded reviewer reads exactly like a thorough one.
@@ -79,8 +83,8 @@ installed CLI is too old for the pinned id and rejects it outright. `--print-arg
 reports the resolved model without spending a call.
 
 Per-run `--model <alias-or-id>` and `--effort <level>` override their environment
-values independently. Model aliases `sol`, `terra`, and `astra` resolve through
-`../../lib/gate/model-select.mjs`; the default remains Sol at medium effort.
+values independently. Model aliases `sol`, `terra`, `luna`, and `astra` resolve through
+`../../lib/gate/model-select.mjs`; the default is Sol 6.1 at high effort.
 Efforts are `low`, `medium`, `high`, `xhigh`, and `max`; legacy `minimal` is
 rejected for GPT-5.6 and GPT-6. Explicit Codex `-c model=...` and
 `-c model_reasoning_effort=...` retain last-wins precedence, with the effective

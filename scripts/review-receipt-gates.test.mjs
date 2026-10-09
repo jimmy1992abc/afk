@@ -15,14 +15,14 @@ mkdirSync(join(cwd, '.afk', 'runs', 'receipt-run'), { recursive: true });
 writeFileSync(join(cwd, '.git', 'info', 'exclude'), '.afk/\n');
 writeFileSync(join(cwd, '.afk', 'design.md'), '# Fixture design\nRequired behavior is explicit.\n');
 const gate = (family) => fileURLToPath(new URL(`../skills/afk-${family}-review/${family}-gate.mjs`, import.meta.url));
-const models = { claude: 'claude-opus-5', codex: 'gpt-5.6-sol', kimi: null,
-  glm: 'glm-5.3', deepseek: 'deepseek-v4-pro', mimo: 'mimo-v2.5-pro' };
+const models = { claude: 'claude-opus-5-5', codex: 'gpt-6.1-sol', kimi: null,
+  glm: 'glm-5.3', deepseek: 'deepseek-flash', mimo: 'mimo-v2.5-pro' };
 let sequence = 0;
 function attempt(family, overrides = {}) {
   const attemptId = `gate-${++sequence}`;
   const request = { version: 1, runId: 'receipt-run', issue: '97', attemptId, roleIndex: 0,
     profile: { source: 'flags', roles: [{ preferred: family, reviewer: family,
-      model: models[family], effort: ['claude', 'codex'].includes(family) ? 'medium' : null }] }, ...overrides };
+      model: models[family], effort: ['claude', 'codex'].includes(family) ? 'high' : null }] }, ...overrides };
   const path = join(cwd, '.afk', `${attemptId}.json`);
   writeFileSync(path, JSON.stringify(request));
   const output = join(cwd, '.afk', 'runs', 'receipt-run', 'receipts', attemptId);
@@ -42,7 +42,7 @@ if(args.includes('login')){console.log('Logged in');process.exit(0);}
 if(args.some(x=>x.startsWith('--review-receipt'))) throw new Error('receipt flag leaked');
 if(process.env.RECEIPT_STUB_NONZERO==='1'){console.log('SOUND');process.exit(1);}
 if(process.env.RECEIPT_STUB_HANG==='1') {process.stderr.write('fixture waiting\\n');setInterval(()=>{},1000);}
-else if(${JSON.stringify(family)}==='claude')console.log(JSON.stringify({is_error:false,result:'Fixture review.\\nSOUND',modelUsage:{[process.env.RECEIPT_STUB_MODEL||'claude-opus-5']:{}}}));
+else if(${JSON.stringify(family)}==='claude')console.log(JSON.stringify({is_error:false,result:'Fixture review.\\nSOUND',modelUsage:{[process.env.RECEIPT_STUB_MODEL||'claude-opus-5-5']:{}}}));
 else if(${JSON.stringify(family)}==='codex')fs.writeFileSync(args[args.indexOf('-o')+1],'Fixture review.\\nSOUND');
 else console.log('Fixture review.\\nSOUND');
 `);
@@ -122,7 +122,7 @@ test('Claude mismatched observed identity stays separate from the requested mode
   const result = run('claude', receipt.args, { ...stub('claude'), RECEIPT_STUB_MODEL: 'claude-opus-4' });
   assert.notEqual(result.status, 0);
   const terminal = receipt.terminal();
-  assert.equal(terminal.model.requested.model, 'claude-opus-5');
+  assert.equal(terminal.model.requested.model, 'claude-opus-5-5');
   assert.deepEqual(terminal.model.observed, ['claude-opus-4']);
   assert.equal(terminal.model.verification, 'mismatch');
   assert.equal(terminal.outcome.kind, 'error');
@@ -162,3 +162,28 @@ for (const [family, key] of [['glm', 'ZAI_API_KEY'], ['deepseek', 'DEEPSEEK_REVI
     } finally { server.closeAllConnections?.(); server.close(); }
   });
 }
+
+for (const [label, reported, recorded] of [['records the backend fingerprint', 'fp_a49d71b8a1', 'fp_a49d71b8a1'],
+  ['drops a secret-shaped fingerprint instead of failing the review', 'a'.repeat(64), null]]) test(`deepseek unversioned HTTP receipt verifies identity and ${label}`, async () => {
+  const server = createServer(async (req, res) => {
+    for await (const chunk of req) void chunk;
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ model: 'deepseek-flash', system_fingerprint: reported,
+      choices: [{ message: { content: 'Fixture review.\nSOUND' }, finish_reason: 'stop' }] }));
+  });
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  try {
+    const receipt = attempt('deepseek');
+    const child = spawn(process.execPath, [gate('deepseek'), '--design', '.afk/design.md', '--implementer', 'codex', ...receipt.args], {
+      cwd, env: gateTestEnv({ DEEPSEEK_REVIEW_API_KEY: 'fixture-key',
+        DEEPSEEK_REVIEW_BASE_URL: `http://127.0.0.1:${server.address().port}` }),
+      stdio: ['ignore', 'pipe', 'pipe'], timeout: 30000,
+    });
+    let output = ''; child.stdout.on('data', (chunk) => output += chunk); child.stderr.on('data', (chunk) => output += chunk);
+    const [status] = await once(child, 'close');
+    assert.equal(status, 0, output);
+    const { model } = receipt.terminal();
+    assert.deepEqual(model, { requested: { model: 'deepseek-flash', effort: null }, observed: ['deepseek-flash'],
+      verification: 'verified', reason: null, fingerprint: recorded });
+  } finally { server.closeAllConnections?.(); server.close(); }
+});

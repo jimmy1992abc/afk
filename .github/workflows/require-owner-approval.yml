@@ -1,10 +1,7 @@
 name: require-owner-approval
 
-# Defense in depth beside the documented branch-protection ruleset: fail a PR
-# that lacks an approving review from a repository admin on the current head
-# commit, unless an admin authored it. Trust is permission-based (admin), not
-# the broad MEMBER association, and only approvals on the head commit count, so
-# new commits re-arm the gate.
+# Contributor authorization is separate from independent-model review. An admin
+# author satisfies authorization, but does not prove that any review happened.
 
 on:
   pull_request:
@@ -22,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Require an admin approval
+      - name: Check contributor authorization
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -34,13 +31,27 @@ jobs:
           author_perm=$(perm_of "$author")
           echo "PR author: $author ($author_perm)"
           if [ "$author_perm" = "admin" ]; then
-            echo "Authored by an admin — inherently admin-reviewed."
+            echo "Admin author satisfies contributor authorization; owner and independent-model reviews remain required by policy."
             exit 0
           fi
           head=$(gh api "repos/$REPO/pulls/$PR" --jq '.head.sha')
-          if ! approvers=$(HEAD_SHA="$head" gh api "repos/$REPO/pulls/$PR/reviews" --paginate \
-            --jq '[.[] | select(.state=="APPROVED") | select(.commit_id==env.HEAD_SHA) | .user.login] | unique | .[]'); then
+          if ! reviews=$(gh api "repos/$REPO/pulls/$PR/reviews" --paginate --slurp); then
             echo "::error::Could not fetch complete review history."
+            exit 1
+          fi
+          if ! approvers=$(jq -r --arg head "$head" '
+            if type == "array" and all(.[]; type == "array") then .
+            else error("invalid review pages") end
+            | reduce .[][] as $review ({};
+                if ($review.user.login | type != "string" or length == 0)
+                  or ($review.state | IN("APPROVED", "CHANGES_REQUESTED", "DISMISSED", "COMMENTED", "PENDING") | not)
+                then error("invalid review record")
+                elif ($review.state | IN("APPROVED", "CHANGES_REQUESTED", "DISMISSED"))
+                then .[$review.user.login] = $review
+                else . end)
+            | .[] | select(.state == "APPROVED" and .commit_id == $head) | .user.login
+          ' <<< "$reviews"); then
+            echo "::error::Could not evaluate complete review history."
             exit 1
           fi
           for u in $approvers; do

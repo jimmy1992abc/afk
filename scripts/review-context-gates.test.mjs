@@ -57,7 +57,7 @@ if (${JSON.stringify(family)} === 'kimi') {
   if (match) prompt = fs.readFileSync(match[1], 'utf8');
 } else prompt = fs.readFileSync(0, 'utf8');
 fs.writeFileSync(${JSON.stringify(capture)}, JSON.stringify({ args, prompt }));
-if (${JSON.stringify(family)} === 'claude') console.log(JSON.stringify({ is_error: false, result: 'F96-001 verified.\\nAPPROVE', modelUsage: { 'claude-opus-5': {} } }));
+if (${JSON.stringify(family)} === 'claude') console.log(JSON.stringify({ is_error: false, result: 'F96-001 verified.\\nAPPROVE', modelUsage: { 'claude-opus-5-5': {} } }));
 else if (${JSON.stringify(family)} === 'codex') fs.writeFileSync(args[args.indexOf('-o') + 1], 'F96-001 verified.\\nSOUND');
 else console.log('F96-001 verified.\\nAPPROVE');
 `);
@@ -151,7 +151,7 @@ async function httpCall(family, args, env, response, verify) {
 
 for (const [family, model, keyEnv, protocol] of [
   ['glm', 'glm-5.3', 'ZAI_API_KEY', 'openai'], ['glm', 'glm-5.3', 'ZAI_API_KEY', 'anthropic'],
-  ['deepseek', 'deepseek-v4-pro', 'DEEPSEEK_REVIEW_API_KEY', 'openai'], ['mimo', 'mimo-v2.5-pro', 'MIMO_REVIEW_API_KEY', 'openai'],
+  ['deepseek', 'deepseek-flash', 'DEEPSEEK_REVIEW_API_KEY', 'openai'], ['mimo', 'mimo-v2.5-pro', 'MIMO_REVIEW_API_KEY', 'openai'],
 ]) {
   test(`${family} ${protocol} actual HTTP request preserves artifact digest and proof`, async () => {
     const { args, context, packet } = prepare(['--design', '.afk/design.md']);
