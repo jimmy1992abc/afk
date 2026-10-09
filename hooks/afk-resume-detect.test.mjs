@@ -34,11 +34,11 @@ function initRepo() {
 const staleIso = () => new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
 const freshIso = () => new Date().toISOString();
 
-function writeRun(root, id, { state = 'active', heartbeat = staleIso(), scope = 'ship it' } = {}) {
+function writeRun(root, id, { state = 'active', heartbeat = staleIso(), scope = 'ship it', handoff = '' } = {}) {
   const dir = join(root, '.afk', 'runs', id);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, 'ledger.md'),
-    `# afk run ledger\n\nrun-id: ${id}\nscope: ${scope}\nstate: ${state}\nheartbeat: ${heartbeat}\n\n## State\n`,
+    `# afk run ledger\n\nrun-id: ${id}\nscope: ${scope}\nstate: ${state}\nheartbeat: ${heartbeat}\n${handoff}\n## State\n`,
     'utf8');
 }
 
@@ -355,6 +355,61 @@ test('a repo with no .afk stays silent even with the notice enabled', () => {
     const r = runHook({ cwd: root, env: NOTICE_ON });
     assert.equal(r.status, 0);
     assert.equal(r.stdout.trim(), '');
+  } finally {
+    cleanup(root);
+  }
+});
+
+// ── deliberate handoff ────────────────────────────────────────────────────────
+
+for (const reason of ['rotation', 'yield']) {
+  for (const mode of ['notify', 'auto', 'off']) {
+    test(`hook handles a fresh ${reason} marker in ${mode} mode`, () => {
+      const root = initRepo();
+      try {
+        const heartbeat = freshIso();
+        writeRun(root, 'yielded', {
+          heartbeat,
+          handoff: `\n## Handoff\nwritten: ${heartbeat}\nreason: ${reason}\nnext-action: Run tests from plan.md\n`,
+        });
+        writeConfig(root, mode);
+        const r = runHook({ cwd: root });
+        assert.equal(r.status, 0);
+        if (mode === 'off') {
+          assert.equal(r.stdout.trim(), '');
+        } else {
+          const c = parseOut(r.stdout).hookSpecificOutput.additionalContext;
+          assert.ok(c.includes(`Yielded deliberately at ${heartbeat}; next action recorded in the ledger (verbatim): Run tests from plan.md`));
+          if (mode === 'auto') assert.match(c, /resume this run autonomously/);
+          else assert.doesNotMatch(c, /autonomously/);
+        }
+      } finally {
+        cleanup(root);
+      }
+    });
+  }
+}
+
+test('hook malformed handoff preserves fresh, stale and unknown-owner behavior', () => {
+  const root = initRepo();
+  try {
+    writeRun(root, 'malformed');
+    writeConfig(root, 'auto');
+    for (const [heartbeat, expected] of [[freshIso(), 'silent'], [staleIso(), 'auto'], ['garbage', 'notify']]) {
+      writeRun(root, 'malformed', {
+        heartbeat,
+        handoff: '\n## Handoff\nwritten: 2026-02-30T12:00:00Z\nreason: yield\nnext-action: Run tests\n',
+      });
+      const r = runHook({ cwd: root });
+      assert.equal(r.status, 0);
+      if (expected === 'silent') assert.equal(r.stdout.trim(), '');
+      else {
+        const c = parseOut(r.stdout).hookSpecificOutput.additionalContext;
+        assert.doesNotMatch(c, /Yielded deliberately/);
+        if (expected === 'notify') assert.match(c, /notify-only/);
+        else assert.match(c, /resume this run autonomously/);
+      }
+    }
   } finally {
     cleanup(root);
   }

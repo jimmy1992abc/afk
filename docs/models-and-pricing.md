@@ -5,12 +5,15 @@ AFK reports provider usage where available; it does not calculate an invoice.
 
 ## Current selections
 
+Plugin defaults below reflect 1.2.0. Provider and pricing notes retain the
+2026-09-10 source check.
+
 | Role | Selection | Release decision |
 | --- | --- | --- |
-| Codex review | `gpt-5.6-sol`, medium effort | Fixed default; `astra`, `sol`, `terra`, and `luna` are explicit AFK shortcuts |
-| Claude review | `claude-opus-5`, medium effort | Retained; `fable` now expands to `claude-fable-5-1` |
+| Codex review | `gpt-6.1-sol`, high effort | Fixed default; `astra`, `sol`, `terra`, and `luna` are explicit AFK shortcuts |
+| Claude review | `claude-opus-5-5`, high effort | Fixed default; `fable` retains `claude-fable-5-1` |
 | GLM review | `glm-5.3` | Updated from GLM-5.1 |
-| DeepSeek review/relay | `deepseek-v4-pro` | Retained; the provider currently resolves it to V4-Pro-0813 |
+| DeepSeek review/relay | `deepseek-flash` | Default; explicit `deepseek-v4-pro` remains supported |
 | MiMo review/relay | `mimo-v2.5-pro` | Retained |
 | Kimi review | Installed CLI selection | Preserve account/CLI selection; no invented API model default |
 | Kimi/OpenAI API relay | Explicit model configuration | Preserve the endpoint-specific choice |

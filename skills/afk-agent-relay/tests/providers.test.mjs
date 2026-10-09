@@ -1,5 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { quoteForShell } from '../../../lib/gate/spawn.mjs';
 import { buildRegistry, resolveProvider } from '../lib/providers.mjs';
 import { deepseekUsage } from '../../../lib/http/openai-provider.mjs';
 
@@ -222,6 +226,12 @@ test('empty completion is an error, not silent success', async () => {
   );
 });
 
+test('deepseek provider defaults to Flash and accepts V4 Pro', () => {
+  const p = resolveProvider(buildRegistry(), 'deepseek');
+  assert.equal(p.defaultModel({}), 'deepseek-flash');
+  assert.equal(p.defaultModel({ DEV_DEEPSEEK_MODEL: 'deepseek-v4-pro' }), 'deepseek-v4-pro');
+});
+
 test('openai provider requires an explicit model (no wrong-guess default)', () => {
   const p = resolveProvider(buildRegistry(), 'openai');
   assert.throws(() => p.defaultModel({}), /no model configured/);
@@ -232,6 +242,24 @@ test('codex provider omits -m by default and ignores another role\'s model env',
   const p = resolveProvider(buildRegistry(), 'codex');
   assert.equal(p.defaultModel({}), null);
   assert.equal(p.defaultModel({ AGENT_RELAY_BRIEF_MODEL: 'deepseek-x' }), null);
+});
+
+test('Windows Codex relay resolves PATH absolutely and refuses a missing CLI before launch', async (t) => {
+  const provider = resolveProvider(buildRegistry(), 'codex');
+  const dir = mkdtempSync(join(tmpdir(), 'afk-relay-cli-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const executable = join(dir, 'codex.exe');
+  writeFileSync(executable, 'fixture');
+  const spawnImpl = (bin) => {
+    assert.equal(bin, quoteForShell(executable));
+    return { status: 0, stdout: 'Logged in', stderr: '' };
+  };
+  assert.equal(provider.available({ PATH: dir }, spawnImpl, true).ok, true);
+  const noLaunch = () => assert.fail('an unavailable CLI must never launch from the checkout');
+  assert.match(provider.available({ PATH: '' }, noLaunch, true).reason, /not installed/);
+  await assert.rejects(provider.complete({
+    system: 'fixture', user: 'fixture', env: { PATH: '' }, spawnImpl: noLaunch, isWin: true,
+  }), (error) => error.code === 'not_installed');
 });
 
 test('deepseekUsage prefers cached_tokens, falls back to prompt_cache_hit_tokens', () => {

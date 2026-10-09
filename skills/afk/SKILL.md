@@ -22,6 +22,7 @@ These are level 3 workflow instructions, not an automatic loader.
 | --- | --- |
 | Kickoff/config resolution | [Environment](references/environment.md), [kickoff](references/kickoff.md), [external role profile](references/external-review.md), [issue allowance](references/review-convergence.md), and [CI mode](references/publication.md). |
 | Run claim, stage/session handoff or resume | [Continuity](references/continuity.md); keep the current run and authority, including restricted executor handoffs. |
+| Spawning a nested child stage | [Delegation](references/delegation.md); supply the bounded task and retained run, then validate the returned result. |
 | Stage result or execution summary | [Stage output](references/output.md); retain complete source evidence. |
 | Explicit direction-state initialization, check or amendment | [Direction state](references/direction-state.md); no automatic audit activation or dispatch. |
 | Retained direction policy enables a stage/signal audit or endpoint check | [Direction audits](references/direction-audit.md); preserve off/shadow/required behavior and the selected endpoint. |

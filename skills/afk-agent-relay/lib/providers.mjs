@@ -28,7 +28,7 @@ export function buildRegistry() {
       baseUrlEnv: 'DEV_DEEPSEEK_BASE_URL',
       baseUrlDefault: 'https://api.deepseek.com',
       modelEnv: 'DEV_DEEPSEEK_MODEL',
-      modelDefault: 'deepseek-v4-pro',
+      modelDefault: 'deepseek-flash',
       tokenParam: 'max_tokens',
       // DeepSeek dual-mode: send `thinking` explicitly (default enabled) so a
       // server-side default flip can't silently change behaviour. Disable via

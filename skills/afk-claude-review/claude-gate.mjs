@@ -27,7 +27,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { closeSync, openSync, writeSync } from 'node:fs';
-import { join } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 
 import { isGateDisabled, isSpawnTimeout, reviewTimeoutMs } from '../../lib/gate/env.mjs';
 import { classifyChildOutcome, describeChildOutcome } from '../../lib/gate/child-outcome.mjs';
@@ -129,6 +129,7 @@ receipt.capture({ target });
 let prompt;
 let changedFiles = [];
 let hasChanges = true;
+let reviewCwd;
 
 if (isDesign) {
   // The reviewer keeps its Read/Grep/Glob tools: a design cites code, so it can
@@ -149,11 +150,12 @@ if (isDesign) {
   ].join('\n');
   prompt = buildDesignReviewPrompt({ scope: target.label, context });
 } else {
-  const { diff, stat, changedFiles: cf, untracked = [], error: diffError } = collectDiff(target);
+  const { diff, stat, changedFiles: cf, untracked = [], worktreeRoot, error: diffError } = collectDiff(target);
   if (diffError) {
     // Never a skip: a target git cannot read is unreviewable, not unchanged.
     emitError(`cannot review — ${diffError}`, 1);
   }
+  reviewCwd = worktreeRoot;
   changedFiles = cf;
   hasChanges = Boolean(diff.trim() || changedFiles.length);
 
@@ -226,7 +228,7 @@ const timeoutMs = reviewTimeoutMs('claude');
 
 if (!isPinnedModelId(model)) {
   emitError(
-    `cannot review — CLAUDE_REVIEW_MODEL "${model}" is an alias, not a pinned model ID. An alias is resolved by the host and can select an older generation with no visible symptom, which this gate cannot allow. Set a full ID, e.g. claude-opus-5.`,
+    `cannot review — CLAUDE_REVIEW_MODEL "${model}" is an alias, not a pinned model ID. An alias is resolved by the host and can select an older generation with no visible symptom, which this gate cannot allow. Set a full ID, e.g. claude-opus-5-5.`,
     1,
   );
 }
@@ -252,11 +254,11 @@ const args = [
   '--no-session-persistence',
 ];
 
-// resolveCliBin: an npm-installed `claude.cmd` with no `.exe` is invisible to
-// libuv's Windows PATH search, so the shell-less spawn below ENOENTs and this
-// gate reports an installed CLI as missing. A no-op off Windows and whenever
-// libuv can find the name itself.
-const bin = resolveCliBin((process.env.CLAUDE_GATE_BIN || 'claude').trim());
+// Absolute Windows resolution prevents a checkout executable from shadowing PATH.
+const selectedBin = resolveCliBin((process.env.CLAUDE_GATE_BIN || 'claude').trim());
+// Changing the review cwd must not change an explicit caller-selected executable.
+const bin = reviewCwd && selectedBin && !isAbsolute(selectedBin) && /[\\/]/.test(selectedBin)
+  ? resolve(selectedBin) : selectedBin;
 
 if (printPromptOnly) {
   emitPreview(`${prompt}\n`);
@@ -270,6 +272,7 @@ if (printArgsOnly) {
   // able to report which base it resolved.
   emitPreview(`${JSON.stringify({
     bin,
+    reviewCwd,
     model,
     effort,
     selectionSources: selection.sources,
@@ -294,6 +297,8 @@ if (!hasChanges) {
   emitSkip(`No changes found for ${target.label}.`);
 }
 
+if (bin === null) emitSkip('Claude CLI not found in an absolute PATH directory.');
+
 const workDir = gateWorkDir('claude-gate-');
 if (workDir.error) emitError(workDir.error, 1);
 const work = workDir.path;
@@ -310,7 +315,15 @@ function dropEmptyValued(argv, flag) {
   return i >= 0 && argv[i + 1] === '' ? [...argv.slice(0, i), ...argv.slice(i + 2)] : argv;
 }
 
+// POSIX resolves relative and empty PATH entries after chdir; retain the caller's
+// executable search identity when repository-wide review changes that directory.
+const reviewEnv = reviewCwd && !isWin && process.env.PATH !== undefined
+  ? { ...process.env, PATH: process.env.PATH.split(':').map(entry => resolve(entry || '.')).join(':') }
+  : process.env;
+
 const spawnOpts = {
+  cwd: reviewCwd,
+  env: reviewEnv,
   input: prompt,
   encoding: 'utf8',
   maxBuffer: 64 * 1024 * 1024,

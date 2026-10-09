@@ -10,3 +10,13 @@ description = "Intentional secret-shaped fixtures in redaction tests"
 paths = [
   '''skills/afk-agent-relay/tests/.*\.test\.mjs''',
 ]
+
+# The generic detector must still flag other values in these security tests.
+[[rules]]
+id = "generic-api-key"
+
+[[rules.allowlists]]
+description = "Exact synthetic values used by credential boundary regressions"
+condition = "AND"
+paths = ['''^lib/(secret|gate/snapshot|http/transport)\.test\.mjs$''']
+regexes = ['''^fixture-(secret123|key-123|pass-123)$''']

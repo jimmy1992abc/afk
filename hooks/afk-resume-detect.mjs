@@ -2,11 +2,13 @@
 // afk-resume-detect.mjs — plugin-level SessionStart hook.
 //
 // When a window (re)opens against a repo, detect any afk run that is paused and
-// resumable (state: active, heartbeat stale beyond the overlap guard) and inject
+// resumable (state: active, heartbeat stale beyond the overlap guard or a valid
+// deliberate-yield marker) and inject
 // it as SessionStart context so the operator does not have to hunt down the
 // ledger. Behaviour is set by the `auto-resume` knob in .afk/config.md
 // (off | notify | auto; default notify). See
-// docs/designs/specs/2026-07-18-session-start-auto-resume.md.
+// docs/designs/specs/2026-07-18-session-start-auto-resume.md and
+// docs/designs/specs/issue-128-proactive-session-handoff.md.
 //
 // It also carries the stale-install notice. This hook fires before any skill is
 // chosen, so it is the only place a direct satellite invocation — which never

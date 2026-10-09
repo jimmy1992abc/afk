@@ -27,8 +27,8 @@
 //
 // Lean context: overrides config per run via `-c` (the operator's interactive
 // Codex config is untouched):
-//   - model=gpt-5.6-sol         (pinned reviewer, never the session model)
-//   - model_reasoning_effort=medium
+//   - model=gpt-6.1-sol         (pinned reviewer, never the session model)
+//   - model_reasoning_effort=high
 //   - project_doc_max_bytes=0  (skip the project doc chain)
 // Override via CODEX_REVIEW_MODEL / CODEX_REVIEW_REASONING /
 // CODEX_REVIEW_PROJECT_DOC_MAX_BYTES.
@@ -292,7 +292,7 @@ if (!guard.run) {
 receipt.capture({ target: parsedTarget });
 
 // Lean-context overrides (review THE DIFF, not the project doc corpus):
-//   - model_reasoning_effort: default `medium`. Override via
+//   - model_reasoning_effort: default `high`. Override via
 //     CODEX_REVIEW_REASONING (minimal|low|medium|high|xhigh|max).
 //   - project_doc_max_bytes: default 0 (skip the project doc chain).
 //     Override via CODEX_REVIEW_PROJECT_DOC_MAX_BYTES. Parsed as TOML by `-c`.

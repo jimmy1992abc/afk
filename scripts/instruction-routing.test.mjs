@@ -6,7 +6,7 @@ import { supportVisible } from './evaluate-agent-behavior.mjs';
 import { repository, readInstruction as read, section, localLinks, anchors, checkInstructionLink, assertRoute } from './instruction-test-helpers.mjs';
 
 import { ADVERTISED_FORMS as triggers } from '../lib/evaluation/scenarios.mjs';
-const references = ['environment', 'kickoff', 'design-review', 'review-convergence', 'external-review', 'review-evidence', 'publication', 'continuity', 'output', 'direction-state'];
+const references = ['environment', 'kickoff', 'design-review', 'review-convergence', 'external-review', 'review-evidence', 'publication', 'continuity', 'output', 'direction-state', 'delegation'];
 const gateNames = Object.keys(triggers).filter((name) => /-(codex|claude|kimi|glm|deepseek|mimo)-review$/.test(name));
 const reference = (name) => `skills/afk/references/${name}.md`;
 
@@ -73,7 +73,7 @@ test('common finding and implementer definitions occur once, with no satellite c
 
 test('repository authority remains visible and conditional authoring has one route', () => {
   const text = read('AGENTS.md');
-  for (const pattern of [/owner\/maintainer/, /Never commit to/, /English only/, /Secrets/, /Epistemic/, /Artifact/, /Workflow/, /enforced when invoked/, /node --test/, /sync-marketplace/]) assert.match(text, pattern);
+  for (const pattern of [/reviewed by the owner\/maintainer/, /Never commit to/, /English only/, /Secrets/, /Epistemic/, /Artifact/, /Workflow/, /enforced when invoked/, /node --test/, /sync-marketplace/]) assert.match(text, pattern);
   assertRoute(text, 'docs/maintaining-skills.md');
   assertRoute(text, 'skills/afk/references/external-review.md');
   assert.match(text, /operational instructions/i);
@@ -116,4 +116,18 @@ test('native Codex context restrictions do not exclude supported receipt capture
   assert.match(text, /Native diff review rejects custom context and re-review focus/);
   assert.match(text, /Native diff review still supports `--review-receipt`/);
   assert.doesNotMatch(text, /cannot accept this input/);
+});
+
+
+test('standalone review satellites limit waterfall sequencing to driver-managed AFK', () => {
+  for (const family of ['claude', 'codex', 'kimi', 'glm', 'deepseek', 'mimo']) {
+    const text = read(`skills/afk-${family}-review/SKILL.md`);
+    assert.match(text, /For standalone review, run only the requested gate and return/);
+    assert.match(text, /driver-managed AFK/);
+    assert.match(text, /references\/external-review\.md/);
+  }
+  const kimi = read('skills/afk-kimi-review/SKILL.md');
+  assert.match(kimi, /In driver-managed AFK, Kimi is the default final role/);
+  const claude = read('skills/afk-claude-review/SKILL.md');
+  assert.match(claude, /In driver-managed AFK,.*\n.*next gate in `priority`/);
 });

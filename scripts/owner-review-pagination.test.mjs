@@ -9,11 +9,14 @@ const workflow = readFileSync(new URL('../.github/workflows/require-owner-approv
 const blocks = workflow.split('        run: |\n');
 assert.equal(blocks.length, 2, 'test must execute the workflow approval step');
 const script = blocks[1].split('\n').map((line) => line.slice(10)).join('\n');
-const posix = { skip: process.platform === 'win32' ? 'workflow executes Bash on Ubuntu' : false };
+const jq = spawnSync('/bin/sh', ['-c', 'command -v jq'], { encoding: 'utf8' }).stdout?.trim();
+const posix = { skip: process.platform === 'win32' ? 'workflow executes Bash on Ubuntu'
+  : !jq ? 'jq is required to execute the actual workflow filter' : false };
 
-// The injected boundary freezes the existing filter so pagination cannot mask a policy change.
+// Only the network boundary is faked; the workflow filter runs in the real jq interpreter.
 const stub = String.raw`#!/usr/bin/env node
 const fs = require('node:fs');
+const { spawnSync } = require('node:child_process');
 const fixture = JSON.parse(fs.readFileSync(process.env.REVIEW_FIXTURE, 'utf8'));
 const args = process.argv.slice(2);
 const endpoint = args[1];
@@ -26,14 +29,17 @@ if (endpoint === 'repos/fixture/repository/pulls/1') {
   else if (query === '.head.sha') process.stdout.write('current-head\n');
   else fail();
 } else if (endpoint === 'repos/fixture/repository/pulls/1/reviews') {
-  if (query !== '[.[] | select(.state=="APPROVED") | select(.commit_id==env.HEAD_SHA) | .user.login] | unique | .[]') fail();
   const pages = args.includes('--paginate') ? fixture.pages : fixture.pages.slice(0, 1);
   for (const [index, page] of pages.entries()) {
     log({ page: index + 1 });
-    if (page.error) { process.stderr.write('fixture page unavailable\n'); process.exit(42); }
-    const names = new Set(page.filter((review) => review.state === 'APPROVED' && review.commit_id === process.env.HEAD_SHA).map((review) => review.user.login));
-    for (const name of names) process.stdout.write(name + '\n');
+    if (page?.error) { process.stderr.write('fixture page unavailable\n'); process.exit(42); }
+    if (args.includes('--jq')) {
+      const filtered = spawnSync(process.env.FIXTURE_JQ, ['-r', query], { input: JSON.stringify(page), encoding: 'utf8' });
+      if (filtered.status !== 0) { process.stderr.write(filtered.stderr); process.exit(43); }
+      process.stdout.write(filtered.stdout);
+    }
   }
+  if (args.includes('--slurp')) process.stdout.write(JSON.stringify(pages));
 } else {
   const match = /^repos\/fixture\/repository\/collaborators\/([^/]+)\/permission$/.exec(endpoint);
   if (!match || query !== '.permission') fail();
@@ -46,6 +52,7 @@ function run(t, pages, permissions = {}) {
   const cwd = mkdtempSync(join(tmpdir(), 'owner-review-pages-'));
   t.after(() => rmSync(cwd, { recursive: true, force: true }));
   symlinkSync(process.execPath, join(cwd, 'node'));
+  symlinkSync(jq, join(cwd, 'jq'));
   writeFileSync(join(cwd, 'gh'), stub, { mode: 0o755 });
   const fixture = join(cwd, 'fixture.json');
   const log = join(cwd, 'requests.jsonl');
@@ -53,7 +60,7 @@ function run(t, pages, permissions = {}) {
   writeFileSync(log, '');
   const result = spawnSync('/bin/bash', ['-c', script], {
     cwd,
-    env: { PATH: cwd, REPO: 'fixture/repository', PR: '1', REVIEW_FIXTURE: fixture, REVIEW_LOG: log },
+    env: { PATH: cwd, REPO: 'fixture/repository', PR: '1', REVIEW_FIXTURE: fixture, REVIEW_LOG: log, FIXTURE_JQ: jq },
     encoding: 'utf8',
     timeout: 10000,
   });
@@ -97,4 +104,72 @@ test('the existing administrator-author exemption remains unchanged', posix, (t)
   const result = run(t, [{ error: true }], { author: 'admin' });
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.ok(!result.calls.some((call) => call.page));
+});
+
+for (const state of ['CHANGES_REQUESTED', 'DISMISSED']) {
+  test(`a later ${state} replaces the same reviewer's earlier approval across pages`, posix, (t) => {
+    const result = run(t, [[approval()], [approval({ state })]], { reviewer: 'admin' });
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    assert.match(result.stdout, /needs an approving review/);
+    assert.ok(!result.calls.some((call) => call.permission === 'reviewer'));
+  });
+}
+
+for (const state of ['COMMENTED', 'PENDING']) {
+  test(`a later ${state} leaves the prior decisive approval effective`, posix, (t) => {
+    const result = run(t, [[approval()], [approval({ state })]], { reviewer: 'admin' });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+  });
+}
+
+test('a current-head reapproval supersedes changes requested', posix, (t) => {
+  const result = run(t, [[approval({ state: 'CHANGES_REQUESTED' })], [approval()]], { reviewer: 'admin' });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+});
+
+test('one reviewer revoking approval does not erase another administrator approval', posix, (t) => {
+  const result = run(t, [[approval(), approval({ user: { login: 'second' } })],
+    [approval({ state: 'CHANGES_REQUESTED' })]], { reviewer: 'admin', second: 'admin' });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.ok(result.calls.some((call) => call.permission === 'second'));
+  assert.ok(!result.calls.some((call) => call.permission === 'reviewer'));
+});
+
+test('deleted accounts do not invalidate a current administrator approval', posix, (t) => {
+  const result = run(t, [[approval({ user: null })], [approval()]], { reviewer: 'admin' });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.ok(result.calls.some((call) => call.permission === 'reviewer'));
+});
+
+test('deleted accounts cannot supply contributor authorization', posix, (t) => {
+  const result = run(t, [[approval({ user: null })]]);
+  assert.equal(result.status, 1);
+  assert.match(result.stdout, /needs an approving review/);
+  assert.ok(!result.calls.some((call) => call.permission === 'null'));
+});
+
+test('a missing user field remains a malformed review record', posix, (t) => {
+  const { user, ...missingUser } = approval();
+  const result = run(t, [[missingUser, approval()]], { reviewer: 'admin' });
+  assert.equal(result.status, 1);
+  assert.match(result.stdout, /Could not evaluate complete review history/);
+  assert.ok(!result.calls.some((call) => call.permission === 'reviewer'));
+});
+
+test('latest decision is selected before current-head filtering', posix, (t) => {
+  const result = run(t, [[approval()], [approval({ state: 'CHANGES_REQUESTED', commit_id: 'previous-head' })]], { reviewer: 'admin' });
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+});
+
+test('empty history cannot supply authorization', posix, (t) => {
+  const result = run(t, [[]], { reviewer: 'admin' });
+  assert.equal(result.status, 1);
+  assert.match(result.stdout, /needs an approving review/);
+});
+
+test('malformed review history is a visible evaluation failure', posix, (t) => {
+  const result = run(t, [[approval()], { unexpected: true }], { reviewer: 'admin' });
+  assert.equal(result.status, 1);
+  assert.match(result.stdout, /Could not evaluate complete review history/);
+  assert.ok(!result.calls.some((call) => call.permission === 'reviewer'));
 });

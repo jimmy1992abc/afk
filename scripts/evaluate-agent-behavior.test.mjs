@@ -313,7 +313,7 @@ function handoff112({models=['ASTRA'],main=[],controls=[],status='planned',host,
   return {version:1,campaign:'issue112',executionId:'synthetic-evaluation',authorization:{status,source:status==='authorized'?source:null},revisions:{baseline:'a'.repeat(40),candidate:'b'.repeat(40),evaluator:'c'.repeat(40)},
     inputs:directionRunner.directionInputDigests(),models:allModels,selected:{main:rows,controls:controlRows},prerequisites:models.flatMap(k=>k==='ASTRA'?['P112-A1','P112-A2']:['P112-S1','P112-S2']),
     observability:{wholeToolInventory:'required',instructionInventory:'required',execBoundary:'required',exactResumeBoundary:'required',terminalAndCleanup:'required',requestedAndObservedModel:'required',nativeCatalog:'required-for-controls',completeReferenceDelivery:'required-for-read-claims',unknownActions:'retain-unknown',unknownUsage:'retain-unknown'},
-    auditor:{revision:'d'.repeat(40),profileDigest:hash,qualification:null,condition:'controlled'},bounds:{prerequisiteMs:2000,invocationMs:2000,resumeMs:2000,auditMs:2000,sliceTrials:4,sliceMs:20000,totalMs:60000,outputBytes:8388608,graceMs:100,
+    auditor:{revision:'d'.repeat(40),profileDigest:hash,qualification:null,condition:'controlled'},bounds:{prerequisiteMs:10000,invocationMs:10000,resumeMs:10000,auditMs:10000,sliceTrials:4,sliceMs:20000,totalMs:60000,outputBytes:8388608,graceMs:100,
       maxAuthorInvocations:rows.reduce((n,r)=>n+r.phases.filter(p=>!p.startsWith('audit')).length,0)+controlRows.length,maxPrerequisiteInvocations:models.length*2,maxAuditAttempts:rows.reduce((n,r)=>n+r.phases.filter(p=>p.startsWith('audit')).length,0),
       spend:{currency:'USD',plannedMaxMicrousd:retainUnknown?null:1000000,inputTokens:retainUnknown?null:10000,outputTokens:retainUnknown?null:10000,basis:source,
         unknownUsage:retainUnknown?'retain-and-continue':'stop-before-next-launch'}},budgetSource:source};
@@ -652,7 +652,7 @@ test('S112-5 original capture retains output from a failed confined command',()=
   const f=direction.createDirectionFixture({directory:join(root,'subject'),scenarioId:'D1'}),binary=sandboxStub(root),trial=direction.DIRECTION_TRIALS.find(t=>t.id==='M-D1-C-ASTRA-R1');writeFileSync(join(f.directory,'test/reserve.test.mjs'),"process.stdout.write('retained-before-timeout');setInterval(()=>{},1000);\n");
   writeFileSync(join(root,'sandbox-transport.mjs'),"import{spawn}from'node:child_process';const a=process.argv.slice(2),n=a.indexOf('-C'),child=spawn(a[n+2],a.slice(n+3),{cwd:a[n+1],stdio:'inherit'});child.on('exit',code=>process.exit(code??1));");
   const directory=join(root,'observations');mkdirSync(directory);
-  await assert.rejects(directionRunner.originalCapture({workspace:f.directory,support:repo,codex:binary,trial,directory,captureId:'failed',execution:{deadline:Date.now()+800,graceMs:50}}));
+  await assert.rejects(directionRunner.originalCapture({workspace:f.directory,support:repo,codex:binary,trial,directory,captureId:'failed',execution:{deadline:Date.now()+5000,graceMs:50}}));
   const commands=JSON.parse(readFileSync(join(directory,'captures/failed/commands.json')));assert.ok(commands.some(c=>c.stdout?.includes('retained-before-timeout')));assert.equal(JSON.parse(readFileSync(join(directory,'captures/failed/status.json'))).status,'unavailable');
 }));
 

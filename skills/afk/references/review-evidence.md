@@ -56,8 +56,8 @@ driver's selected model must never fill an observed-identity field.
 
 Before reusing receipts, supply an explicit candidate target, profile, and one
 expected context per required role, plus exactly one selected attempt per role.
-Resolve `<plugin-root>` through `CLAUDE_PLUGIN_ROOT`, the recorded `pluginRoot`,
-then two directories above the owning `afk` skill directory, not this reference directory, and run:
+Resolve `<plugin-root>` using the first-dispatch reconciliation in
+[Bundled helper location](environment.md#bundled-helper-location), then run:
 
 ```text
 node "<plugin-root>/scripts/check-review-receipts.mjs" --candidate <candidate.json> --receipt <attempt-directory> [--receipt <attempt-directory> ...]

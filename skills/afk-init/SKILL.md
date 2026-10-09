@@ -36,22 +36,10 @@ rarely needs invoking by hand — `/afk-init` is for an explicit re-detect.
    It prints `{ forge, reason, azureOrganization, githubRepository }`. Write
    `forge`, and leave the line blank when it is `null` — a written-in guess
    reads exactly like a detected value later. Report the reason either way.
-6. **Record `pluginRoot`.** Resolve the plugin's install location
-   (`${CLAUDE_PLUGIN_ROOT}` when set, else the directory this skill loaded from)
-   into `.afk/config.md`, so bundled helpers resolve under a drop-in install
-   where the env var is unset. When a value is already recorded, ask the helper
-   what to do with it rather than deciding by hand — an install cache path is
-   version-keyed, so a value written before an update names a directory that
-   does not contain the skills now running:
-
-   ```text
-   node "<plugin-root>/lib/plugin-root.mjs" --configured <recorded> --resolved <resolved>
-   ```
-
-   It prints `{ action, root, reason }`: `record` (nothing recorded yet),
-   `refresh` (a superseded same-install version or a missing recognized afk
-   cache with a verified live replacement — write the resolved one), or `keep` (a custom or manual root, which is a
-   deliberate choice and survives). Report the reason either way.
+6. **Record or reconcile `pluginRoot`.** Follow the first-dispatch procedure in
+   [Bundled helper location](../afk/references/environment.md#bundled-helper-location).
+   Existing `.afk/` state does not make a recorded cache path current. Preserve
+   a custom-root keep decision and report the helper's reason.
 7. **Ignore local AFK state and credentials.** Append the missing entries from
    the plugin's `templates/gitignore-snippet.txt` to `info/exclude` under
    `git rev-parse --path-format=absolute --git-common-dir`. That file is shared

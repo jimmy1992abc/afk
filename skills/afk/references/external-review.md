@@ -72,8 +72,9 @@ kickoff is conversation, never a silent re-resolve.
 **Per-run qualifiers.** Codex and Claude role flags may carry adjacent model
 and effort tokens in either order. Resolve them with
 `node "<plugin-root>/lib/gate/model-select.mjs" --family <family> --qualifiers
-<tokens...>`; resolve the plugin root by `CLAUDE_PLUGIN_ROOT`, then the recorded
-`pluginRoot`, then two directories above the owning `afk` skill directory, not this reference directory. The helper's `remaining`
+<tokens...>`; resolve the plugin root using the canonical
+[environment procedure](environment.md#bundled-helper-location), including upgrade
+reconciliation. The helper's `remaining`
 tokens are prose, never silently interpreted as qualifiers. Forward the returned
 `argv` as the gate's explicit `--model`/`--effort` options. Unknown explicit
 options fail; unknown free-text words end the qualifier run. Alias expansion

@@ -18,6 +18,20 @@ invariants, reports, and run ledgers live in the consuming repository's
 gitignored `.afk/` directory — nothing about your project is ever written back
 into the plugin.
 
+## What's new in 1.2.0
+
+- **Review defaults:** Codex uses `gpt-6.1-sol` and Claude uses `claude-opus-5-5`, both at `high` effort. DeepSeek defaults to `deepseek-flash`; explicit model and effort overrides remain supported.
+- **Safer review boundaries:** quoted credential redaction, redirect refusal, trusted Windows executable lookup, repository-wide untracked inputs, and exact Claude minor-version verification.
+- **Reliable continuation:** deliberate yield markers support session takeover; direction results retain dispatch observations and can be finalized after a runtime upgrade without another request.
+- **Current review decisions:** contributor authorization evaluates each reviewer's latest decisive state across all pages. Owner review still controls merge.
+- **Tracked documentation checks:** link validation reads tracked Markdown and reports unreadable or unsafe source files.
+
+No new configuration keys or state migration are required. Direction auditing
+remains off with pending runtime qualification; these changes do not qualify a
+live dispatch. Retained audits can be finalized without renewing qualification.
+Review cycles remain uncapped by default, structural P2 repairs remain supported,
+and absent CI policy remains `expected`.
+
 ## What's new in 1.1.0
 
 - **Local completion mode:** `remote-ci: off` completes local checks and configured reviews without automatic publication or CI polling.
@@ -89,7 +103,7 @@ in the pipeline is plain git.
 | `afk-claude-review` | Runs a Claude fallback role; declines to review Claude's own work. |
 | `afk-kimi-review` | Runs Kimi as the final role when selected. |
 | `afk-glm-review` | Runs a GLM fallback role with bounded diff context. |
-| `afk-deepseek-review` | Runs an optional DeepSeek V4 Pro snapshot-backed role. |
+| `afk-deepseek-review` | Runs an optional DeepSeek Flash (default) or V4 Pro snapshot-backed role. |
 | `afk-mimo-review` | Runs an optional MiMo V2.5 Pro Token Plan snapshot-backed role. |
 | `afk-agent-relay` | Offloads large reads or scoping work to an external model. |
 
@@ -138,21 +152,32 @@ requested in the prompt rather than constrained by the helper.
 
 | Role | Default model | Runs via | Credential | Timeout |
 |------|---------------|----------|------------|---------|
-| `codex` | `gpt-5.6-sol` | Codex CLI | the CLI's own auth | 15 min |
-| `claude` | `claude-opus-5` | Claude Code CLI (`Read,Grep,Glob` only) | the CLI's own auth | 15 min |
+| `codex` | `gpt-6.1-sol` | Codex CLI | the CLI's own auth | 15 min |
+| `claude` | `claude-opus-5-5` | Claude Code CLI (`Read,Grep,Glob` only) | the CLI's own auth | 15 min |
 | `kimi` | CLI-selected | Kimi Code CLI or Kimi CLI | the CLI's own auth | 45 min |
 | `glm` | `glm-5.3` | Z.ai REST API (OpenAI protocol by default) | `ZAI_API_KEY` or `GLM_API_KEY` | 15 min |
-| `deepseek` | `deepseek-v4-pro` | DeepSeek REST API | `DEEPSEEK_REVIEW_API_KEY`, else `DEV_DEEPSEEK_API_KEY` | 15 min |
+| `deepseek` | `deepseek-flash` (or `deepseek-v4-pro`) | DeepSeek REST API | `DEEPSEEK_REVIEW_API_KEY`, else `DEV_DEEPSEEK_API_KEY` | 15 min |
 | `mimo` | `mimo-v2.5-pro` | Xiaomi MiMo REST API | `MIMO_REVIEW_API_KEY`, else `DEV_MIMO_API_KEY` | 15 min |
+
+A REST reviewer model must be a pinned ID that contains a version digit,
+because a name without a version can move to another model without notice.
+DeepSeek is the one exception: it names its current model `deepseek-flash`
+with no version, so `DEEPSEEK_REVIEW_MODEL` also accepts an exact unversioned
+DeepSeek name. The DeepSeek role defaults to `deepseek-flash`; set
+`DEEPSEEK_REVIEW_MODEL=deepseek-v4-pro` to use V4 Pro. The bare `deepseek` and unversioned names ending in `latest`, `default`
+or `auto` are still refused before the call. Every REST gate still requires
+the response to report the requested model, and records the provider's
+`system_fingerprint`, when one is returned, in the review receipt.
 
 The Kimi helper supports both CLIs named `kimi`. It derives the installed CLI's
 headless argument group from `--help` and constrains legacy Windows console
 encoding only when the probe says it is needed, so the same gate works across
 the current npm and Python CLI families.
 
-The Codex reviewer stays on `gpt-5.6-sol` independently of the interactive
-session model. `CODEX_REVIEW_MODEL=gpt-6-astra` selects Astra for an explicitly
-assigned review; `--print-args` shows the resolved choice before a paid call.
+The Codex reviewer defaults to `gpt-6.1-sol` at `high` effort independently of
+the interactive session model. The Claude reviewer defaults to `claude-opus-5-5`
+at `high` effort. The `sol` and `opus` aliases select these respective model IDs.
+`CODEX_REVIEW_MODEL=gpt-6-astra` selects Astra for an explicitly assigned review; `--print-args` shows the resolved choice before a paid call.
 
 Kimi gets longer because it drives git itself rather than receiving a
 pre-injected diff. CLI availability and authentication probes are capped at 30
