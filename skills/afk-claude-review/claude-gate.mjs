@@ -32,7 +32,7 @@ import { isAbsolute, join, resolve } from 'node:path';
 import { isGateDisabled, isSpawnTimeout, reviewTimeoutMs } from '../../lib/gate/env.mjs';
 import { classifyChildOutcome, describeChildOutcome } from '../../lib/gate/child-outcome.mjs';
 import { failureDirection, httpFailureCode } from '../../lib/gate/failure.mjs';
-import { git } from '../../lib/gate/git.mjs';
+import { workingTreeNotes } from '../../lib/gate/diff-context.mjs';
 import { guardFor } from '../../lib/gate/implementer.mjs';
 import { isPinnedModelId, verifyReviewerIdentity } from '../../lib/gate/model-identity.mjs';
 import { resolveReviewSelection } from '../../lib/gate/model-select.mjs';
@@ -180,33 +180,13 @@ if (isDesign) {
 
   // The context clause is this gate's own: it states what was supplied and what
   // the reviewer may do to learn more. A gate whose reviewer has no tools (glm)
-  // must never be told to go looking — see lib/gate/prompt.mjs.
-  //
-  // Untracked files appear in NO diff (`git diff HEAD` is empty for a brand-new
-  // file) and this reviewer has no git to discover them with. Without the list
-  // below, an all-new-files change reaches the reviewer as an empty diff and can
-  // be approved having inspected nothing.
-  // The read tools see the working tree as it is NOW, which is not necessarily the
-  // revision the diff describes: `--commit <old-sha>` reviews history, and a
-  // branch review may run over a dirty tree. Saying so is the honest fix — a
-  // reviewer told its context is authoritative will reason about the wrong
-  // revision and never know. (The structural fix is a temp worktree checked out at
-  // the target; recorded as a follow-up rather than bolted on here.)
-  const contextMayDrift = target.kind === 'commit'
-    ? git(['rev-parse', target.commit]).trim() !== git(['rev-parse', 'HEAD']).trim()
-    : Boolean(git(['status', '--porcelain']).trim());
-
+  // must never be told to go looking — see lib/gate/prompt.mjs. The drift
+  // caution and untracked-file list are shared with the other read-capable CLI
+  // gate (lib/gate/diff-context.mjs). (The structural fix for drift is a temp
+  // worktree checked out at the target; recorded as a follow-up.)
   const context = [
     `The diff is included below (${target.command}). You have Read, Grep and Glob over the working tree and no other tools: read any file you need for context, and do not claim to have run any command.`,
-    contextMayDrift
-      ? 'CAUTION: the files you can Read are the CURRENT working tree, which is not the revision this diff describes — a file may have changed since, or carry uncommitted edits. The diff is authoritative for what changed; treat file contents as background only, and say so if a judgement depends on the difference.'
-      : '',
-    untracked.length
-      // JSON-encoded, one per line: a filename may legally contain a newline, and
-      // interpolating it raw would split one path across two bullets — the
-      // reviewer then reads neither, and the file is absent from the diff too.
-      ? `IMPORTANT: ${untracked.length} file(s) in this change are new and are NOT in the diff below. The diff alone therefore does not show the whole change. Read each one before judging it (paths are JSON-encoded):\n${untracked.map((f) => `- ${JSON.stringify(f)}`).join('\n')}`
-      : '',
+    ...workingTreeNotes({ target, untracked }),
     '',
     `## Diff stat\n${stat}`,
     '',

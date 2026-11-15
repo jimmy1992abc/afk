@@ -14,7 +14,7 @@ gates:    codex
 # gates:  codex > kimi   # opt-in: ordered double review (Codex outer → Kimi final);
                          #   or pass -codex -kimi on one handoff for that run only
 priority: codex > claude > kimi > glm # closed fallback pool for an ineligible preferred role
-                         # explicit profiles may also name deepseek or mimo; neither is a built-in fallback
+                         # explicit profiles may also name deepseek, mimo or gemini; none is a built-in fallback
 design-gate: off         # opt-in pilot: one gate over the design doc before code
                          #   off (default) · risky (design-heavy/high-blast-radius only) · on (every issue)
 # implementer:           # who writes the code, if not the driver (relay). May only

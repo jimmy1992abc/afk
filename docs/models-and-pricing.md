@@ -5,8 +5,8 @@ AFK reports provider usage where available; it does not calculate an invoice.
 
 ## Current selections
 
-Plugin defaults below reflect 1.2.0. Provider and pricing notes retain the
-2026-09-10 source check.
+Plugin defaults below reflect 1.3.0. Provider and pricing notes retain the
+2026-09-10 source check; the Gemini row was checked on 2026-11-15.
 
 | Role | Selection | Release decision |
 | --- | --- | --- |
@@ -15,6 +15,7 @@ Plugin defaults below reflect 1.2.0. Provider and pricing notes retain the
 | GLM review | `glm-5.3` | Updated from GLM-5.1 |
 | DeepSeek review/relay | `deepseek-flash` | Default; explicit `deepseek-v4-pro` remains supported |
 | MiMo review/relay | `mimo-v2.5-pro` | Retained |
+| Gemini review | `gemini-4-argon-high` through the signed-in Antigravity CLI | Opt-in role; only a versioned `gemini-*` ID is accepted |
 | Kimi review | Installed CLI selection | Preserve account/CLI selection; no invented API model default |
 | Kimi/OpenAI API relay | Explicit model configuration | Preserve the endpoint-specific choice |
 
@@ -30,6 +31,13 @@ later. Full model IDs remain usable when an account or gateway does not
 support the new AFK shortcut target.
 [Claude models](https://platform.claude.com/docs/en/models/overview),
 [Claude Code configuration](https://code.claude.com/docs/en/model-config).
+
+Gemini 4 Argon is available in Antigravity for eligible paid accounts. The
+Antigravity CLI carries the effort in the model ID, so the gate records no
+separate effort, and usage is charged to the signed-in account rather than a
+per-token API key. Run `agy models` to list the IDs an account offers.
+[Antigravity CLI headless mode](https://antigravity.google/docs/cli/headless),
+[Antigravity CLI modes](https://antigravity.google/docs/cli/modes).
 
 ## API reference rates
 

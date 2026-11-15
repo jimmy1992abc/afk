@@ -28,12 +28,12 @@ Resolve the effective profile as one total function:
    whitespace-delimited token of the form `-<family>` or `--<family>` —
    one or two leading dashes, the family name matched case-insensitively (the
    config grammar's case rule), surrounding punctuation stripped — where `<family>`
-   is `codex`, `claude`, `kimi`, `glm`, `deepseek`, or `mimo`. Flags are taken
+   is `codex`, `claude`, `kimi`, `glm`, `deepseek`, `mimo`, or `gemini`. Flags are taken
    in writing order (first = outer, last = final when two or more; length =
    required count; `-codex -kimi` ⇒ Codex outer → Kimi final). A
    repeated family collapses into its first occurrence — a handoff typo must
    never silently add a paid role. A dash-led token plausibly intended as a role
-   flag but naming no family (`-gemini`, `-kim`) selects nothing and is
+   flag but naming no family (`-gpt`, `-kim`) selects nothing and is
    recorded in the ledger as an ignored lookalike; ordinary options like
    `--implementer` are not lookalikes. Quoted or declined mentions ("skip
    -kimi this time") are not selections — intent governs, and the step-7
@@ -41,7 +41,7 @@ Resolve the effective profile as one total function:
    `.afk/config.md` and override a config `gates` value for this run only.
 2. Otherwise a present `gates` key selects ordered roles. It uses `>` separators, ignores
    surrounding whitespace/case and a trailing comment, and must contain no empty
-   segment. Valid role families are `codex`, `claude`, `kimi`, `glm`, `deepseek`, and `mimo`;
+   segment. Valid role families are `codex`, `claude`, `kimi`, `glm`, `deepseek`, `mimo`, and `gemini`;
    an unknown preference is recorded and uses fallback. A later duplicate
    preference is ineligible and also uses fallback. Legacy `min-pass` and `mode`
    beside a valid `gates` key are ignored for PR roles without rewriting the file.
@@ -108,7 +108,8 @@ recorded at kickoff but blocks **ready**, not safe implementation work. Recheck
 unstamped roles immediately before review.
 
 Local presence is deliberately narrow: Codex requires its binary plus `codex
-login status`; Claude/Kimi require their binaries (and Claude rejects an alias in
+login status`; Claude/Kimi/Gemini require their binaries (Gemini's `agy`
+through `PATH` or `GEMINI_GATE_BIN`; Claude rejects an alias in
 `CLAUDE_REVIEW_MODEL`); GLM requires `ZAI_API_KEY`/`GLM_API_KEY`, DeepSeek
 requires `DEEPSEEK_REVIEW_API_KEY`/`DEV_DEEPSEEK_API_KEY`, and MiMo requires
 `MIMO_REVIEW_API_KEY`/`DEV_MIMO_API_KEY`, from the environment or ignored
@@ -142,13 +143,13 @@ fail on first invocation.
   clean.
 
 Default assignment under built-in `gates: codex` is a
-single role: Codex for a Claude/GLM/Kimi/DeepSeek/MiMo implementer; Claude for a Codex
+single role: Codex for a Claude/GLM/Kimi/DeepSeek/MiMo/Gemini implementer; Claude for a Codex
 implementer. When a two-role profile is selected (flags or config), the default
 assignments are Codex outer + Kimi final for a Claude/GLM implementer;
 Claude outer + Kimi final for a Codex implementer; and Codex outer + Claude final
 for a Kimi implementer. If the required roles cannot be filled by distinct
 eligible families, the PR is not clean/ready—one pass is never presented as two.
-Neither optional family (DeepSeek/MiMo) changes the built-in role sequence or
+No optional family (DeepSeek/MiMo/Gemini) changes the built-in role sequence or
 fallback pool.
 
 ## Authorship declaration

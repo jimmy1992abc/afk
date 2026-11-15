@@ -25,6 +25,7 @@ const gates = {
   glm: read('../skills/afk-glm-review/SKILL.md'),
   deepseek: read('../skills/afk-deepseek-review/SKILL.md'),
   mimo: read('../skills/afk-mimo-review/SKILL.md'),
+  gemini: read('../skills/afk-gemini-review/SKILL.md'),
 };
 
 test('new configs choose a single Codex gate; ordered doubles are explicit opt-in', () => {
@@ -78,7 +79,7 @@ test('the driver doctrine distinguishes ordered roles from fallback priority', (
 test('the implementer and unavailable-provider matrix stays role-safe', () => {
   assert.match(
     afk,
-    /single role: Codex for a Claude\/GLM\/Kimi\/DeepSeek\/MiMo implementer; Claude for a Codex\s+implementer/,
+    /single role: Codex for a Claude\/GLM\/Kimi\/DeepSeek\/MiMo\/Gemini implementer; Claude for a Codex\s+implementer/,
   );
   for (const row of [
     /Codex outer \+ Kimi final for a Claude\/GLM implementer/,
@@ -123,6 +124,7 @@ test('gate skills name stable default roles instead of interchangeability', () =
   assert.match(gates.glm, /fallback/i);
   assert.match(gates.deepseek, /optional/i);
   assert.match(gates.mimo, /optional/i);
+  assert.match(gates.gemini, /optional/i);
   for (const text of Object.values(gates)) assert.doesNotMatch(text, /interchangeable/i);
 });
 
