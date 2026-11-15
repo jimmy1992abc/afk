@@ -38,8 +38,9 @@ External gate entry points: [afk-codex-review](../afk-codex-review/SKILL.md),
 [afk-claude-review](../afk-claude-review/SKILL.md),
 [afk-kimi-review](../afk-kimi-review/SKILL.md),
 [afk-glm-review](../afk-glm-review/SKILL.md),
-[afk-deepseek-review](../afk-deepseek-review/SKILL.md), and
-[afk-mimo-review](../afk-mimo-review/SKILL.md).
+[afk-deepseek-review](../afk-deepseek-review/SKILL.md),
+[afk-mimo-review](../afk-mimo-review/SKILL.md), and
+[afk-gemini-review](../afk-gemini-review/SKILL.md).
 
 ## Per issue — the full waterfall (one at a time)
 

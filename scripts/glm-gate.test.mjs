@@ -252,7 +252,7 @@ test('every external gate is listed on every plugin surface', () => {
 
   for (const gate of [
     'afk-codex-review', 'afk-claude-review', 'afk-kimi-review',
-    'afk-glm-review', 'afk-deepseek-review', 'afk-mimo-review',
+    'afk-glm-review', 'afk-deepseek-review', 'afk-mimo-review', 'afk-gemini-review',
   ]) {
     assert.match(afkSkill, new RegExp(gate), `afk/SKILL.md must list ${gate}`);
     assert.match(readme, new RegExp(gate), `README must list ${gate}`);

@@ -21,7 +21,7 @@ bound target descriptor. Store the packet and proof in the run's ignored
 Evidence paths resolve relative to the packet and are embedded before delivery;
 URLs alone cannot supply proof to a snapshot-only reviewer.
 
-Claude, Kimi, Codex design, GLM, DeepSeek, and MiMo accept the input. Native Codex
+Claude, Kimi, Codex design, GLM, DeepSeek, MiMo, and Gemini accept the input. Native Codex
 diff review rejects supplied context and re-review focus: retain its native mode
 and apply history triage in the driver, recording that no custom context reached
 that reviewer. Never inject repository instructions to bypass that limit.

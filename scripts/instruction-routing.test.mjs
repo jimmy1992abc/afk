@@ -7,7 +7,7 @@ import { repository, readInstruction as read, section, localLinks, anchors, chec
 
 import { ADVERTISED_FORMS as triggers } from '../lib/evaluation/scenarios.mjs';
 const references = ['environment', 'kickoff', 'design-review', 'review-convergence', 'external-review', 'review-evidence', 'publication', 'continuity', 'output', 'direction-state', 'delegation'];
-const gateNames = Object.keys(triggers).filter((name) => /-(codex|claude|kimi|glm|deepseek|mimo)-review$/.test(name));
+const gateNames = Object.keys(triggers).filter((name) => /-(codex|claude|kimi|glm|deepseek|mimo|gemini)-review$/.test(name));
 const reference = (name) => `skills/afk/references/${name}.md`;
 
 test('public names and explicit invocation forms remain textually compatible', () => {
@@ -120,7 +120,7 @@ test('native Codex context restrictions do not exclude supported receipt capture
 
 
 test('standalone review satellites limit waterfall sequencing to driver-managed AFK', () => {
-  for (const family of ['claude', 'codex', 'kimi', 'glm', 'deepseek', 'mimo']) {
+  for (const family of ['claude', 'codex', 'kimi', 'glm', 'deepseek', 'mimo', 'gemini']) {
     const text = read(`skills/afk-${family}-review/SKILL.md`);
     assert.match(text, /For standalone review, run only the requested gate and return/);
     assert.match(text, /driver-managed AFK/);

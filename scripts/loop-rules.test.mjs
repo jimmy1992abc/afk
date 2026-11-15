@@ -24,6 +24,7 @@ const gates = {
   glm: read('../skills/afk-glm-review/SKILL.md'),
   deepseek: read('../skills/afk-deepseek-review/SKILL.md'),
   mimo: read('../skills/afk-mimo-review/SKILL.md'),
+  gemini: read('../skills/afk-gemini-review/SKILL.md'),
 };
 
 const countMatches = (text, re) => (text.match(new RegExp(re, 'g')) ?? []).length;

@@ -55,10 +55,16 @@ if (${JSON.stringify(family)} === 'kimi') {
   prompt = args[args.indexOf('-p') + 1];
   const match = prompt.match(/^Read the review brief at (.+) in full;/);
   if (match) prompt = fs.readFileSync(match[1], 'utf8');
+} else if (${JSON.stringify(family)} === 'gemini') {
+  prompt = JSON.parse(fs.readFileSync(0, 'utf8')).message.content;
 } else prompt = fs.readFileSync(0, 'utf8');
 fs.writeFileSync(${JSON.stringify(capture)}, JSON.stringify({ args, prompt }));
 if (${JSON.stringify(family)} === 'claude') console.log(JSON.stringify({ is_error: false, result: 'F96-001 verified.\\nAPPROVE', modelUsage: { 'claude-opus-5-5': {} } }));
 else if (${JSON.stringify(family)} === 'codex') fs.writeFileSync(args[args.indexOf('-o') + 1], 'F96-001 verified.\\nSOUND');
+else if (${JSON.stringify(family)} === 'gemini') {
+  console.log(JSON.stringify({ event: 'init', init: { model: args[args.indexOf('--model') + 1] } }));
+  console.log(JSON.stringify({ event: 'result', result: { status: 'SUCCESS', response: 'F96-001 verified.\\nAPPROVE' } }));
+}
 else console.log('F96-001 verified.\\nAPPROVE');
 `);
   const bin = join(cwd, '.afk', `${family}-stub.${process.platform === 'win32' ? 'cmd' : 'sh'}`);
@@ -69,7 +75,7 @@ else console.log('F96-001 verified.\\nAPPROVE');
   return { bin, capture };
 }
 
-for (const family of ['claude', 'kimi', 'codex']) {
+for (const family of ['claude', 'kimi', 'codex', 'gemini']) {
   test(`${family} sends actual context with unchanged target and exact proof`, () => {
     const selector = family === 'codex' ? ['--design', '.afk/design.md'] : ['--base', priorRevision];
     const { args, context } = prepare(selector);
@@ -102,7 +108,7 @@ for (const mode of ['shim', 'large-native']) {
   });
 }
 
-for (const family of ['claude', 'kimi', 'codex', 'glm', 'deepseek', 'mimo']) {
+for (const family of ['claude', 'kimi', 'codex', 'glm', 'deepseek', 'mimo', 'gemini']) {
   test(`${family} refuses required missing context and duplicate context options before skip`, () => {
     for (const args of [['--review-phase', 're-review'], ['--review-context=x', '--review-context=y']]) {
       const result = run(family, ['--commit', revision, ...args], { [`${family.toUpperCase()}_REVIEW_GATE`]: 'off' });

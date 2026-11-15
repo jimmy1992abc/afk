@@ -161,7 +161,7 @@ context, and the effective role-profile hash: when handoff flags are present,
 the flag-derived role list plus the normalized `## external gate` section
 minus its `gates` key — flags replace only what they override, so mid-run
 edits to `priority` or the `implementer` declaration still stale stamps —
-otherwise the normalized section (or its absent sentinel). Claude/Kimi/GLM/DeepSeek/MiMo
+otherwise the normalized section (or its absent sentinel). Claude/Kimi/GLM/DeepSeek/MiMo/Gemini
 receive the immutable merge-base SHA; Codex receives its supported base ref and its
 verdict is invalid if the before/after merge-base changed. All configured role
 verdicts must name the same `HEAD`, merge-base, and role-profile hash.
